@@ -1,0 +1,17 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+sqlalchemy>=2.0.23
+psycopg2-binary>=2.9.9  # PostgreSQL 驱动（生产环境需要）
+alembic==1.12.1
+pyjwt==2.8.0
+bcrypt==4.1.1
+python-multipart==0.0.6
+# redis==5.0.1  # 可选
+# celery==5.3.4  # 可选
+python-dotenv==1.0.0
+email-validator==2.1.0
+requests==2.31.0
+# wechatpay-v3==1.2.0  # 微信支付（后续集成）
+# alipay-sdk-python==3.6.0  # 支付宝（后续集成）

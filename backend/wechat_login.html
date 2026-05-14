@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WordStyle Pro - 微信扫码登录</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 500px;
+            width: 100%;
+        }
+        
+        .login-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #667eea;
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .qr-section {
+            text-align: center;
+            margin: 30px 0;
+        }
+        
+        .qr-code-container {
+            background: #f7fafc;
+            border: 3px dashed #cbd5e0;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+            min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        .qr-placeholder {
+            text-align: center;
+            color: #a0aec0;
+        }
+        
+        .qr-placeholder svg {
+            width: 150px;
+            height: 150px;
+            margin-bottom: 15px;
+        }
+        
+        .qr-image {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 10px;
+        }
+        
+        .status-text {
+            font-size: 1.1em;
+            color: #4a5568;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 15px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .user-info {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            background: #f0fff4;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        
+        .user-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            margin: 0 auto 15px;
+            border: 3px solid #48bb78;
+        }
+        
+        .user-nickname {
+            font-size: 1.3em;
+            color: #22543d;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .user-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .stat-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #718096;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1.5em;
+            color: #2d3748;
+            font-weight: bold;
+        }
+        
+        .free-badge {
+            display: inline-block;
+            background: #48bb78;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .info-box {
+            background: #ebf8ff;
+            border-left: 4px solid #4299e1;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-size: 0.95em;
+            color: #2c5282;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .admin-link {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.9em;
+        }
+        
+        .admin-link a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        .admin-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="login-card">
+            <div class="header">
+                <h1>🚀 WordStyle Pro</h1>
+                <p>微信扫码，即刻使用</p>
+            </div>
+            
+            <div class="info-box">
+                💡 <strong>新用户福利：</strong>首次登录即赠 <span id="freeParagraphs">10000</span> 段免费额度！
+            </div>
+            
+            <div class="qr-section">
+                <div class="qr-code-container" id="qrContainer">
+                    <div class="qr-placeholder" id="qrPlaceholder">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM13 13h2v2h-2zM15 15h2v2h-2zM13 17h2v2h-2zM17 13h2v2h-2zM19 15h2v2h-2zM17 17h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
+                        </svg>
+                        <p>点击下方按钮生成二维码</p>
+                    </div>
+                    <img id="qrImage" class="qr-image" style="display:none;" alt="微信二维码">
+                </div>
+                
+                <div class="status-text" id="statusText">准备就绪</div>
+                
+                <button class="btn btn-primary" id="generateBtn" onclick="generateQR()">
+                    📱 生成微信登录二维码
+                </button>
+            </div>
+            
+            <div class="user-info" id="userInfo">
+                <img id="userAvatar" class="user-avatar" src="" alt="用户头像">
+                <div class="user-nickname" id="userNickname"></div>
+                <div class="free-badge">✨ 新用户</div>
+                
+                <div class="user-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">剩余段落</div>
+                        <div class="stat-value" id="paragraphsRemaining">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">账户余额</div>
+                        <div class="stat-value">¥<span id="balance">0.00</span></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="admin-link">
+                <a href="admin_config.html" target="_blank">⚙️ 管理员配置</a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const BASE_URL = 'http://localhost:8000';
+        let currentSceneId = null;
+        let checkInterval = null;
+        
+        // 页面加载时获取免费额度配置
+        window.onload = async function() {
+            await loadFreeParagraphsConfig();
+        };
+        
+        // 加载免费额度配置
+        async function loadFreeParagraphsConfig() {
+            try {
+                const response = await fetch(`${BASE_URL}/api/admin/config/free-paragraphs`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('freeParagraphs').textContent = data.config_value.toLocaleString();
+                }
+            } catch (error) {
+                console.error('加载配置失败:', error);
+            }
+        }
+        
+        // 生成二维码
+        async function generateQR() {
+            const btn = document.getElementById('generateBtn');
+            const statusText = document.getElementById('statusText');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span>生成中...';
+            statusText.textContent = '正在生成二维码...';
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/wechat/generate-qr`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('生成二维码失败');
+                }
+                
+                const data = await response.json();
+                currentSceneId = data.scene_id;
+                
+                // 显示二维码（这里使用占位图，实际应该显示真实二维码）
+                showQRCode(data.qr_code_url);
+                
+                statusText.textContent = '请使用微信扫描二维码';
+                btn.innerHTML = '🔄 重新生成二维码';
+                btn.disabled = false;
+                
+                // 开始轮询检查登录状态
+                startCheckingStatus();
+                
+            } catch (error) {
+                statusText.textContent = '生成失败：' + error.message;
+                btn.disabled = false;
+                btn.innerHTML = '📱 重新生成二维码';
+            }
+        }
+        
+        // 显示二维码
+        function showQRCode(qrUrl) {
+            const placeholder = document.getElementById('qrPlaceholder');
+            const qrImage = document.getElementById('qrImage');
+            
+            // 实际项目中应该显示真实的二维码图片
+            // 这里使用占位图
+            placeholder.style.display = 'none';
+            qrImage.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjZjdmYWZjIi8+CiAgICA8dGV4dCB4PSI1MCUiIHk9IjUwJSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE0IiBmaWxsPSIjYTBhZWMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+CiAgICAgICAg5byA5aeL5LiJ5q+B5L2gCiAgICA8L3RleHQ+Cjwvc3ZnPg==';
+            qrImage.style.display = 'block';
+        }
+        
+        // 开始检查登录状态
+        function startCheckingStatus() {
+            // 清除之前的定时器
+            if (checkInterval) {
+                clearInterval(checkInterval);
+            }
+            
+            const statusText = document.getElementById('statusText');
+            
+            checkInterval = setInterval(async () => {
+                if (!currentSceneId) return;
+                
+                try {
+                    const response = await fetch(`${BASE_URL}/api/wechat/check-status/${currentSceneId}`);
+                    
+                    if (response.status === 410) {
+                        // 二维码过期
+                        clearInterval(checkInterval);
+                        statusText.textContent = '❌ 二维码已过期，请重新生成';
+                        return;
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        // 登录成功
+                        clearInterval(checkInterval);
+                        handleLoginSuccess(data);
+                    } else if (data.status === 'scanned') {
+                        statusText.textContent = '✅ 已扫码，请在手机上确认';
+                    }
+                    
+                } catch (error) {
+                    console.error('检查状态失败:', error);
+                }
+            }, 2000); // 每2秒检查一次
+        }
+        
+        // 处理登录成功
+        function handleLoginSuccess(data) {
+            const statusText = document.getElementById('statusText');
+            const userInfo = document.getElementById('userInfo');
+            
+            statusText.textContent = '✅ ' + data.message;
+            
+            // 保存Token
+            localStorage.setItem('authToken', data.access_token);
+            
+            // 显示用户信息
+            document.getElementById('userAvatar').src = data.user_info.wechat_avatar || 'https://via.placeholder.com/80';
+            document.getElementById('userNickname').textContent = data.user_info.wechat_nickname || '微信用户';
+            document.getElementById('paragraphsRemaining').textContent = data.user_info.paragraphs_remaining.toLocaleString();
+            document.getElementById('balance').textContent = data.user_info.balance.toFixed(2);
+            
+            userInfo.style.display = 'block';
+            
+            // 如果是新用户，显示提示
+            if (data.message.includes('赠送')) {
+                setTimeout(() => {
+                    alert('🎉 欢迎！您已获得 ' + data.user_info.paragraphs_remaining.toLocaleString() + ' 段免费额度！\n\n现在可以开始使用文档转换功能了。');
+                }, 500);
+            }
+        }
+    </script>
+</body>
+</html>

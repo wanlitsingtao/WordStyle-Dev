@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WordStyle Pro - API 测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #38a169;
+        }
+        
+        .btn-warning {
+            background: #ed8936;
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: #dd6b20;
+        }
+        
+        .response {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .response.success {
+            border-left-color: #48bb78;
+            background: #f0fff4;
+        }
+        
+        .response.error {
+            border-left-color: #f56565;
+            background: #fff5f5;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        
+        .status-badge.logged-in {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        
+        .status-badge.not-logged {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        
+        .user-info {
+            background: #ebf8ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+        }
+        
+        .user-info p {
+            margin: 5px 0;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .info-box {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        
+        .info-box strong {
+            color: #92400e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 WordStyle Pro API 测试</h1>
+            <p>快速测试后端 API 功能</p>
+        </div>
+        
+        <!-- API 状态 -->
+        <div class="card">
+            <h2>📡 API 连接状态</h2>
+            <button class="btn btn-primary" onclick="checkHealth()">检查健康状态</button>
+            <div id="healthResponse" class="response" style="display:none;"></div>
+        </div>
+        
+        <!-- 用户认证 -->
+        <div class="grid">
+            <div class="card">
+                <h2>👤 用户注册</h2>
+                <div class="form-group">
+                    <label>邮箱：</label>
+                    <input type="email" id="registerEmail" placeholder="test@example.com" value="test@example.com">
+                </div>
+                <div class="form-group">
+                    <label>密码：</label>
+                    <input type="password" id="registerPassword" placeholder="至少6位" value="test123456">
+                </div>
+                <div class="form-group">
+                    <label>用户名（可选）：</label>
+                    <input type="text" id="registerUsername" placeholder="测试用户" value="测试用户">
+                </div>
+                <button class="btn btn-primary" onclick="register()">注册</button>
+                <div id="registerResponse" class="response" style="display:none;"></div>
+            </div>
+            
+            <div class="card">
+                <h2>🔐 用户登录</h2>
+                <div class="form-group">
+                    <label>邮箱：</label>
+                    <input type="email" id="loginEmail" placeholder="test@example.com" value="test@example.com">
+                </div>
+                <div class="form-group">
+                    <label>密码：</label>
+                    <input type="password" id="loginPassword" placeholder="test123456" value="test123456">
+                </div>
+                <button class="btn btn-success" onclick="login()">登录</button>
+                <div id="loginStatus" class="status-badge not-logged">未登录</div>
+                <div id="loginResponse" class="response" style="display:none;"></div>
+            </div>
+        </div>
+        
+        <!-- 用户信息 -->
+        <div class="card" id="userInfoCard" style="display:none;">
+            <h2>📋 用户信息</h2>
+            <button class="btn btn-primary" onclick="getUserProfile()">获取个人信息</button>
+            <div id="profileResponse" class="response" style="display:none;"></div>
+        </div>
+        
+        <!-- 支付系统 -->
+        <div class="card">
+            <h2>💳 充值订单</h2>
+            <div class="info-box">
+                <strong>💡 提示：</strong> 当前为演示模式，创建订单后不会真正调用支付接口
+            </div>
+            <div class="form-group">
+                <label>充值金额（元）：</label>
+                <select id="rechargeAmount">
+                    <option value="10">¥10 - 10,000 段落</option>
+                    <option value="50">¥50 - 50,000 段落</option>
+                    <option value="100">¥100 - 100,000 段落</option>
+                </select>
+            </div>
+            <button class="btn btn-warning" onclick="createOrder()" id="createOrderBtn" disabled>创建订单</button>
+            <div id="orderResponse" class="response" style="display:none;"></div>
+        </div>
+        
+        <!-- 文档转换 -->
+        <div class="card">
+            <h2>📄 文档转换</h2>
+            <div class="info-box">
+                <strong>⚠️ 注意：</strong> 此功能需要实际的文档转换逻辑，当前仅展示接口调用
+            </div>
+            <div class="form-group">
+                <label>文件名：</label>
+                <input type="text" id="conversionFilename" placeholder="test.docx" value="test.docx">
+            </div>
+            <div class="form-group">
+                <label>段落数：</label>
+                <input type="number" id="conversionParagraphs" value="100">
+            </div>
+            <button class="btn btn-primary" onclick="startConversion()" id="startConversionBtn" disabled>开始转换</button>
+            <div id="conversionResponse" class="response" style="display:none;"></div>
+        </div>
+    </div>
+    
+    <script>
+        const BASE_URL = 'http://localhost:8000';
+        let authToken = localStorage.getItem('authToken');
+        
+        // 初始化
+        window.onload = function() {
+            if (authToken) {
+                updateLoginStatus(true);
+                document.getElementById('userInfoCard').style.display = 'block';
+                document.getElementById('createOrderBtn').disabled = false;
+                document.getElementById('startConversionBtn').disabled = false;
+            }
+        };
+        
+        // 更新登录状态
+        function updateLoginStatus(loggedIn) {
+            const statusBadge = document.getElementById('loginStatus');
+            if (loggedIn) {
+                statusBadge.textContent = '已登录';
+                statusBadge.className = 'status-badge logged-in';
+                document.getElementById('userInfoCard').style.display = 'block';
+                document.getElementById('createOrderBtn').disabled = false;
+                document.getElementById('startConversionBtn').disabled = false;
+            } else {
+                statusBadge.textContent = '未登录';
+                statusBadge.className = 'status-badge not-logged';
+                document.getElementById('userInfoCard').style.display = 'none';
+                document.getElementById('createOrderBtn').disabled = true;
+                document.getElementById('startConversionBtn').disabled = true;
+            }
+        }
+        
+        // 显示响应
+        function showResponse(elementId, data, isSuccess = true) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = 'response ' + (isSuccess ? 'success' : 'error');
+            element.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // 检查健康状态
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${BASE_URL}/health`);
+                const data = await response.json();
+                showResponse('healthResponse', data, response.ok);
+            } catch (error) {
+                showResponse('healthResponse', { error: error.message }, false);
+            }
+        }
+        
+        // 用户注册
+        async function register() {
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+            const username = document.getElementById('registerUsername').value;
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/auth/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password, username })
+                });
+                
+                const data = await response.json();
+                showResponse('registerResponse', data, response.ok);
+                
+                if (response.ok) {
+                    alert('注册成功！请登录。');
+                }
+            } catch (error) {
+                showResponse('registerResponse', { error: error.message }, false);
+            }
+        }
+        
+        // 用户登录
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                showResponse('loginResponse', data, response.ok);
+                
+                if (response.ok && data.access_token) {
+                    authToken = data.access_token;
+                    localStorage.setItem('authToken', authToken);
+                    updateLoginStatus(true);
+                    alert('登录成功！');
+                }
+            } catch (error) {
+                showResponse('loginResponse', { error: error.message }, false);
+            }
+        }
+        
+        // 获取用户信息
+        async function getUserProfile() {
+            if (!authToken) {
+                alert('请先登录！');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/users/profile`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                const data = await response.json();
+                showResponse('profileResponse', data, response.ok);
+            } catch (error) {
+                showResponse('profileResponse', { error: error.message }, false);
+            }
+        }
+        
+        // 创建订单
+        async function createOrder() {
+            if (!authToken) {
+                alert('请先登录！');
+                return;
+            }
+            
+            const amount = parseFloat(document.getElementById('rechargeAmount').value);
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/payments/create-order`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        amount: amount,
+                        payment_method: 'wechat'
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('orderResponse', data, response.ok);
+                
+                if (response.ok) {
+                    alert(`订单创建成功！\n订单号：${data.order_number}\n金额：¥${data.amount}`);
+                }
+            } catch (error) {
+                showResponse('orderResponse', { error: error.message }, false);
+            }
+        }
+        
+        // 开始转换
+        async function startConversion() {
+            if (!authToken) {
+                alert('请先登录！');
+                return;
+            }
+            
+            const filename = document.getElementById('conversionFilename').value;
+            const paragraphs = parseInt(document.getElementById('conversionParagraphs').value);
+            
+            try {
+                const response = await fetch(`${BASE_URL}/api/conversions/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        filename: filename,
+                        paragraphs: paragraphs
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('conversionResponse', data, response.ok);
+                
+                if (response.ok) {
+                    alert(`转换任务已创建！\n任务ID：${data.task_id}`);
+                }
+            } catch (error) {
+                showResponse('conversionResponse', { error: error.message }, false);
+            }
+        }
+    </script>
+</body>
+</html>

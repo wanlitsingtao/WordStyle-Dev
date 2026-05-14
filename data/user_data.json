@@ -1,0 +1,364 @@
+{
+  "2b175a5e1dbd": {
+    "balance": 0.0,
+    "paragraphs_remaining": 10000,
+    "total_converted": 39,
+    "total_paragraphs_used": 123591,
+    "recharge_history": [],
+    "conversion_history": [
+      {
+        "time": "2026-05-09 22:09:07",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 10:38:09",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 11:03:53",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 11:21:32",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 11:41:34",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 12:14:29",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 12:44:11",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 16:19:21",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 21:54:00",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 22:41:48",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "cost": 9.507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 23:14:47",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-10 23:38:34",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-11 00:03:21",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "mode": "foreground"
+      }
+    ],
+    "last_free_quota_date": "2026-05-13",
+    "style_mappings": {
+      "8js1.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "Heading 4": "Heading 4",
+        "Normal": "Normal",
+        "正文 BJ8": "Normal"
+      },
+      "8js2.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "Heading 4": "Heading 4",
+        "Heading 6": "Heading 6",
+        "Normal": "Normal",
+        "Normal Indent": "Normal",
+        "标书正文": "Normal",
+        "样式 首行缩进:  2 字符": "Normal",
+        "正文缩进   技术": "Normal"
+      },
+      "8js3.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "Normal": "Normal",
+        "图形布置": "Body Text",
+        "图片表格": "Body Text"
+      }
+    },
+    "free_quota_history": [
+      {
+        "time": "2026-05-09 21:51:22",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-09"
+      },
+      {
+        "time": "2026-05-10 07:48:34",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-10"
+      },
+      {
+        "time": "2026-05-10 10:52:24",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-10"
+      },
+      {
+        "time": "2026-05-10 11:30:00",
+        "amount": 10000,
+        "type": "manual_recharge",
+        "date": "2026-05-10"
+      },
+      {
+        "time": "2026-05-10 11:45:00",
+        "amount": 10000,
+        "type": "manual_recharge",
+        "date": "2026-05-10"
+      },
+      {
+        "time": "2026-05-10 12:00:00",
+        "amount": 10000,
+        "type": "manual_recharge",
+        "date": "2026-05-10"
+      },
+      {
+        "time": "2026-05-11 00:03:22",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-11"
+      },
+      {
+        "time": "2026-05-13 13:45:01",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-13"
+      }
+    ]
+  },
+  "51445291477b": {
+    "balance": 0.0,
+    "paragraphs_remaining": 493,
+    "total_converted": 11,
+    "total_paragraphs_used": 10395,
+    "recharge_history": [],
+    "conversion_history": [
+      {
+        "time": "2026-05-13 14:36:35",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 14:47:36",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 14:49:58",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 15:29:58",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 15:30:50",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 15:35:16",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 15:36:18",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-13 15:37:08",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 111,
+        "mode": "foreground"
+      },
+      {
+        "time": "2026-05-14 12:41:05",
+        "files": 3,
+        "success": 3,
+        "failed": 0,
+        "paragraphs_charged": 9507,
+        "mode": "foreground"
+      }
+    ],
+    "last_free_quota_date": "2026-05-14",
+    "style_mappings": {
+      "城市轨道交通综合管控平台软件及服务采购项目售前技术交底报告.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "List Paragraph": "Normal",
+        "Normal": "Normal"
+      },
+      "8js1.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "Heading 4": "Heading 4",
+        "Normal": "Body Text",
+        "正文 BJ8": "Body Text"
+      },
+      "8js2.docx": {
+        "Heading 1": "Heading 1",
+        "Heading 2": "Heading 2",
+        "Heading 3": "Heading 3",
+        "Heading 4": "Heading 4",
+        "Heading 6": "Heading 6",
+        "Normal": "Normal",
+        "Normal Indent": "Normal",
+        "标书正文": "Normal",
+        "样式 首行缩进:  2 字符": "Normal",
+        "正文缩进   技术": "Normal"
+      }
+    },
+    "free_quota_history": [
+      {
+        "time": "2026-05-13 14:22:11",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-13"
+      },
+      {
+        "time": "2026-05-14 12:26:36",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-14"
+      }
+    ]
+  },
+  "5a6c71b3a510": {
+    "balance": 0.0,
+    "paragraphs_remaining": 9695,
+    "total_converted": 1,
+    "total_paragraphs_used": 305,
+    "recharge_history": [],
+    "conversion_history": [
+      {
+        "time": "2026-05-14 12:34:11",
+        "files": 1,
+        "success": 1,
+        "failed": 0,
+        "paragraphs_charged": 305,
+        "mode": "foreground"
+      }
+    ],
+    "last_free_quota_date": "2026-05-14",
+    "style_mappings": {},
+    "free_quota_history": [
+      {
+        "time": "2026-05-13 14:22:56",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-13"
+      },
+      {
+        "time": "2026-05-14 12:31:03",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-14"
+      }
+    ]
+  }
+}
