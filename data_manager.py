@@ -43,6 +43,74 @@ if DATA_SOURCE == "local":
         has_active_task as _has_active_task,
         cleanup_expired_tasks as _cleanup_expired_tasks,
     )
+    
+    def _get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
+        """
+        通过设备指纹获取或创建用户（Local模式 - 基于JSON文件）
+        
+        Args:
+            device_fingerprint: 设备指纹（32位MD5）
+            user_agent: User-Agent字符串（可选，用于日志）
+        
+        Returns:
+            用户数据字典
+        """
+        import json
+        import hashlib
+        from pathlib import Path
+        from config import FREE_PARAGRAPHS_DAILY
+        from datetime import datetime
+        
+        # 使用user_mapping.json存储设备指纹映射
+        mapping_file = Path(__file__).parent / "user_mapping.json"
+        
+        try:
+            # 读取映射文件
+            user_mapping = {}
+            if mapping_file.exists():
+                with open(mapping_file, 'r', encoding='utf-8') as f:
+                    user_mapping = json.load(f)
+            
+            # 查找设备指纹对应的用户ID
+            if device_fingerprint in user_mapping:
+                user_id = user_mapping[device_fingerprint]
+                
+                # 加载用户数据
+                user_data = _load_user(user_id)
+                if user_data:
+                    # 更新last_login
+                    user_data['last_login'] = datetime.now().isoformat()
+                    _save_user(user_data, user_id)
+                    return user_data
+            
+            # 用户不存在，创建新用户
+            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+            
+            # 准备用户数据
+            new_user_data = {
+                'user_id': user_id,
+                'balance': 0.0,
+                'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+                'paragraphs_used': 0,
+                'total_converted': 0,
+                'is_active': True,
+                'created_at': datetime.now().isoformat(),
+                'last_login': datetime.now().isoformat(),
+            }
+            
+            # 保存用户数据
+            _register_user(user_id, new_user_data)
+            
+            # 保存设备指纹映射
+            user_mapping[device_fingerprint] = user_id
+            with open(mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(user_mapping, f, ensure_ascii=False, indent=2)
+            
+            return new_user_data
+            
+        except Exception as e:
+            raise Exception(f"Local模式创建设备指纹用户失败: {e}")
+    
     print(f"[OK] 数据访问层初始化：本地模式 (SQLite + JSON)")
 
 # ==================== Supabase 模式导入 ====================
@@ -830,9 +898,11 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
             }
         finally:
             db.close()
+    elif DATA_SOURCE == "local":
+        # Local模式使用JSON文件存储
+        return _get_or_create_user_by_device(device_fingerprint, user_agent)
     else:
-        # local模式暂不支持，抛出异常
-        raise NotImplementedError("local模式暂不支持设备指纹功能")
+        raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
 
 # ==================== 设备指纹相关辅助函数 ====================
 
