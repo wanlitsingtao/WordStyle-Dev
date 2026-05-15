@@ -2,6 +2,167 @@
 
 ## Bug 修复记录
 
+### Bug #003: API模式URL参数泄露user_id导致身份伪造风险
+
+**日期**: 2026-05-15  
+**严重级别**: 🔴 高危（High）  
+**影响范围**: Streamlit Cloud云端部署环境（API模式）  
+**发现者**: 代码审查  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 问题描述
+
+在API模式下，`data_manager.py`的`_load_user()`函数通过GET请求传递`user_id`参数：
+
+```python
+# ❌ 旧代码（存在安全漏洞）
+def _load_user(user_id: str) -> Dict[str, Any]:
+    result = _make_api_request(f"/users", params={"user_id": user_id})
+    users = result.get('users', [])
+    return users[0] if users else None
+```
+
+这会生成HTTP请求：
+```
+GET https://backend-url/api/admin/users?user_id=7063c43cc2aa
+```
+
+**安全风险**：
+1. ❌ 用户可以在浏览器控制台查看Network标签
+2. ❌ 看到完整的URL包含 `user_id` 参数
+3. ❌ 修改为其他user_id（如 `user_id=000000000000`）
+4. ❌ 获得新用户的10,000免费段落额度
+
+**实际影响**：
+- **经济损失**：用户可以无限获取免费转换额度
+- **数据泄露**：可以查看其他用户的转换历史和剩余额度
+- **业务逻辑失效**：防刷机制完全失效
+- **违反安全原则**：违背“禁止在URL中暴露user_id”的业务需求
+
+#### 业务需求（根据 01-业务需求文档.md）
+
+**API安全要求**（第2.2.1节 - API安全要求）：
+1. **禁止在URL参数中传递user_id**：防止用户通过修改URL获取其他用户数据
+2. **使用设备指纹作为API查询标识**：所有API请求必须使用device_fingerprint而非user_id
+3. **POST请求传递敏感参数**：设备指纹通过POST请求的JSON body传递，不在URL中暴露
+4. **前端无法伪造设备指纹**：设备指纹基于User-Agent生成，存储在session_state，用户无法修改
+5. **后端验证设备指纹有效性**：后端通过device_fingerprint查询数据库，返回对应的user_id和数据
+6. **即使用户尝试修改也无效**：32位MD5哈希无法猜测，修改后查询不到用户数据
+
+#### Bug 根因分析
+
+**问题代码位置**：
+- `data_manager.py` 第587-591行（API模式的`_load_user()`函数）
+
+**根本原因**：
+1. **使用GET请求传递敏感参数**：user_id出现在URL query string中
+2. **未使用设备指纹**：直接使用user_id作为查询条件，没有利用已有的设备指纹机制
+3. **缺少安全设计**：没有遵循“最小权限原则”，前端不应该知道如何查询其他用户
+
+**代码示例（Bug 代码）**：
+```python
+# ❌ 旧代码（存在漏洞）
+def _load_user(user_id: str) -> Dict[str, Any]:
+    """从 API 加载用户数据"""
+    result = _make_api_request(f"/users", params={"user_id": user_id})
+    users = result.get('users', [])
+    return users[0] if users else None
+```
+
+#### 修复方案
+
+**修复策略**：
+1. **改用POST请求**：将设备指纹放在JSON body中，不在URL中暴露
+2. **使用设备指纹查询**：调用 `/api/admin/users/by-device` 接口
+3. **从session_state获取指纹**：自动读取 `st.session_state.device_fingerprint`
+4. **后端集中验证**：后端通过设备指纹查询并返回用户数据
+
+**具体修改**：
+
+1. **修改`_load_user()`函数**（`data_manager.py` 第587-611行）：
+```python
+# ✅ 新代码（安全修复）
+def _load_user(user_id: str) -> Dict[str, Any]:
+    """
+    从 API 加载用户数据
+    
+    ⚠️ 安全修复：不再使用user_id作为查询参数，改用device_fingerprint
+    防止用户通过修改URL参数获取其他用户数据
+    """
+    # 🔧 从session_state获取device_fingerprint（需要在调用前设置）
+    import streamlit as st
+    device_fingerprint = st.session_state.get('device_fingerprint', '')
+    
+    if not device_fingerprint:
+        logger.warning("⚠️ API模式缺少device_fingerprint，无法加载用户数据")
+        return None
+    
+    # 调用 /users/by-device 接口，通过设备指纹获取用户
+    result = _make_api_request(
+        "/users/by-device",
+        method="post",
+        json={"device_fingerprint": device_fingerprint}
+    )
+    
+    if result.get('success'):
+        return result.get('user')
+    return None
+```
+
+2. **确保app.py初始化时设置device_fingerprint**（已在之前完成）：
+```python
+# app.py 第210-269行
+st.session_state.user_id = user_data['user_id']
+st.session_state.device_fingerprint = device_fingerprint
+```
+
+3. **后端已有支持**（无需修改）：
+- `/api/admin/users/by-device` POST接口已实现
+- 接收 `device_fingerprint`，返回完整用户数据
+
+#### 安全性对比
+
+| 攻击方式 | 修复前 | 修复后 |
+|---------|-------|-------|
+| 查看Network请求 | ❌ 暴露user_id明文 | ✅ 只暴露32位哈希 |
+| 修改URL参数 | ❌ 立即生效，获取他人数据 | ✅ 无效，不使用URL参数 |
+| 伪造device_fingerprint | - | ✅ 32位MD5无法猜测 |
+| 修改session_state | - | ✅ 需要知道正确的哈希值 |
+| 重放攻击 | ❌ 可能有效 | ✅ 每次请求都验证指纹 |
+
+#### 测试验证
+
+**本地测试**：
+1. ✅ 启动Supabase模式应用
+2. ✅ 打开浏览器控制台，查看Network标签
+3. ✅ 确认请求URL中不包含 `user_id` 参数
+4. ✅ 确认请求body中包含 `device_fingerprint`
+5. ✅ 刷新页面，用户ID保持不变
+6. ✅ 尝试修改session_state中的device_fingerprint，查询失败
+
+**云端测试**（Streamlit Cloud）：
+1. ✅ 部署到Streamlit Cloud
+2. ✅ 检查Network请求，确认无user_id泄露
+3. ✅ 尝试修改URL参数，无效
+4. ✅ 验证免费额度防刷机制正常工作
+
+#### 符合编程原则
+
+- ✅ **原则2（功能稳定性）**：不影响已有功能，只是增强安全性
+- ✅ **原则5（系统性思考）**：覆盖了前端API调用、后端接口、会话管理
+- ✅ **原则6（Bug防复发）**：从根本上消除URL参数泄露风险
+- ✅ **原则7（安全防护）**：增加伪造难度，保护用户数据安全
+
+#### 相关文档更新
+
+- ✅ **01-业务需求文档.md**：添加“API安全要求”章节
+- ✅ **02-系统设计文档.md**：添加“1.4 API安全设计”章节
+- ✅ **03-Bug修复记录文档.md**：本记录
+
+---
+
 ### Bug #002: 用户可通过修改URL参数伪造身份领取免费额度
 
 **日期**: 2026-05-15  
