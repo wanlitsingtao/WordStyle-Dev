@@ -2,6 +2,151 @@
 
 ## Bug 修复记录
 
+### Bug #003: 云端环境user_data为None导致TypeError崩溃
+
+**日期**: 2026-05-15  
+**严重级别**: 🟠 中等（Medium）  
+**影响范围**: Streamlit Cloud部署环境  
+**发现者**: 用户反馈（生产环境错误日志）  
+
+---
+
+#### 问题描述
+
+在Streamlit Cloud环境中，应用启动时出现TypeError错误：
+```
+TypeError: This app has encountered an error. The original error message is redacted to prevent data leaks.
+Full error details have been recorded in the logs.
+Traceback:
+File "/mount/src/wordstyle/app.py", line 786, in <module>
+    st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
+```
+
+**错误原因**：`user_data`为`None`，尝试访问字典键时抛出TypeError。
+
+**影响**：
+- 应用完全无法启动
+- 用户无法访问任何功能
+- 侧边栏用户信息显示失败
+
+#### 业务需求（根据 01-业务需求文档.md）
+
+**系统可靠性要求**（第3.4节 - 可靠性需求）：
+- **异常处理**：转换失败时保留错误信息供排查
+- **自动恢复**：服务重启后自动清理过期数据
+- **服务可用性**：7×24小时可用（依赖云平台）
+
+#### Bug 根因分析
+
+**问题代码位置**：
+- `app.py` 第783-786行（侧边栏用户信息显示）
+
+**根本原因**：
+1. **缺少空值检查**：`load_user_data()`可能返回`None`，但代码没有检查
+2. **数据库连接问题**：在云端环境中，Supabase数据库连接可能失败
+3. **用户不存在**：新生成的用户ID可能在数据库中还没有记录
+
+**代码示例（Bug 代码）**：
+```python
+# ❌ 旧代码（存在漏洞）
+# 加载用户数据
+user_data = load_user_data(st.session_state.user_id)
+
+# 显示段落数和统计信息
+st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")  # ❌ 如果user_data为None，这里会崩溃
+st.metric("累计转换文档", user_data['total_converted'])
+```
+
+**调用链分析**：
+```
+app.py (第783行)
+  ↓ load_user_data()
+data_manager.py (第641行)
+  ↓ _load_user()
+data_manager.py (第74行)
+  ↓ return None  # 当用户不存在时返回None
+```
+
+#### 修复方案
+
+**修复策略**：
+1. 添加空值检查，防止None导致的TypeError
+2. 提供默认用户数据字典，确保界面正常显示
+3. 添加警告日志，便于排查数据库连接问题
+
+**具体修改**：
+
+**app.py 第783-788行**：
+```python
+# ✅ 新代码（安全）
+# 加载用户数据
+user_data = load_user_data(st.session_state.user_id)
+
+# ✅ 安全检查：如果用户数据加载失败，使用默认值
+if user_data is None:
+    logger.warning(f"⚠️ 无法加载用户数据: {st.session_state.user_id}，使用默认值")
+    user_data = {
+        'paragraphs_remaining': 0,
+        'total_converted': 0,
+        'balance': 0.0,
+        'total_paragraphs_used': 0,
+        'is_active': True,
+        'created_at': '',
+        'last_login': ''
+    }
+
+# 显示段落数和统计信息
+st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
+st.metric("累计转换文档", user_data['total_converted'])
+```
+
+#### 修复验证
+
+**测试步骤**：
+1. ✅ 模拟`load_user_data()`返回None的情况
+2. ✅ 验证应用不再崩溃，界面正常显示
+3. ✅ 验证默认值正确显示（剩余段落数: 0，累计转换文档: 0）
+4. ✅ 检查日志中是否有警告信息
+5. ⏳ 在Streamlit Cloud上重新部署后验证
+
+**预期结果**：
+- 应用正常启动，不再出现TypeError
+- 侧边栏显示默认值（0段落，0转换）
+- 日志中记录警告信息，便于后续排查
+
+#### 修复影响评估
+
+**修改文件**：
+1. ✅ `app.py` - 添加user_data空值检查和默认值处理
+
+**代码变更统计**：
+- 新增13行安全检查代码
+- 无删除代码
+
+**影响范围**：
+- ✅ 前端应用：增强容错能力
+- ✅ 用户体验：避免应用崩溃
+- ✅ 可维护性：添加警告日志便于排查
+
+**风险评估**：
+- ✅ 低风险：仅添加防御性代码，不影响正常流程
+- ✅ 符合编程原则2（功能稳定性）：已有功能不受影响
+- ✅ 符合编程原则6（Bug防复发）：防止类似空值问题
+
+**潜在改进**：
+- 可以考虑在`load_user_data()`层面确保永不返回None
+- 或者在用户ID生成后立即创建数据库记录
+
+#### 修复日期
+
+**修复完成时间**: 2026年5月15日  
+**修复人员**: AI Assistant (Lingma)  
+**审核状态**: 已部署  
+**Git提交**: `6c4736f` - "修复云端TypeError：添加user_data空值安全检查"  
+**部署平台**: Streamlit Cloud (https://wordstyle.streamlit.app)  
+
+---
+
 ### Bug #002: 用户可通过修改URL参数伪造身份领取免费额度
 
 **日期**: 2026-05-15  
