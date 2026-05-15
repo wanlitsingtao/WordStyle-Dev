@@ -569,6 +569,40 @@ elif DATA_SOURCE == "api":
             import uuid
             return str(uuid.uuid4())
         
+        def _get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
+            """
+            通过设备指纹获取或创建用户（API模式）
+            
+            Args:
+                device_fingerprint: 设备指纹（32位MD5）
+                user_agent: User-Agent字符串（可选，用于日志）
+            
+            Returns:
+                用户数据字典
+            """
+            result = _make_api_request(
+                "/users/by-device", 
+                method="post", 
+                json={
+                    "device_fingerprint": device_fingerprint,
+                    "user_agent": user_agent
+                }
+            )
+            
+            if result.get('success'):
+                return {
+                    'user_id': result['user_id'],
+                    'balance': result.get('balance', 0.0),
+                    'paragraphs_remaining': result.get('paragraphs_remaining', 0),
+                    'paragraphs_used': 0,
+                    'total_converted': result.get('total_converted', 0),
+                    'is_active': True,
+                    'created_at': '',
+                    'last_login': '',
+                }
+            else:
+                raise Exception(f"API返回失败: {result}")
+        
         def _create_task(task_id, user_id, filename, file_count=1, paragraphs=0, cost=0.0):
             """创建任务（API 模式）"""
             task_data = {
@@ -720,3 +754,97 @@ def cleanup_expired_tasks():
 def get_data_source():
     """获取当前数据源类型"""
     return DATA_SOURCE
+
+def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
+    """
+    通过设备指纹获取或创建用户（统一接口）
+    
+    Args:
+        device_fingerprint: 设备指纹（32位MD5）
+        user_agent: User-Agent字符串（可选，用于日志）
+    
+    Returns:
+        用户数据字典
+    """
+    # 根据不同数据源调用对应的实现
+    if DATA_SOURCE == "api":
+        return _get_or_create_user_by_device(device_fingerprint, user_agent)
+    elif DATA_SOURCE == "supabase":
+        # Supabase模式直接使用已有的实现
+        from backend.app.core.database import SessionLocal
+        from backend.app.models import User
+        from config import FREE_PARAGRAPHS_DAILY
+        from datetime import datetime
+        import hashlib
+        
+        db = SessionLocal()
+        try:
+            # 优先通过device_fingerprint查询
+            user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
+            
+            if user:
+                # 用户已存在，更新last_login
+                user.last_login = datetime.now()
+                db.commit()
+                
+                user_data = {
+                    'user_id': user.id,
+                    'balance': float(user.balance or 0),
+                    'paragraphs_remaining': int(user.paragraphs_remaining or 0),
+                    'paragraphs_used': int(user.total_paragraphs_used or 0),
+                    'total_converted': int(user.total_converted or 0),
+                    'is_active': bool(user.is_active),
+                    'created_at': user.created_at.isoformat() if user.created_at else '',
+                    'last_login': user.last_login.isoformat() if user.last_login else '',
+                }
+                
+                return user_data
+            
+            # 用户不存在，创建新用户
+            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+            
+            new_user = User(
+                id=user_id,
+                device_fingerprint=device_fingerprint,
+                balance=0.0,
+                paragraphs_remaining=FREE_PARAGRAPHS_DAILY,
+                total_paragraphs_used=0,
+                total_converted=0,
+                is_active=True,
+                created_at=datetime.now(),
+                last_login=datetime.now(),
+            )
+            
+            db.add(new_user)
+            db.commit()
+            
+            return {
+                'user_id': user_id,
+                'balance': 0.0,
+                'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+                'paragraphs_used': 0,
+                'total_converted': 0,
+                'is_active': True,
+                'created_at': datetime.now().isoformat(),
+                'last_login': datetime.now().isoformat(),
+            }
+        finally:
+            db.close()
+    else:
+        # local模式暂不支持，抛出异常
+        raise NotImplementedError("local模式暂不支持设备指纹功能")
+
+# ==================== 设备指纹相关辅助函数 ====================
+
+def generate_device_fingerprint(user_agent: str) -> str:
+    """
+    生成设备指纹
+    
+    Args:
+        user_agent: 浏览器的User-Agent字符串
+    
+    Returns:
+        32位MD5哈希字符串
+    """
+    import hashlib
+    return hashlib.md5(user_agent.encode('utf-8')).hexdigest()[:32]

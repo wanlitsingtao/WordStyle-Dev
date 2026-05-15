@@ -12,6 +12,7 @@ from uuid import UUID
 class UserResponse(BaseModel):
     """用户信息响应（基于实际数据库结构）"""
     id: str  # 12位字符串用户ID
+    device_fingerprint: Optional[str] = None  # 设备指纹
     username: Optional[str] = None
     balance: float = 0.0
     paragraphs_remaining: int = 0

@@ -205,7 +205,7 @@
   },
   "51445291477b": {
     "balance": 0.0,
-    "paragraphs_remaining": 493,
+    "paragraphs_remaining": 10000,
     "total_converted": 11,
     "total_paragraphs_used": 10395,
     "recharge_history": [],
@@ -283,7 +283,7 @@
         "mode": "foreground"
       }
     ],
-    "last_free_quota_date": "2026-05-14",
+    "last_free_quota_date": "2026-05-15",
     "style_mappings": {
       "城市轨道交通综合管控平台软件及服务采购项目售前技术交底报告.docx": {
         "Heading 1": "Heading 1",
@@ -325,6 +325,12 @@
         "amount": 10000,
         "type": "daily_free_quota",
         "date": "2026-05-14"
+      },
+      {
+        "time": "2026-05-15 09:36:35",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-15"
       }
     ]
   },

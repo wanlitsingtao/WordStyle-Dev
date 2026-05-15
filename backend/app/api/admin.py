@@ -124,6 +124,7 @@ def get_users_list(
         "users": [
             {
                 'user_id': u.id,
+                'device_fingerprint': u.device_fingerprint,
                 'balance': float(u.balance or 0),
                 'paragraphs_remaining': int(u.paragraphs_remaining or 0),
                 'paragraphs_used': int(u.total_paragraphs_used or 0),
@@ -135,6 +136,84 @@ def get_users_list(
             for u in users
         ]
     }
+
+@router.post("/users/by-device")
+def get_or_create_user_by_device_api(
+    device_fingerprint: str,
+    user_agent: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    通过设备指纹获取或创建用户
+    
+    Args:
+        device_fingerprint: 设备指纹（32位MD5哈希）
+        user_agent: User-Agent字符串（可选，用于日志）
+    
+    Returns:
+        用户信息字典
+    """
+    from datetime import datetime
+    from config import FREE_PARAGRAPHS_DAILY
+    import hashlib
+    
+    try:
+        # 1. 优先通过device_fingerprint查询
+        user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
+        
+        if user:
+            # 用户已存在，更新last_login
+            user.last_login = datetime.now()
+            db.commit()
+            
+            logger.info(f"✅ 从数据库恢复用户: {user.id} (device: {device_fingerprint[:8]}...)")
+            
+            return {
+                'success': True,
+                'user_id': user.id,
+                'is_new': False,
+                'paragraphs_remaining': user.paragraphs_remaining,
+                'balance': float(user.balance or 0),
+                'total_converted': user.total_converted,
+                'message': '用户已存在'
+            }
+        
+        # 2. 用户不存在，创建新用户
+        # 生成用户ID
+        user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+        
+        # 创建用户记录
+        new_user = User(
+            id=user_id,
+            device_fingerprint=device_fingerprint,
+            balance=0.0,
+            paragraphs_remaining=FREE_PARAGRAPHS_DAILY,
+            total_paragraphs_used=0,
+            total_converted=0,
+            is_active=True,
+            created_at=datetime.now(),
+            last_login=datetime.now()
+        )
+        
+        db.add(new_user)
+        db.commit()
+        
+        logger.info(f"✅ 创建新用户: {user_id} (device: {device_fingerprint[:8]}...)")
+        
+        return {
+            'success': True,
+            'user_id': user_id,
+            'is_new': True,
+            'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+            'balance': 0.0,
+            'total_converted': 0,
+            'message': '新用户创建成功'
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ 获取或创建用户失败: {e}")
+        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 @router.get("/tasks")
 def get_tasks_list(

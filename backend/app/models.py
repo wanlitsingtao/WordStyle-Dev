@@ -39,6 +39,7 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(String(12), primary_key=True)  # 12位字符串用户ID
+    device_fingerprint = Column(String(32), unique=True, index=True)  # 设备指纹（32位MD5哈希）
     username = Column(String(50))  # 用户名
     style_mappings = Column(JSONB, default='{}')  # 样式映射配置
     balance = Column(Float, default=0.0)  # 账户余额

@@ -239,11 +239,6 @@ def show_user_management():
                 st.code(traceback.format_exc())
                 all_users = []
         
-        # 如果是Supabase模式，显示原始数据供调试
-        if get_data_source() == 'supabase' and len(all_users) > 0:
-            with st.expander(" 查看原始数据（调试）"):
-                st.json(all_users[:2])  # 只显示前2个用户的数据
-        
         # 搜索过滤
         if search_keyword:
             filtered_users = [
