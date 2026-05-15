@@ -154,6 +154,9 @@ def show_history_dialog():
     
     # 从用户数据中获取转换历史
     user_data = load_user_data(st.session_state.user_id)
+    if user_data is None:
+        st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
+        return
     conversion_history = user_data.get('conversion_history', [])
     
     if conversion_history:
@@ -260,11 +263,15 @@ except Exception as e:
     logger.warning(f"⚠️ 使用临时用户ID: {temp_user_id}")
 
 # 🔧 第三步：自动领取免费额度（会检查日期并重置）
-free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
-if free_paragraphs > 0:
-    st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
-    # 更新user_data中的额度
-    user_data['paragraphs_remaining'] = free_paragraphs
+# ⚠️ 只有正常用户ID才领取免费额度，临时用户不领取
+if not st.session_state.user_id.startswith('temp_'):
+    free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
+    if free_paragraphs > 0:
+        st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
+        # 更新user_data中的额度
+        user_data['paragraphs_remaining'] = free_paragraphs
+else:
+    logger.warning(f"⚠️ 临时用户 {st.session_state.user_id} 不领取免费额度")
 
 logger.info(f"用户 {st.session_state.user_id} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 
@@ -724,12 +731,66 @@ with st.sidebar:
     st.caption(f"用户ID: {st.session_state.user_id[:12]}...")
     
     # 每日自动领取免费额度（检查日期，如果是新的一天则重置）
-    free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
-    if free_paragraphs > 0:
-        st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
+    # ️ 只有正常用户ID才领取免费额度，临时用户不领取
+    if not st.session_state.user_id.startswith('temp_'):
+        free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
+        if free_paragraphs > 0:
+            st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
     
     # 加载用户数据
-    user_data = load_user_data(st.session_state.user_id)
+    # ️ 只有正常用户ID才从API加载数据，临时用户使用本地默认数据
+    if not st.session_state.user_id.startswith('temp_'):
+        user_data = load_user_data(st.session_state.user_id)
+    else:
+        # 临时用户：使用本地默认数据
+        user_data = {
+            'user_id': st.session_state.user_id,
+            'balance': 0.0,
+            'paragraphs_remaining': 0,
+            'paragraphs_used': 0,
+            'total_converted': 0,
+            'is_active': False,
+            'created_at': '',
+            'last_login': '',
+        }
+        logger.warning(f"⚠️ 临时用户 {st.session_state.user_id} 使用本地默认数据")
+    
+    # 🔧 容错处理：如果用户数据为空，尝试重新初始化
+    if user_data is None:
+        logger.warning(f"⚠️ 用户数据加载失败: {st.session_state.user_id}，尝试重新初始化")
+        try:
+            # 通过设备指纹重新获取用户
+            device_fingerprint = st.session_state.get('device_fingerprint', '')
+            if device_fingerprint:
+                from data_manager import get_or_create_user_by_device
+                user_data = get_or_create_user_by_device(device_fingerprint)
+                st.session_state.user_id = user_data['user_id']
+                logger.info(f"✅ 重新初始化用户成功: {st.session_state.user_id}")
+            else:
+                # 降级方案：创建临时用户数据
+                user_data = {
+                    'user_id': st.session_state.user_id,
+                    'balance': 0.0,
+                    'paragraphs_remaining': 0,
+                    'paragraphs_used': 0,
+                    'total_converted': 0,
+                    'is_active': False,
+                    'created_at': '',
+                    'last_login': '',
+                }
+                logger.warning(f"⚠️ 使用临时用户数据")
+        except Exception as e:
+            logger.error(f"❌ 重新初始化用户失败: {e}")
+            user_data = {
+                'user_id': st.session_state.user_id,
+                'balance': 0.0,
+                'paragraphs_remaining': 0,
+                'paragraphs_used': 0,
+                'total_converted': 0,
+                'is_active': False,
+                'created_at': '',
+                'last_login': '',
+            }
     
     # 显示段落数和统计信息
     st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
@@ -1593,6 +1654,9 @@ def show_style_mapping_dialog():
     if 'file_style_mappings' not in st.session_state:
         # 从用户数据中加载样式映射
         user_data = load_user_data(st.session_state.user_id)
+        if user_data is None:
+            st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
+            return
         st.session_state.file_style_mappings = user_data.get('style_mappings', {})
     
     # 如果有多个文件，先选择要配置的文件
@@ -1672,6 +1736,9 @@ def show_style_mapping_dialog():
         if st.button("✅ 确定", key="confirm_mapping_btn", type="primary", use_container_width=True):
             # 保存样式映射到用户数据
             user_data = load_user_data(st.session_state.user_id)
+            if user_data is None:
+                st.error("❌ 用户数据加载失败，无法保存")
+                return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.success("✅ 样式映射已保存！")
@@ -1682,6 +1749,9 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings[selected_file.name] = {}
             # 保存样式映射到用户数据
             user_data = load_user_data(st.session_state.user_id)
+            if user_data is None:
+                st.error("❌ 用户数据加载失败，无法保存")
+                return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.info("已恢复默认映射")

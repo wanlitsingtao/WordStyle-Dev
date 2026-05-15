@@ -8,10 +8,14 @@
 """
 import os
 import sys
+import logging
 import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 # 导入配置
 sys.path.insert(0, os.path.dirname(__file__))
@@ -569,6 +573,8 @@ elif DATA_SOURCE == "api":
             """发送 API 请求到后端（支持 GET/POST/PUT）"""
             try:
                 url = f"{BACKEND_URL}/api/admin{endpoint}"
+                logger.info(f"🌐 API请求: {method.upper()} {url}")
+                
                 if method.lower() == "get":
                     response = requests.get(url, params=params, timeout=10)
                 elif method.lower() == "post":
@@ -579,16 +585,47 @@ elif DATA_SOURCE == "api":
                     response = requests.get(url, params=params, timeout=10)
                         
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                logger.info(f"✅ API响应成功: {endpoint}")
+                return result
+            except requests.exceptions.Timeout:
+                logger.error(f"⏰ API请求超时 (10秒): {method.upper()} {endpoint}")
+                return {}
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"❌ API连接失败: {method.upper()} {endpoint} - {e}")
+                return {}
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"❌ API HTTP错误: {method.upper()} {endpoint} - {e.response.status_code} - {e.response.text}")
+                return {}
             except Exception as e:
-                print(f"️ API 请求失败: {method.upper()} {endpoint} - {e}")
+                logger.error(f"❌ API请求异常: {method.upper()} {endpoint} - {type(e).__name__}: {e}")
                 return {}
         
         def _load_user(user_id: str) -> Dict[str, Any]:
-            """从 API 加载用户数据"""
-            result = _make_api_request(f"/users", params={"user_id": user_id})
-            users = result.get('users', [])
-            return users[0] if users else None
+            """
+            从 API 加载用户数据
+            
+            ⚠️ 安全修复：不再使用user_id作为查询参数，改用device_fingerprint
+            防止用户通过修改URL参数获取其他用户数据
+            """
+            # 🔧 从session_state获取device_fingerprint（需要在调用前设置）
+            import streamlit as st
+            device_fingerprint = st.session_state.get('device_fingerprint', '')
+            
+            if not device_fingerprint:
+                logger.warning("⚠️ API模式缺少device_fingerprint，无法加载用户数据")
+                return None
+            
+            # 调用 /users/by-device 接口，通过设备指纹获取用户
+            result = _make_api_request(
+                "/users/by-device",
+                method="post",
+                json={"device_fingerprint": device_fingerprint}
+            )
+            
+            if result.get('success'):
+                return result.get('user')
+            return None
         
         def _save_user(user_data: Dict[str, Any], user_id: str = None):
             """保存用户数据到 API"""
@@ -657,6 +694,11 @@ elif DATA_SOURCE == "api":
                 }
             )
             
+            # 🔧 检查API请求是否成功
+            if not result:
+                logger.error(f"❌ API返回空结果，可能是后端服务不可用或网络超时")
+                raise Exception("API请求失败：后端服务不可用或网络超时")
+            
             if result.get('success'):
                 return {
                     'user_id': result['user_id'],
@@ -669,7 +711,9 @@ elif DATA_SOURCE == "api":
                     'last_login': '',
                 }
             else:
-                raise Exception(f"API返回失败: {result}")
+                error_msg = result.get('message', '未知错误')
+                logger.error(f"❌ API返回失败: {error_msg}")
+                raise Exception(f"API返回失败: {error_msg}")
         
         def _create_task(task_id, user_id, filename, file_count=1, paragraphs=0, cost=0.0):
             """创建任务（API 模式）"""
