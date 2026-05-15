@@ -840,7 +840,6 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
     elif DATA_SOURCE == "supabase":
         # Supabase模式直接使用已有的实现
         from backend.app.core.database import SessionLocal
-        from backend.app.models import User
         from config import FREE_PARAGRAPHS_DAILY
         from datetime import datetime
         import hashlib
