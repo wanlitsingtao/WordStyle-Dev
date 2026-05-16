@@ -2,6 +2,219 @@
 
 ## Bug 修复记录
 
+### Bug #006: total_paragraphs_used累计值被重置Bug（双重Bug）
+
+**日期**: 2026-05-16  
+**严重级别**: 🔴 高危（High）  
+**影响范围**: API模式下所有用户的累计使用段落数统计  
+**发现者**: 用户报告（用户7063c43cc2aa）  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 问题描述
+
+用户7063c43cc2aa进行了3次转换：
+- 第1次：8js1.docx（约1083段）
+- 第2次：8js2.docx + 8js3.docx（共8424段）
+
+管理后台显示：
+- **已用段落**: 8424 ❌（应该是 ~9507）
+- **剩余段落**: 493 ✅（正确：10000 - 1083 - 8424 = 493）
+- **累计转换**: 3 ✅
+
+**问题分析**：`paragraphs_remaining`扣除正确，但`total_paragraphs_used`只记录了第2次的8424段，丢失了第1次的1083段。
+
+---
+
+#### 根本原因（双重Bug）
+
+这是一个**前后端数据不一致**导致的双重Bug：
+
+| # | 位置 | 问题 | 影响 |
+|---|------|------|------|
+| **Bug A** | `backend/app/api/admin.py:176-184` | `/users/by-device`返回**缺少`total_paragraphs_used`字段** | 前端无法加载到正确的累计值 |
+| **Bug B** | `data_manager.py:786` | `_get_or_create_user_by_device`**硬编码`'total_paragraphs_used': 0`** | 每次页面刷新/rerun都重置为0 |
+
+---
+
+#### 执行流程复盘
+
+**第1次转换（8js1.docx，约1083段）：**
+
+1. 初始化：顶层`user_data['total_paragraphs_used'] = 0`（`_get_or_create_user_by_device`硬编码返回0）
+2. 转换成功 → `user_data['total_paragraphs_used'] += 1083` → **= 1083** ✅
+3. `save_user_data(user_data)` → `POST /users/{user_id}` → 数据库`total_paragraphs_used = 1083` ✅
+4. `st.rerun()` → **全页重渲染** 🔄
+5. 重新执行顶层`user_data = get_or_create_user_by_device(...)`
+6. 后端`/users/by-device`返回中**没有`total_paragraphs_used`** 👈 **Bug A**
+7. `data_manager.py:786`**硬编码**`'total_paragraphs_used': 0` 👈 **Bug B**
+8. 顶层`user_data['total_paragraphs_used']`被**重置为0** ❌
+
+**第2次转换（8js2.docx + 8js3.docx = 8424段）：**
+
+9. 顶层`user_data['total_paragraphs_used']`当前是**0**（被步骤8重置）
+10. 转换成功 → `user_data['total_paragraphs_used'] += 8424` → **= 8424**
+11. `save_user_data(user_data)` → **覆盖写入数据库**`total_paragraphs_used = 8424` ❌
+12. 数据库正确的值应该是**1083 + 8424 = 9507**，但被覆盖为**8424**
+
+---
+
+#### 验证数据
+
+数据库中当前`7063c43cc2aa`的值：
+```json
+{
+  "paragraphs_remaining": 493,      // ✅ 正确
+  "paragraphs_used": 8424,          // ❌ 应该是 ~9507
+  "total_converted": 3              // ✅ 正确
+}
+```
+
+**关键发现**：`paragraphs_remaining`扣除是正确的（不受此Bug影响），只有`total_paragraphs_used`统计不准确。
+
+---
+
+#### 修复方案
+
+**修复1: 后端添加字段**
+
+文件：`backend/app/api/admin.py:183`
+
+```python
+# 修复前：
+return {
+    'success': True,
+    'user_id': user.id,
+    'is_new': False,
+    'paragraphs_remaining': user.paragraphs_remaining,
+    'balance': float(user.balance or 0),
+    'total_converted': user.total_converted,
+    'message': '用户已存在'
+}
+
+# 修复后：
+return {
+    'success': True,
+    'user_id': user.id,
+    'is_new': False,
+    'paragraphs_remaining': user.paragraphs_remaining,
+    'balance': float(user.balance or 0),
+    'total_converted': user.total_converted,
+    'total_paragraphs_used': user.total_paragraphs_used,  # ✅ 添加此字段
+    'message': '用户已存在'
+}
+```
+
+**修复2: 前端从后端读取**
+
+文件：`data_manager.py:786`
+
+```python
+# 修复前：
+if result.get('success'):
+    return {
+        'user_id': result['user_id'],
+        'balance': result.get('balance', 0.0),
+        'paragraphs_remaining': result.get('paragraphs_remaining', 0),
+        'total_paragraphs_used': 0,  # ❌ 硬编码0
+        'total_converted': result.get('total_converted', 0),
+        'is_active': True,
+        'created_at': '',
+        'last_login': '',
+        'conversion_history': [],
+    }
+
+# 修复后：
+if result.get('success'):
+    return {
+        'user_id': result['user_id'],
+        'balance': result.get('balance', 0.0),
+        'paragraphs_remaining': result.get('paragraphs_remaining', 0),
+        'total_paragraphs_used': result.get('total_paragraphs_used', 0),  # ✅ 从后端读取
+        'total_converted': result.get('total_converted', 0),
+        'is_active': True,
+        'created_at': '',
+        'last_login': '',
+        'conversion_history': [],
+    }
+```
+
+---
+
+#### 违反的编码原则
+
+1. **数据结构完整性原则**：API返回应该包含所有必要字段，确保前后端数据一致性
+2. **防御性编程原则**：不应该硬编码默认值，应该从数据源动态读取
+3. **系统性思考原则**：修改时没有考虑到`st.rerun()`会重新加载用户数据，导致累计值被重置
+4. **Bug防复发原则**：之前已经出现过类似的字段缺失问题（Bug #005），但没有建立检查机制
+
+---
+
+#### 经验教训
+
+1. **API接口契约必须明确**：
+   - 前后端交互的API接口应该有明确的字段定义
+   - 新增字段时需要同步更新所有调用方
+   - 建议建立API接口文档或Schema验证
+
+2. **避免硬编码默认值**：
+   - 尤其是累计值、统计类字段，绝对不能硬编码
+   - 应该始终从数据源（数据库/API）读取最新值
+   - 如果数据源没有该字段，应该记录警告日志
+
+3. **理解Streamlit的重渲染机制**：
+   - `st.rerun()`会导致整个脚本重新执行
+   - 所有顶层代码都会重新运行，包括用户数据加载
+   - 必须确保重新加载的数据是最新的、完整的
+
+4. **建立数据一致性检查机制**：
+   - 定期检查数据库中`total_paragraphs_used`与`conversion_history`是否一致
+   - 可以添加自动化测试验证：`total_paragraphs_used == sum(history.paragraphs_charged)`
+   - 发现不一致时自动告警
+
+---
+
+#### Git提交记录
+
+**发布目录 (WordStyle)**:
+```
+Commit: 4abf58a
+Message: "修复: total_paragraphs_used累计值被重置Bug（双重修复）"
+Files Changed:
+  - backend/app/api/admin.py (+1 line)
+  - data_manager.py (+1 line, -1 line)
+```
+
+**工作目录 (WSprj)**:
+```
+Commit: 2b19a51
+Message: "修复: total_paragraphs_used累计值被重置Bug（双重修复）"
+Files Changed:
+  - backend/app/api/admin.py (+1 line)
+  - data_manager.py (+1 line, -1 line)
+```
+
+---
+
+#### 后续改进建议
+
+1. **短期**：
+   - 手动修正数据库中受影响用户的`total_paragraphs_used`值
+   - 监控其他用户的统计数据是否正确
+
+2. **中期**：
+   - 建立API接口的Schema验证（如使用Pydantic）
+   - 添加数据一致性检查的定时任务
+   - 在管理后台添加数据校验功能
+
+3. **长期**：
+   - 建立完整的前后端接口文档
+   - 实现自动化回归测试，覆盖数据一致性场景
+   - 考虑引入GraphQL或gRPC等强类型接口协议
+
+---
+
 ### Bug #005: 样式映射对话框"用户数据加载失败"错误
 
 **日期**: 2026-05-16  
