@@ -181,6 +181,7 @@ def get_or_create_user_by_device_api(
                 'balance': float(user.balance or 0),
                 'total_converted': user.total_converted,
                 'total_paragraphs_used': user.total_paragraphs_used,  # ✅ 修复：添加累计使用段落数字段
+                'conversion_history': user.conversion_history or [],  # ✅ 修复：添加转换历史字段
                 'message': '用户已存在'
             }
         
@@ -213,6 +214,8 @@ def get_or_create_user_by_device_api(
             'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
             'balance': 0.0,
             'total_converted': 0,
+            'total_paragraphs_used': 0,
+            'conversion_history': [],  # ✅ 修复：新用户初始化转换历史为空列表
             'message': '新用户创建成功'
         }
         
@@ -342,6 +345,7 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
         user.paragraphs_remaining = user_data.get('paragraphs_remaining', user.paragraphs_remaining)
         user.total_paragraphs_used = user_data.get('total_paragraphs_used', user.total_paragraphs_used)
         user.total_converted = user_data.get('total_converted', user.total_converted)
+        user.conversion_history = user_data.get('conversion_history', user.conversion_history)  # ✅ 修复：保存转换历史
         user.last_login = datetime.now()
     else:
         # 创建新用户
@@ -351,6 +355,7 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
             paragraphs_remaining=user_data.get('paragraphs_remaining', 0),
             total_paragraphs_used=user_data.get('total_paragraphs_used', 0),
             total_converted=user_data.get('total_converted', 0),
+            conversion_history=user_data.get('conversion_history', []),  # ✅ 修复：保存转换历史
             is_active=True,
             last_login=datetime.now(),
         )

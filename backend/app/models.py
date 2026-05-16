@@ -46,6 +46,7 @@ class User(Base):
     paragraphs_remaining = Column(Integer, default=0)  # 剩余段落数
     total_paragraphs_used = Column(Integer, default=0)  # 累计使用段落数
     total_converted = Column(Integer, default=0)  # 累计转换文件数
+    conversion_history = Column(JSONB, default=list)  # 转换历史记录（JSON数组）
     is_active = Column(Boolean, default=True)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间
     last_login = Column(DateTime(timezone=True))  # 最后登录时间

@@ -462,9 +462,9 @@ def show_feedback_management():
         with col1:
             st.metric("📝 总反馈数", stats.get('total', 0))
         with col2:
-            st.metric("⏳ 待处理", stats.get('pending', 0))
+            st.metric("⏳ 待处理", stats.get('by_status', {}).get('pending', 0))  # ✅ 修复：使用正确的统计字段
         with col3:
-            st.metric("✅ 已处理", stats.get('processed', 0))
+            st.metric("✅ 已处理", stats.get('by_status', {}).get('resolved', 0))  # ✅ 修复：使用resolved而非processed
         
         st.markdown("---")
         
@@ -478,10 +478,10 @@ def show_feedback_management():
                 feedback_data.append({
                     "ID": fb.get('id', '-'),
                     "用户ID": str(fb.get('user_id', ''))[:12] + "..." if fb.get('user_id') else '-',
-                    "类型": fb.get('type', '-'),
-                    "内容": fb.get('content', '-')[:50] + "..." if len(fb.get('content', '')) > 50 else fb.get('content', '-'),
-                    "状态": "✅ 已处理" if fb.get('processed', False) else "⏳ 待处理",
-                    "提交时间": format_datetime(fb.get('created_at', '')),
+                    "类型": fb.get('feedback_type', '-'),  # ✅ 修复：使用正确的字段名
+                    "内容": fb.get('title', '-')[:50] + "..." if len(fb.get('title', '')) > 50 else fb.get('title', '-'),  # ✅ 修复：使用title而非content
+                    "状态": "✅ 已处理" if fb.get('status') == 'resolved' else ("🔄 处理中" if fb.get('status') == 'processing' else "⏳ 待处理"),  # ✅ 修复：使用status字段
+                    "提交时间": format_datetime(fb.get('timestamp', '')),  # ✅ 修复：使用timestamp而非created_at
                 })
             
             st.dataframe(feedback_data, use_container_width=True, hide_index=True)
@@ -501,23 +501,26 @@ def show_feedback_management():
                     # 显示完整内容
                     with st.expander("查看完整反馈内容", expanded=True):
                         st.write(f"**用户ID:** {feedback_found.get('user_id', '-')}")
-                        st.write(f"**类型:** {feedback_found.get('type', '-')}")
-                        st.write(f"**内容:** {feedback_found.get('content', '-')}")
-                        st.write(f"**提交时间:** {format_datetime(feedback_found.get('created_at', ''))}")
-                        st.write(f"**状态:** {'✅ 已处理' if feedback_found.get('processed', False) else '⏳ 待处理'}")
+                        st.write(f"**类型:** {feedback_found.get('feedback_type', '-')}")  # ✅ 修复：使用正确的字段名
+                        st.write(f"**标题:** {feedback_found.get('title', '-')}")  # ✅ 修复：使用title
+                        st.write(f"**描述:** {feedback_found.get('description', '-')}")  # ✅ 修复：使用description
+                        st.write(f"**联系方式:** {feedback_found.get('contact', '-')}")
+                        st.write(f"**提交时间:** {format_datetime(feedback_found.get('timestamp', ''))}")  # ✅ 修复：使用timestamp
+                        status_text = "✅ 已处理" if feedback_found.get('status') == 'resolved' else ("🔄 处理中" if feedback_found.get('status') == 'processing' else "⏳ 待处理")
+                        st.write(f"**状态:** {status_text}")  # ✅ 修复：使用status字段
                     
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        if not feedback_found.get('processed', False):
+                        if feedback_found.get('status') != 'resolved':  # ✅ 修复：使用status字段
                             if st.button("标记为已处理", key=f"process_{selected_feedback_id}"):
                                 from comments_manager import save_feedbacks
-                                feedback_found['processed'] = True
+                                feedback_found['status'] = 'resolved'  # ✅ 修复：设置status为resolved
                                 # 重新保存
                                 all_fb = load_feedbacks()
                                 for fb in all_fb:
                                     if fb.get('id') == selected_feedback_id:
-                                        fb['processed'] = True
+                                        fb['status'] = 'resolved'  # ✅ 修复：设置status为resolved
                                         break
                                 save_feedbacks(all_fb)
                                 st.success("✅ 已标记为已处理")
