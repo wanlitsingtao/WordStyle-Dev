@@ -1898,7 +1898,7 @@ class DocumentConverter:
                      source_styles_cache=None):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
-        固定为7个步骤，跳过的步骤也会计入进度
+        ⚡ 性能优化：合并为一次性流水线，避免多次加载/保存文档
         :param source_file: 源文件
         :param template_file: 模板文件
         :param output_file: 最终输出文件
@@ -1916,74 +1916,74 @@ class DocumentConverter:
         :param source_styles_cache: 缓存的源文件样式列表（可选，避免重复分析）
         :return: (success, actual_output_file, message)
         """
+        import time
+        start_time = time.time()
+        
         # 固定7个步骤，确保进度条能正确填满
         if progress_callback:
             progress_callback(1, "正在进行转换...")
         
-        # 步骤1：样式转换
-        temp_file_1 = output_file.rsplit('.', 1)[0] + "_temp1.docx"
-        success, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
-                                           warning_callback, source_styles_cache)
-        if not success:
-            return False, output_file, f"样式转换失败: {msg}"
+        # ========== ⚡ 性能优化：一次性流水线处理 ==========
+        # 原来：Load → StyleConv → Save → Load → MoodConv → Save → Load → AnswerInsert → Save
+        # 现在：  Load → StyleConv → MoodConv → AnswerInsert → Save（一次加载，一次保存）
+        
+        # 步骤1：样式转换（返回Document对象，不保存）
+        doc = self._convert_styles_in_memory(source_file, template_file, custom_style_map, list_bullet,
+                                              warning_callback, source_styles_cache)
+        if doc is None:
+            elapsed = time.time() - start_time
+            return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
         
         if progress_callback:
             progress_callback(2, "正在进行转换...")
         
-        # 步骤2-3：语气转换（占用2个步骤槽位）
+        # 步骤2-3：语气转换（直接在内存中的Document对象上操作）
         if do_mood:
             if progress_callback:
                 progress_callback(3, "正在进行转换...")
-            temp_file_2 = output_file.rsplit('.', 1)[0] + "_temp2.docx"
-            success, msg = self.convert_mood(temp_file_1, temp_file_2)
-            if not success:
-                return False, f"语气转换失败: {msg}"
+            mood_result = self._convert_mood_in_memory(doc)
+            if not mood_result:
+                elapsed = time.time() - start_time
+                return False, output_file, f"语气转换失败（耗时{elapsed:.1f}秒）"
             if progress_callback:
                 progress_callback(4, "正在进行转换...")
-            os.remove(temp_file_1)  # 清理临时文件
-            temp_file_1 = temp_file_2
         else:
             # 跳过语气转换，但仍然占用步骤3和4
             if progress_callback:
                 progress_callback(3, "正在进行转换...")
                 progress_callback(4, "正在进行转换...")
         
-        # 步骤5-6：插入应答句（占用2个步骤槽位）
+        # 步骤5-6：插入应答句（直接在内存中的Document对象上操作）
         actual_output_file = output_file  # 默认使用原始输出文件名
         if do_answer_insertion:
             if progress_callback:
                 progress_callback(5, "正在进行转换...")
-            success, actual_file, msg = self.insert_response_after_headings(
-                temp_file_1, output_file, answer_text, answer_style, mode=answer_mode
+            insert_result = self._insert_response_in_memory(
+                doc, answer_text, answer_style, mode=answer_mode
             )
-            if not success:
-                return False, output_file, f"插入应答句失败: {msg}"
-            
-            actual_output_file = actual_file  # 更新为实际文件名
+            if not insert_result:
+                elapsed = time.time() - start_time
+                return False, output_file, f"插入应答句失败（耗时{elapsed:.1f}秒）"
             
             if progress_callback:
                 progress_callback(6, "正在进行转换...")
         else:
-            # 不插入应答句，直接复制文件，但仍然占用步骤5和6
+            # 不插入应答句，但仍然占用步骤5和6
             if progress_callback:
                 progress_callback(5, "正在进行转换...")
-            import shutil
-            shutil.copy2(temp_file_1, output_file)
-            if progress_callback:
                 progress_callback(6, "正在进行转换...")
         
-        # 清理临时文件
-        try:
-            if os.path.exists(temp_file_1):
-                os.remove(temp_file_1)
-        except:
-            pass
-        
-        # 步骤7：完成
+        # 步骤7：保存文档（只保存一次！）
         if progress_callback:
-            progress_callback(7, "转换完成！")
+            progress_callback(7, "正在保存...")
         
-        return True, actual_output_file, "转换成功完成！"
+        success, actual_file, msg = self.save_with_retry(doc, output_file)
+        elapsed = time.time() - start_time
+        
+        if success:
+            return True, actual_file, f"转换成功完成！（耗时{elapsed:.1f}秒）"
+        else:
+            return False, output_file, f"保存失败: {msg}（耗时{elapsed:.1f}秒）"
     
     def save_with_retry(self, doc, output_file, max_retries=10):
         """
@@ -2044,6 +2044,168 @@ class DocumentConverter:
         
         # 重试次数用尽
         return False, output_file, f"无法保存文档，已尝试 {max_retries} 次"
+    
+    def _convert_styles_in_memory(self, source_file, template_file, custom_style_map=None, list_bullet=None,
+                                   warning_callback=None, source_styles_cache=None):
+        """
+        ⚡ 性能优化：在内存中进行样式转换，不保存中间文件
+        :return: Document对象或None（失败时）
+        """
+        try:
+            from docx import Document
+            from copy import deepcopy
+            from lxml import etree
+            from docx.oxml.ns import qn
+            
+            # 加载源文档和模板文档
+            source_doc = Document(source_file)
+            new_doc = Document(template_file)
+            self.clear_document_content(new_doc)
+            
+            # 设置样式映射
+            style_map = STYLE_MAP.copy()
+            if custom_style_map:
+                style_map.update(custom_style_map)
+            self.current_style_map = style_map
+            
+            # 使用缓存的样式列表或重新分析
+            if source_styles_cache:
+                self.source_styles = source_styles_cache
+            else:
+                self.source_styles = self.get_all_styles_from_doc(source_doc)
+            
+            # 获取页面宽度信息
+            section = new_doc.sections[0]
+            page_width = section.page_width
+            left_margin = section.left_margin
+            right_margin = section.right_margin
+            available_width = page_width - left_margin - right_margin
+            
+            # 处理源文档的所有元素
+            body = source_doc.element.body
+            para_idx = 0
+            table_idx = 0
+            
+            for child in body:
+                if child.tag == qn('w:p'):
+                    if para_idx < len(source_doc.paragraphs):
+                        para = source_doc.paragraphs[para_idx]
+                        src_style = para.style.name
+                        target_style = self.get_target_style(src_style, new_doc, source_file)
+                        
+                        # 使用copy_paragraph_with_images方法复制段落
+                        self.copy_paragraph_with_images(
+                            para, new_doc, target_style,
+                            page_width, available_width,
+                            para_idx, source_file,
+                            warning_callback=None
+                        )
+                        para_idx += 1
+                elif child.tag == qn('w:tbl'):
+                    if table_idx < len(source_doc.tables):
+                        table = source_doc.tables[table_idx]
+                        self.copy_table_with_images(
+                            table, new_doc, table_idx, available_width,
+                            source_file, warning_callback=None
+                        )
+                        table_idx += 1
+            
+            return new_doc
+        except Exception as e:
+            print(f"样式转换失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _convert_mood_in_memory(self, doc):
+        """
+        ⚡ 性能优化：在内存中进行语气转换，不保存中间文件
+        :param doc: Document对象
+        :return: True/False
+        """
+        try:
+            modified_count = 0
+            para_count = 0
+            
+            for para in doc.paragraphs:
+                para_count += 1
+                if self.process_paragraph_mood(para):
+                    modified_count += 1
+            
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for para in cell.paragraphs:
+                            para_count += 1
+                            if self.process_paragraph_mood(para):
+                                modified_count += 1
+            
+            print(f"语气转换完成！处理段落: {para_count}, 修改: {modified_count}")
+            return True
+        except Exception as e:
+            print(f"语气转换失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _insert_response_in_memory(self, doc, answer_text=None, answer_style=None, mode='before_heading'):
+        """
+        ⚡ 性能优化：在内存中插入应答句，不保存中间文件
+        :param doc: Document对象
+        :param answer_text: 应答文本
+        :param answer_style: 应答样式
+        :param mode: 插入模式
+        :return: True/False
+        """
+        try:
+            from copy import deepcopy
+            from docx.oxml.ns import qn
+            
+            if answer_text is None:
+                answer_text = ANSWER_TEXT
+            if answer_style is None:
+                answer_style = ANSWER_STYLE
+            
+            self.ensure_style_exists(doc, answer_style)
+            
+            # 预创建应答段落模板
+            temp_para = doc.add_paragraph(answer_text)
+            temp_para.style = answer_style
+            answer_template = deepcopy(temp_para._element)
+            temp_para._element.getparent().remove(temp_para._element)
+            
+            body = doc.element.body
+            children = list(body)
+            new_children = []
+            
+            # 根据模式选择不同的处理逻辑
+            if mode == 'before_heading':
+                insert_count, total_heading_count = self._insert_before_headings(
+                    children, new_children, answer_template, doc
+                )
+            elif mode == 'after_heading':
+                insert_count, total_heading_count = self._insert_after_chapters(
+                    children, new_children, answer_template, doc
+                )
+            else:
+                # 默认使用标题前插入
+                insert_count, total_heading_count = self._insert_before_headings(
+                    children, new_children, answer_template, doc
+                )
+            
+            # 清空并重组body
+            for child in list(body):
+                body.remove(child)
+            for elem in new_children:
+                body.append(elem)
+            
+            print(f"插入应答句完成！插入: {insert_count}个，标题: {total_heading_count}个")
+            return True
+        except Exception as e:
+            print(f"插入应答句失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 if __name__ == "__main__":
