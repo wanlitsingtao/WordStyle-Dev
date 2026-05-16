@@ -783,7 +783,7 @@ elif DATA_SOURCE == "api":
                     'user_id': result['user_id'],
                     'balance': result.get('balance', 0.0),
                     'paragraphs_remaining': result.get('paragraphs_remaining', 0),
-                    'total_paragraphs_used': 0,
+                    'total_paragraphs_used': result.get('total_paragraphs_used', 0),  # ✅ 修复：从后端返回中读取，而不是硬编码0
                     'total_converted': result.get('total_converted', 0),
                     'is_active': True,
                     'created_at': '',

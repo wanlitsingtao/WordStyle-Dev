@@ -2,13 +2,16 @@
 """
 管理员 API 路由 - 系统配置管理
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import SystemConfig, User, ConversionTask
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -100,13 +103,15 @@ def get_system_stats(db: Session = Depends(get_db)):
     total_users = db.query(User).count()
     active_users = db.query(User).filter(User.is_active == True).count()
     
-    # 订单/充值功能已移除
-    total_revenue = 0.0
+    # 总转换次数
+    total_conversions = db.query(User).filter(
+        User.total_converted > 0
+    ).count()
     
     return {
         "total_users": total_users,
         "active_users": active_users,
-        "total_revenue": float(total_revenue),
+        "total_conversions": total_conversions,
         "message": "系统统计信息"
     }
 
@@ -139,8 +144,8 @@ def get_users_list(
 
 @router.post("/users/by-device")
 def get_or_create_user_by_device_api(
-    device_fingerprint: str,
-    user_agent: Optional[str] = None,
+    device_fingerprint: str = Body(..., embed=False),
+    user_agent: Optional[str] = Body(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -154,7 +159,7 @@ def get_or_create_user_by_device_api(
         用户信息字典
     """
     from datetime import datetime
-    from config import FREE_PARAGRAPHS_DAILY
+    from app.config import FREE_PARAGRAPHS_DAILY
     import hashlib
     
     try:
@@ -175,6 +180,7 @@ def get_or_create_user_by_device_api(
                 'paragraphs_remaining': user.paragraphs_remaining,
                 'balance': float(user.balance or 0),
                 'total_converted': user.total_converted,
+                'total_paragraphs_used': user.total_paragraphs_used,  # ✅ 修复：添加累计使用段落数字段
                 'message': '用户已存在'
             }
         
@@ -236,12 +242,11 @@ def get_tasks_list(
         "total": total,
         "tasks": [
             {
-                'task_id': t.task_id,
+                'id': str(t.id),
                 'user_id': t.user_id,
-                'filename': t.filename,
-                'file_count': t.file_count,
-                'paragraphs': t.paragraphs,
-                'cost': float(t.cost or 0),
+                'source_file': t.source_file or '',
+                'template_file': t.template_file or '',
+                'converted_file': t.converted_file or '',
                 'status': t.status,
                 'progress': t.progress,
                 'created_at': t.created_at.isoformat() if t.created_at else '',
@@ -280,13 +285,14 @@ def get_task_statistics(db: Session = Depends(get_db)):
 @router.post("/tasks")
 def create_task_api(task_data: dict, db: Session = Depends(get_db)):
     """创建任务（供 API 模式调用）"""
+    import uuid
+    from app.models import ConversionTask
+    
     task = ConversionTask(
-        task_id=task_data['task_id'],
         user_id=task_data['user_id'],
-        filename=task_data.get('filename', ''),
-        paragraphs=task_data.get('paragraphs', 0),
-        cost=task_data.get('cost', 0.0),
-        status='PENDING',
+        source_file=task_data.get('source_file', ''),
+        template_file=task_data.get('template_file', ''),
+        status='pending',
         progress=0
     )
     db.add(task)
@@ -311,7 +317,13 @@ def update_task_status_api(task_id: str, status_data: dict, db: Session = Depend
         task.progress = status_data['progress']
     if 'error_message' in status_data:
         task.error_message = status_data['error_message']
-    if task.status == 'COMPLETED':
+    if 'source_file' in status_data:
+        task.source_file = status_data['source_file']
+    if 'template_file' in status_data:
+        task.template_file = status_data['template_file']
+    if 'converted_file' in status_data:
+        task.converted_file = status_data['converted_file']
+    if task.status == 'completed':
         task.completed_at = datetime.now()
     
     db.commit()
@@ -356,27 +368,27 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
 @router.post("/users/{user_id}/claim-free")
 def claim_free_paragraphs(user_id: str, db: Session = Depends(get_db)):
     """领取免费段落（供 API 模式调用）- 每日只领取一次"""
-    from config import FREE_PARAGRAPHS_DAILY
+    from app.config import FREE_PARAGRAPHS_DAILY
     from datetime import datetime, date
     
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return {'success': False, 'error': '用户不存在'}
     
+    # 检查今天是否已经领取过
     today = date.today()
-    
-    # 检查今日是否已领取
     if user.last_claim_date:
-        last_claim = user.last_claim_date.date() if hasattr(user.last_claim_date, 'date') else user.last_claim_date
-        if last_claim == today:
-            # 今日已领取，不再重复发放
+        last_claim_date = user.last_claim_date.date() if hasattr(user.last_claim_date, 'date') else user.last_claim_date
+        if last_claim_date == today:
+            # 今天已经领取过，返回当前剩余额度
             return {
                 'success': True,
-                'paragraphs': 0,
-                'message': '今日已领取过免费额度'
+                'paragraphs': 0,  # 返回0表示没有新领取
+                'message': '今日已领取过免费额度',
+                'already_claimed': True
             }
     
-    # 今日首次领取：重置为免费额度（不累计）
+    # 设置免费段落数并记录领取日期
     user.paragraphs_remaining = FREE_PARAGRAPHS_DAILY
     user.last_claim_date = datetime.now()
     db.commit()
@@ -384,7 +396,8 @@ def claim_free_paragraphs(user_id: str, db: Session = Depends(get_db)):
     return {
         'success': True,
         'paragraphs': FREE_PARAGRAPHS_DAILY,
-        'message': f'已领取 {FREE_PARAGRAPHS_DAILY} 个免费段落'
+        'message': f'已领取 {FREE_PARAGRAPHS_DAILY} 个免费段落',
+        'already_claimed': False
     }
 
 @router.post("/users/{user_id}/deduct")
