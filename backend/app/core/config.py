@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 52428800  # 50MB
     
+    # 免费额度配置
+    FREE_PARAGRAPHS_DAILY: int = 10000  # 每日免费段落数
+    
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:8501,http://localhost:3000"
     

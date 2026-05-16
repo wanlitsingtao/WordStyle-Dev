@@ -37,31 +37,61 @@ except ImportError:
 # 自动检测：如果 USE_SUPABASE=true 且 BACKEND_URL 存在，则使用 api 模式
 
 def _load_config_from_secrets():
-    """尝试从 Streamlit Secrets 加载配置"""
+    """尝试从 Streamlit Secrets 加载配置
+    
+    secrets.toml 结构示例：
+    [backend]
+    url = "https://wordstyle-backend.onrender.com"
+    
+    [supabase]
+    url = "https://xxx.supabase.co"
+    key = "your_key"
+    
+    USE_SUPABASE = true   # 顶层键：启用 API 模式
+    """
     try:
         import streamlit as st
         # 检查是否在 Streamlit 环境中
         if hasattr(st, 'secrets') and len(st.secrets) > 0:
             secrets = st.secrets
             
-            # 处理 USE_SUPABASE：支持布尔值和字符串
-            use_supabase_raw = secrets.get('USE_SUPABASE', False)
+            # ========== 1. 读取 USE_SUPABASE（顶层 + [supabase] 区块兼容）==========
+            # 优先读取顶层 USE_SUPABASE
+            use_supabase_raw = secrets.get('USE_SUPABASE', None)
+            if use_supabase_raw is None:
+                # 回退：检查 [supabase] 区块是否存在且配置完整
+                supabase_section = secrets.get('supabase', {})
+                if supabase_section and supabase_section.get('url') and supabase_section.get('key'):
+                    use_supabase_raw = True
+                else:
+                    use_supabase_raw = False
+            
             if isinstance(use_supabase_raw, bool):
                 use_supabase = use_supabase_raw
             else:
                 use_supabase = str(use_supabase_raw).lower() == 'true'
             
-            # 获取 DATABASE_URL 和 BACKEND_URL
-            database_url = secrets.get('DATABASE_URL')
-            backend_url = secrets.get('BACKEND_URL')
+            # ========== 2. 读取 BACKEND_URL（优先顶层，兼容 [backend] 区块）==========
+            backend_url = secrets.get('BACKEND_URL', None)
+            if not backend_url:
+                # 回退：从 [backend] 区块读取 url
+                backend_section = secrets.get('backend', {})
+                backend_url = backend_section.get('url', None) if isinstance(backend_section, dict) else None
+            
+            # ========== 3. 读取 DATABASE_URL（顶层优先）==========
+            database_url = secrets.get('DATABASE_URL', None)
+            if not database_url:
+                supabase_section = secrets.get('supabase', {})
+                if isinstance(supabase_section, dict):
+                    database_url = supabase_section.get('url', None)
             
             return {
                 'use_supabase': use_supabase,
                 'database_url': database_url,
                 'backend_url': backend_url
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WARN] 读取 Streamlit Secrets 出错: {e}")
     return None
 
 # 尝试从 Streamlit Secrets 加载
@@ -94,6 +124,9 @@ else:
     # 本地开发
     DATA_SOURCE = "local"
     print(f"[INFO] 数据源模式: 本地 (SQLite + JSON)")
+
+# ========== 配置诊断（方便生产环境排查）==========
+print(f"  [诊断] USE_SUPABASE={USE_SUPABASE}, BACKEND_URL={'✅ 已设置' if BACKEND_URL else '❌ 未设置'}, DATABASE_URL={'✅ 已设置' if DATABASE_URL else '❌ 未设置'}")
 
 # ==================== 计费配置 ====================
 # 计费规则：100个段落 = 0.1元
