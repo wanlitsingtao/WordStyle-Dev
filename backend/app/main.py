@@ -60,8 +60,9 @@ def create_application() -> FastAPI:
     application.include_router(feedback.router, prefix="/api/feedback", tags=["用户反馈"])
     application.include_router(monitoring.router, prefix="/monitoring", tags=["监控"])
     
-    # 健康检查
+    # 健康检查（同时支持 GET 和 POST，兼容 UptimeRobot 只能发送 POST 的限制）
     @application.get("/health")
+    @application.post("/health")
     def health_check():
         return {"status": "healthy"}
     
