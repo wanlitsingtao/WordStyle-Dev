@@ -993,6 +993,13 @@ last_template_name = st.session_state.get('last_template_name', None)
 
 if template_file:
     # 如果有新上传的模板文件，保存并更新session_state
+    
+    # ✅ 修复：清除旧的样式缓存，强制重新解析
+    # 防止用户上传新模板后仍使用旧模板的样式缓存
+    if 'template_styles' in st.session_state:
+        del st.session_state.template_styles
+        logger.info(f"🔄 清除旧模板样式缓存，准备重新解析")
+    
     temp_template = f"temp_template_{st.session_state.user_id}.docx"
     with open(temp_template, 'wb') as f:
         f.write(template_file.getbuffer())
