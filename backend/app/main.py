@@ -23,9 +23,23 @@ def run_migrations():
     try:
         from alembic.config import Config
         from alembic import command
+        import os
         
         logger.info("正在检查数据库迁移...")
         alembic_cfg = Config("alembic.ini")
+        
+        # 从环境变量读取 DATABASE_URL
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            # 转义 % 字符，避免 ConfigParser 插值问题
+            escaped_url = database_url.replace('%', '%%')
+            alembic_cfg.set_main_option('sqlalchemy.url', escaped_url)
+            logger.info("✅ Alembic 使用环境变量 DATABASE_URL")
+        
+        # ✅ 修复：直接执行 upgrade，不使用 stamp
+        # stamp 会将数据库标记为最新版本，导致 upgrade 跳过所有迁移
+        # 如果有多 head 冲突，Alembic 会抛出明确错误，需要手动解决
+        logger.info("🔄 执行数据库迁移...")
         command.upgrade(alembic_cfg, "head")
         logger.info("✅ 数据库迁移完成")
         
