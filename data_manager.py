@@ -676,7 +676,25 @@ elif DATA_SOURCE == "api":
             )
             
             if result.get('success'):
-                return result.get('user')
+                # ✅ 修复：后端返回的是扁平结构，不是嵌套的'user'字段
+                # 需要正确解析后端返回的用户数据
+                if 'user' in result:
+                    # 如果后端返回嵌套结构，直接使用
+                    return result['user']
+                else:
+                    # 后端返回扁平结构，构造完整的用户数据字典
+                    return {
+                        'user_id': result.get('user_id', user_id or 'unknown'),
+                        'balance': float(result.get('balance', 0)),
+                        'paragraphs_remaining': int(result.get('paragraphs_remaining', 0)),
+                        'total_paragraphs_used': int(result.get('total_paragraphs_used', 0)),
+                        'total_converted': int(result.get('total_converted', 0)),
+                        'is_active': True,
+                        'created_at': result.get('created_at', ''),
+                        'last_login': result.get('last_login', ''),
+                        'conversion_history': [],
+                        'style_mappings': {},
+                    }
             
             # ✅ API请求失败时返回默认用户数据
             logger.warning(f"⚠️ API请求失败，返回默认用户数据: {user_id}")
