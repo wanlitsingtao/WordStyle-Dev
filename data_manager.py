@@ -95,11 +95,12 @@ if DATA_SOURCE == "local":
                 'user_id': user_id,
                 'balance': 0.0,
                 'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
-                'paragraphs_used': 0,
+                'total_paragraphs_used': 0,
                 'total_converted': 0,
                 'is_active': True,
                 'created_at': datetime.now().isoformat(),
                 'last_login': datetime.now().isoformat(),
+                'conversion_history': [],  # ✅ 添加转换历史字段
             }
             
             # 保存用户数据
@@ -137,7 +138,7 @@ elif DATA_SOURCE == "supabase":
                         'user_id': user.id,
                         'balance': float(user.balance or 0),
                         'paragraphs_remaining': int(user.paragraphs_remaining or 0),
-                        'paragraphs_used': int(user.total_paragraphs_used or 0),
+                        'total_paragraphs_used': int(user.total_paragraphs_used or 0),
                         'total_converted': int(user.total_converted or 0),
                         'is_active': bool(user.is_active),
                         'created_at': user.created_at.isoformat() if user.created_at else '',
@@ -163,7 +164,7 @@ elif DATA_SOURCE == "supabase":
                         'user_id': u.id,
                         'balance': float(u.balance or 0),
                         'paragraphs_remaining': int(u.paragraphs_remaining or 0),
-                        'paragraphs_used': int(u.total_paragraphs_used or 0),
+                        'total_paragraphs_used': int(u.total_paragraphs_used or 0),
                         'total_converted': int(u.total_converted or 0),
                         'is_active': bool(u.is_active),
                         'created_at': u.created_at.isoformat() if u.created_at else '',
@@ -183,7 +184,7 @@ elif DATA_SOURCE == "supabase":
                     # 更新现有用户
                     user.balance = user_data.get('balance', 0)
                     user.paragraphs_remaining = user_data.get('paragraphs_remaining', 0)
-                    user.total_paragraphs_used = user_data.get('paragraphs_used', 0)
+                    user.total_paragraphs_used = user_data.get('total_paragraphs_used', 0)
                     user.total_converted = user_data.get('total_converted', 0)
                     user.last_login = datetime.now()
                 else:
@@ -192,7 +193,7 @@ elif DATA_SOURCE == "supabase":
                         id=user_id,
                         balance=user_data.get('balance', 0),
                         paragraphs_remaining=user_data.get('paragraphs_remaining', 0),
-                        total_paragraphs_used=user_data.get('paragraphs_used', 0),
+                        total_paragraphs_used=user_data.get('total_paragraphs_used', 0),
                         total_converted=user_data.get('total_converted', 0),
                         is_active=True,
                         created_at=datetime.now(),
@@ -572,6 +573,9 @@ elif DATA_SOURCE == "api":
         def _make_api_request(endpoint: str, params: dict = None, method: str = "get", json: dict = None) -> dict:
             """发送 API 请求到后端（支持 GET/POST/PUT）"""
             try:
+                # 根据端点自动选择前缀
+                # /users/by-device → /api/admin/users/by-device
+                # /users/{id}/claim-free → /api/admin/users/{id}/claim-free
                 url = f"{BACKEND_URL}/api/admin{endpoint}"
                 logger.info(f"🌐 API请求: {method.upper()} {url}")
                 
@@ -645,9 +649,15 @@ elif DATA_SOURCE == "api":
         def _claim_free(user_id=None):
             """领取免费段落（API 模式）"""
             if user_id:
+                logger.info(f"🌐 API请求: POST /users/{user_id}/claim-free")
                 result = _make_api_request(f"/users/{user_id}/claim-free", method="post")
+                logger.info(f"🔍 API响应: {result}")
                 if result.get('success'):
-                    return result.get('paragraphs', 0)
+                    paragraphs = result.get('paragraphs', 0)
+                    logger.info(f"✅ 领取成功: {paragraphs} 段落")
+                    return paragraphs
+                else:
+                    logger.warning(f"⚠️ 领取失败: {result.get('error', '未知错误')}")
             return 0
         
         def _recharge_user(amount, package_label, user_id=None):
@@ -704,11 +714,12 @@ elif DATA_SOURCE == "api":
                     'user_id': result['user_id'],
                     'balance': result.get('balance', 0.0),
                     'paragraphs_remaining': result.get('paragraphs_remaining', 0),
-                    'paragraphs_used': 0,
+                    'total_paragraphs_used': 0,
                     'total_converted': result.get('total_converted', 0),
                     'is_active': True,
                     'created_at': '',
                     'last_login': '',
+                    'conversion_history': [],  # ✅ 添加转换历史字段
                 }
             else:
                 error_msg = result.get('message', '未知错误')
@@ -902,11 +913,12 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                     'user_id': user.id,
                     'balance': float(user.balance or 0),
                     'paragraphs_remaining': int(user.paragraphs_remaining or 0),
-                    'paragraphs_used': int(user.total_paragraphs_used or 0),
+                    'total_paragraphs_used': int(user.total_paragraphs_used or 0),
                     'total_converted': int(user.total_converted or 0),
                     'is_active': bool(user.is_active),
                     'created_at': user.created_at.isoformat() if user.created_at else '',
                     'last_login': user.last_login.isoformat() if user.last_login else '',
+                    'conversion_history': [],  # ✅ 添加转换历史字段
                 }
                 
                 return user_data
@@ -933,11 +945,12 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 'user_id': user_id,
                 'balance': 0.0,
                 'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
-                'paragraphs_used': 0,
+                'total_paragraphs_used': 0,
                 'total_converted': 0,
                 'is_active': True,
                 'created_at': datetime.now().isoformat(),
                 'last_login': datetime.now().isoformat(),
+                'conversion_history': [],  # ✅ 添加转换历史字段
             }
         finally:
             db.close()

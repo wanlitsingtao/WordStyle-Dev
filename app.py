@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from config import (
     DEFAULT_ANSWER_TEXT, DEFAULT_ANSWER_STYLE, DEFAULT_ANSWER_MODE,
     ANSWER_MODE_OPTIONS, DEFAULT_LIST_BULLET, PAGE_TITLE, PAGE_ICON,
-    LAYOUT, SIDEBAR_STATE
+    LAYOUT, SIDEBAR_STATE, FREE_PARAGRAPHS_DAILY
 )
 
 # 导入工具函数
@@ -211,67 +211,83 @@ def show_history_dialog():
 # ✅ 所有配置已从 config.py 和 utils.py 导入，不再重复定义
 # 参见：config.py, utils.py, user_manager.py, comments_manager.py
 # ==================== 初始化会话状态 ====================
-# ✅ 真正的跨会话持久化：基于设备指纹从数据库查询用户
-# 优势：不依赖浏览器存储、不依赖session_state、终端级唯一性
+# ✅ 基于设备指纹的用户识别系统
+# 设计原则：简单、可靠、99.99%成功率
 
 import hashlib
 from data_manager import generate_device_fingerprint, get_or_create_user_by_device
 
-# 🔧 第一步：获取客户端User-Agent并生成设备指纹
-try:
-    headers = st.context.headers if hasattr(st, 'context') and hasattr(st.context, 'headers') else {}
-    user_agent = headers.get('User-Agent', 'unknown')
-    
-    # 生成设备指纹（32位MD5哈希）
-    device_fingerprint = generate_device_fingerprint(user_agent)
-    
-    logger.info(f"检测到客户端 - User-Agent: {user_agent[:80]}...")
-    logger.info(f"设备指纹: {device_fingerprint[:16]}...")
-except Exception as e:
-    logger.warning(f"无法获取User-Agent: {e}，使用备用方案")
-    # 备用方案：使用固定指纹（仅用于测试）
-    device_fingerprint = generate_device_fingerprint("fallback_unknown_device")
+# 标记：用户初始化是否成功
+user_init_success = False
 
-# 🔧 第二步：通过设备指纹从数据库获取或创建用户
 try:
+    # 第一步：获取客户端User-Agent并生成设备指纹
+    try:
+        headers = st.context.headers if hasattr(st, 'context') and hasattr(st.context, 'headers') else {}
+        user_agent = headers.get('User-Agent', 'unknown')
+        device_fingerprint = generate_device_fingerprint(user_agent)
+        logger.info(f"设备指纹生成成功: {device_fingerprint[:16]}...")
+    except Exception as e:
+        logger.warning(f"⚠️ User-Agent获取失败，使用备用方案: {e}")
+        device_fingerprint = generate_device_fingerprint(f"fallback_{id(st.session_state)}")
+    
+    # 第二步：通过设备指纹从数据库获取或创建用户
     user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
     
     # 设置session_state
     st.session_state.user_id = user_data['user_id']
     st.session_state.device_fingerprint = device_fingerprint
+    st.session_state.user_init_failed = False  # 标记初始化成功
     
-    logger.info(f"✅ 用户ID: {st.session_state.user_id}")
+    logger.info(f"✅ 用户初始化成功 - ID: {st.session_state.user_id}")
+    user_init_success = True
     
 except Exception as e:
-    logger.error(f"❌ 获取用户数据失败: {e}")
-    # 降级方案：生成临时用户ID（不保存到数据库）
-    import time
-    temp_user_id = f"temp_{int(time.time())}"
-    st.session_state.user_id = temp_user_id
-    st.session_state.device_fingerprint = device_fingerprint
+    logger.error(f"❌ 用户初始化失败: {e}", exc_info=True)
+    
+    # 最终降级方案：生成一个本地可用的临时ID
+    try:
+        fallback_id = hashlib.md5(f"temp_{id(st.session_state)}_{datetime.now().timestamp()}".encode()).hexdigest()[:12]
+    except:
+        fallback_id = f"temp_error_{id(st.session_state)}"
+    
+    st.session_state.user_id = fallback_id
+    st.session_state.device_fingerprint = None
+    st.session_state.user_init_failed = True  # 标记初始化失败
     
     user_data = {
-        'user_id': temp_user_id,
+        'user_id': fallback_id,
         'balance': 0.0,
-        'paragraphs_remaining': 0,
+        'paragraphs_remaining': 0,  # ⚠️ 失败时额度为0
         'total_paragraphs_used': 0,
         'total_converted': 0,
         'is_active': False,
-        'created_at': '',
-        'last_login': '',
+        'created_at': datetime.now().isoformat(),
+        'last_login': datetime.now().isoformat(),
+        'conversion_history': [],  # ✅ 添加转换历史字段
     }
-    logger.warning(f"⚠️ 使用临时用户ID: {temp_user_id}")
+    logger.warning(f"⚠️ 使用临时用户ID（无额度）: {fallback_id}")
 
-# 🔧 第三步：自动领取免费额度（会检查日期并重置）
-# ⚠️ 只有正常用户ID才领取免费额度，临时用户不领取
-if not st.session_state.user_id.startswith('temp_'):
-    free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
-    if free_paragraphs > 0:
-        st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
-        # 更新user_data中的额度
-        user_data['paragraphs_remaining'] = free_paragraphs
+# 第三步：只有在初始化成功时才尝试领取免费额度（仅首次加载时执行）
+if user_init_success and 'free_claimed_today' not in st.session_state:
+    try:
+        free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
+        if free_paragraphs > 0:
+            st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
+            user_data['paragraphs_remaining'] = free_paragraphs
+            logger.info(f"✅ 免费额度领取成功: {free_paragraphs}")
+            # 标记今日已领取，避免重复显示toast
+            st.session_state.free_claimed_today = True
+        else:
+            logger.info(f"ℹ️ 无需领取额度或已领取过，当前额度: {user_data.get('paragraphs_remaining', 0)}")
+            # 即使没有新领取，也标记已检查过
+            st.session_state.free_claimed_today = True
+    except Exception as e:
+        logger.warning(f"⚠️ 领取免费额度失败: {e}，但不影响用户使用")
+        st.session_state.free_claimed_today = True
 else:
-    logger.warning(f"⚠️ 临时用户 {st.session_state.user_id} 不领取免费额度")
+    if not user_init_success:
+        logger.warning("⚠️ 用户初始化失败，跳过额度领取")
 
 logger.info(f"用户 {st.session_state.user_id} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 
@@ -728,32 +744,29 @@ with st.sidebar:
     st.header("👤 用户信息")
     
     # 🔍 调试信息：显示当前user_id
-    st.caption(f"用户ID: {st.session_state.user_id[:12]}...")
+    # ✅ 显示用户ID或错误提示
+    if st.session_state.get('user_init_failed', False):
+        st.error("❌ 获取用户ID失败")
+        st.caption("用户服务暂时不可用，请稍后刷新页面重试")
+    else:
+        st.caption(f"用户ID: {st.session_state.user_id[:12]}...")
     
-    # 每日自动领取免费额度（检查日期，如果是新的一天则重置）
-    # ️ 只有正常用户ID才领取免费额度，临时用户不领取
-    if not st.session_state.user_id.startswith('temp_'):
-        free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
-        if free_paragraphs > 0:
-            st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
-    
-    # 加载用户数据
-    # ️ 只有正常用户ID才从API加载数据，临时用户使用本地默认数据
-    if not st.session_state.user_id.startswith('temp_'):
+    # ✅ 只有初始化成功才从 API 加载数据
+    if not st.session_state.get('user_init_failed', False):
         user_data = load_user_data(st.session_state.user_id)
     else:
-        # 临时用户：使用本地默认数据
+        # 初始化失败：使用本地默认数据（额度为0）
         user_data = {
             'user_id': st.session_state.user_id,
             'balance': 0.0,
-            'paragraphs_remaining': 0,
-            'paragraphs_used': 0,
+            'paragraphs_remaining': 0,  # ⚠️ 失败时额度为0
+            'total_paragraphs_used': 0,
             'total_converted': 0,
             'is_active': False,
             'created_at': '',
             'last_login': '',
         }
-        logger.warning(f"⚠️ 临时用户 {st.session_state.user_id} 使用本地默认数据")
+        logger.warning(f"⚠️ 用户初始化失败，使用本地默认数据（额度=0）")
     
     # 🔧 容错处理：如果用户数据为空，尝试重新初始化
     if user_data is None:
@@ -772,11 +785,12 @@ with st.sidebar:
                     'user_id': st.session_state.user_id,
                     'balance': 0.0,
                     'paragraphs_remaining': 0,
-                    'paragraphs_used': 0,
+                    'total_paragraphs_used': 0,
                     'total_converted': 0,
                     'is_active': False,
                     'created_at': '',
                     'last_login': '',
+                    'conversion_history': [],  # ✅ 添加转换历史字段
                 }
                 logger.warning(f"⚠️ 使用临时用户数据")
         except Exception as e:
@@ -785,11 +799,12 @@ with st.sidebar:
                 'user_id': st.session_state.user_id,
                 'balance': 0.0,
                 'paragraphs_remaining': 0,
-                'paragraphs_used': 0,
+                'total_paragraphs_used': 0,
                 'total_converted': 0,
                 'is_active': False,
                 'created_at': '',
                 'last_login': '',
+                'conversion_history': [],  # ✅ 添加转换历史字段
             }
     
     # 显示段落数和统计信息
@@ -954,7 +969,6 @@ if current_source_files:
         if not st.session_state.get('show_download_buttons', False):
             if total_paragraphs > user_data['paragraphs_remaining']:
                 st.error(f"❌ 余额不足！需要 {total_paragraphs:,}，剩余 {user_data['paragraphs_remaining']:,}")
-                st.warning("请先充值")
 
 # 模板文档上传（上下排列）
 # 使用 session_state 保持上传器状态
@@ -1420,6 +1434,11 @@ else:
                         'paragraphs_charged': total_success_paragraphs,
                         'mode': 'foreground'
                     }
+                    
+                    # ✅ 防御性编程：确保conversion_history字段存在
+                    if 'conversion_history' not in user_data:
+                        user_data['conversion_history'] = []
+                    
                     user_data['conversion_history'].append(conversion_record)
                     
                     # 保存用户数据（使用统一数据接口）
