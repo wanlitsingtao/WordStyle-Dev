@@ -20,7 +20,7 @@ from data_manager import (
     get_data_source,
     DATA_SOURCE as ACTUAL_DATA_SOURCE
 )
-from comments_manager import load_feedbacks, get_feedback_stats, delete_comment
+from comments_manager import delete_comment  # ✅ 修复：只保留delete_comment，其他改用API
 from config import DATA_SOURCE as CONFIG_DATA_SOURCE, DATABASE_URL
 
 # 在页面顶部显示数据源配置信息（用于调试）
@@ -454,8 +454,24 @@ def show_feedback_management():
     st.markdown("---")
     
     try:
-        # 获取反馈统计
-        stats = get_feedback_stats()
+        # ✅ 修复：使用 API 获取反馈统计（兼容多实例部署）
+        import requests
+        from config import BACKEND_URL
+        
+        if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
+            # API 模式：通过后端 API 获取统计
+            try:
+                api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/stats"
+                response = requests.get(api_url, timeout=10)
+                response.raise_for_status()
+                stats = response.json()
+            except Exception as e:
+                st.error(f"❌ 加载统计失败: {str(e)}")
+                stats = {'total': 0, 'by_type': {}, 'by_status': {}}
+        else:
+            # 本地/Supabase 模式：使用本地文件（兜底逻辑）
+            from comments_manager import get_feedback_stats
+            stats = get_feedback_stats()
         
         # 显示统计信息
         col1, col2, col3 = st.columns(3)
@@ -468,8 +484,24 @@ def show_feedback_management():
         
         st.markdown("---")
         
-        # 加载所有反馈
-        all_feedbacks = load_feedbacks()
+        # ✅ 修复：使用 API 加载反馈（兼容多实例部署）
+        import requests
+        from config import BACKEND_URL
+        
+        if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
+            # API 模式：通过后端 API 获取反馈
+            try:
+                api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/list"
+                response = requests.get(api_url, timeout=10)
+                response.raise_for_status()
+                all_feedbacks = response.json()
+            except Exception as e:
+                st.error(f"❌ 加载反馈失败: {str(e)}")
+                all_feedbacks = []
+        else:
+            # 本地/Supabase 模式：使用本地文件（兜底逻辑）
+            from comments_manager import load_feedbacks, get_feedback_stats
+            all_feedbacks = load_feedbacks()
         
         if all_feedbacks:
             # 显示反馈列表
@@ -514,17 +546,35 @@ def show_feedback_management():
                     with col1:
                         if feedback_found.get('status') != 'resolved':  # ✅ 修复：使用status字段
                             if st.button("标记为已处理", key=f"process_{selected_feedback_id}"):
-                                from comments_manager import save_feedbacks
-                                feedback_found['status'] = 'resolved'  # ✅ 修复：设置status为resolved
-                                # 重新保存
-                                all_fb = load_feedbacks()
-                                for fb in all_fb:
-                                    if fb.get('id') == selected_feedback_id:
-                                        fb['status'] = 'resolved'  # ✅ 修复：设置status为resolved
-                                        break
-                                save_feedbacks(all_fb)
-                                st.success("✅ 已标记为已处理")
-                                st.rerun()
+                                # ✅ 修复：使用 API 更新状态
+                                import requests
+                                from config import BACKEND_URL
+                                
+                                if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
+                                    try:
+                                        api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/update-status/{selected_feedback_id}"
+                                        response = requests.put(
+                                            api_url,
+                                            params={'status': 'resolved'},
+                                            timeout=10
+                                        )
+                                        response.raise_for_status()
+                                        st.success("✅ 已标记为已处理")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ 更新失败: {str(e)}")
+                                else:
+                                    # 本地模式：使用本地文件（兜底逻辑）
+                                    from comments_manager import save_feedbacks, load_feedbacks
+                                    feedback_found['status'] = 'resolved'
+                                    all_fb = load_feedbacks()
+                                    for fb in all_fb:
+                                        if fb.get('id') == selected_feedback_id:
+                                            fb['status'] = 'resolved'
+                                            break
+                                    save_feedbacks(all_fb)
+                                    st.success("✅ 已标记为已处理")
+                                    st.rerun()
                     
                     with col2:
                         if st.button("删除反馈", key=f"delete_{selected_feedback_id}", type="secondary"):

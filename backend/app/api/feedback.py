@@ -11,8 +11,9 @@ from typing import Optional
 
 router = APIRouter()
 
-# 数据文件路径
-FEEDBACK_FILE = Path("e:/LingMa/WordStyle/feedback_data.json")
+# 数据文件路径（使用相对路径，兼容不同部署环境）
+import os
+FEEDBACK_FILE = Path(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "feedback_data.json"))
 
 class FeedbackRequest(BaseModel):
     """反馈请求"""
