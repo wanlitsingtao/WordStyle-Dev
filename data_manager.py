@@ -129,7 +129,10 @@ elif DATA_SOURCE == "supabase":
         from app.models import User, ConversionTask
         
         def _load_user(user_id: str) -> Dict[str, Any]:
-            """从 Supabase 加载用户数据"""
+            """从 Supabase 加载用户数据
+            
+            ✅ 防御性编程：失败时返回默认用户数据，而不是None
+            """
             db = SessionLocal()
             try:
                 user = db.query(User).filter(User.id == user_id).first()
@@ -143,8 +146,37 @@ elif DATA_SOURCE == "supabase":
                         'is_active': bool(user.is_active),
                         'created_at': user.created_at.isoformat() if user.created_at else '',
                         'last_login': user.last_login.isoformat() if user.last_login else '',
+                        'conversion_history': [],  # ✅ 添加默认值
+                        'style_mappings': {},  # ✅ 添加默认值
                     }
-                return None
+                # ✅ 用户不存在时返回默认数据而不是None
+                logger.warning(f"️ 用户不存在: {user_id}，返回默认用户数据")
+                return {
+                    'user_id': user_id,
+                    'balance': 0.0,
+                    'paragraphs_remaining': 0,
+                    'total_paragraphs_used': 0,
+                    'total_converted': 0,
+                    'is_active': False,
+                    'created_at': '',
+                    'last_login': '',
+                    'conversion_history': [],
+                    'style_mappings': {},
+                }
+            except Exception as e:
+                logger.error(f"️ Supabase加载用户数据异常: {e}，返回默认数据")
+                return {
+                    'user_id': user_id,
+                    'balance': 0.0,
+                    'paragraphs_remaining': 0,
+                    'total_paragraphs_used': 0,
+                    'total_converted': 0,
+                    'is_active': False,
+                    'created_at': '',
+                    'last_login': '',
+                    'conversion_history': [],
+                    'style_mappings': {},
+                }
             finally:
                 db.close()
         
@@ -611,14 +643,30 @@ elif DATA_SOURCE == "api":
             
             ⚠️ 安全修复：不再使用user_id作为查询参数，改用device_fingerprint
             防止用户通过修改URL参数获取其他用户数据
+            
+            ✅ 防御性编程：失败时返回默认用户数据，而不是None
             """
             # 🔧 从session_state获取device_fingerprint（需要在调用前设置）
             import streamlit as st
             device_fingerprint = st.session_state.get('device_fingerprint', '')
             
+            # ✅ 默认用户数据（用于降级）
+            default_user_data = {
+                'user_id': user_id or 'unknown',
+                'balance': 0.0,
+                'paragraphs_remaining': 0,
+                'total_paragraphs_used': 0,
+                'total_converted': 0,
+                'is_active': False,
+                'created_at': '',
+                'last_login': '',
+                'conversion_history': [],
+                'style_mappings': {},
+            }
+            
             if not device_fingerprint:
-                logger.warning("⚠️ API模式缺少device_fingerprint，无法加载用户数据")
-                return None
+                logger.warning("⚠️ API模式缺少device_fingerprint，返回默认用户数据")
+                return default_user_data
             
             # 调用 /users/by-device 接口，通过设备指纹获取用户
             result = _make_api_request(
@@ -629,7 +677,10 @@ elif DATA_SOURCE == "api":
             
             if result.get('success'):
                 return result.get('user')
-            return None
+            
+            # ✅ API请求失败时返回默认用户数据
+            logger.warning(f"⚠️ API请求失败，返回默认用户数据: {user_id}")
+            return default_user_data
         
         def _save_user(user_data: Dict[str, Any], user_id: str = None):
             """保存用户数据到 API"""
