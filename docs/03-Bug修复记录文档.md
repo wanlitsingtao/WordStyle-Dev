@@ -2,6 +2,137 @@
 
 ## Bug 修复记录
 
+### Bug #005: 样式映射对话框"用户数据加载失败"错误
+
+**日期**: 2026-05-16  
+**严重级别**: 🔴 高危（High）  
+**影响范围**: API模式下所有调用`load_user_data()`的功能（样式映射、转换历史、侧边栏等）  
+**发现者**: 用户报告  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 问题描述
+
+用户打开样式映射对话框时，出现"用户数据加载失败，请刷新页面重试"错误，导致无法配置样式映射。
+
+**根本原因**：
+
+后端`/users/by-device`接口返回**扁平结构**：
+```json
+{
+    "success": true,
+    "user_id": "abc123",
+    "paragraphs_remaining": 10000,
+    "balance": 0.0,
+    "total_converted": 0
+}
+```
+
+但前端`data_manager.py`的`_load_user`函数（API模式，第678-679行）期望的是**嵌套结构**：
+```python
+if result.get('success'):
+    return result.get('user')  # ❌ 后端没有'user'字段！
+```
+
+导致即使API请求成功（`success=True`），`result.get('user')`仍然返回`None`。
+
+**完整链路**：
+
+| 步骤 | 发生位置 | 说明 |
+|------|----------|------|
+| 1️ | `app.py:1661` | 用户点击"样式映射"按钮 |
+| 2️⃣ | `app.py:1682` | 调用 `load_user_data(st.session_state.user_id)` |
+| 3️ | `data_manager.py:672-676` | API模式调用POST `/users/by-device` |
+| 4️⃣ | `data_manager.py:678` | `result.get('success')` → True ✅ |
+| 5️⃣ | `data_manager.py:679` | `result.get('user')` → **None** ❌ |
+| 6️ | `app.py:1683` | `user_data is None` → 显示错误 |
+| 7️⃣ | 💥 | **样式映射对话框无法使用** |
+
+**为什么之前没发现？**
+- 之前可能使用了不同版本的后端（返回嵌套结构）
+- 或者一直使用Local/Supabase模式，API模式是新增的
+- `result.get('user')`返回`None`但没有明显日志提示
+
+#### 影响范围
+
+所有在API模式下调用`load_user_data()`的地方都会受影响：
+
+| 位置 | 行号 | 功能 |
+|------|:----:|------|
+| 样式映射对话框初始化 | 1682 | ❌ 用户数据加载失败 |
+| 样式映射"确定"保存 | 1764 | ❌ 无法保存 |
+| 样式映射"恢复默认" | 1777 | ❌ 无法保存 |
+| 转换历史对话框 | 156 |  用户数据加载失败 |
+| 侧边栏数据刷新 | 756 | ❌ 显示降级数据 |
+
+#### 修复方案
+
+**文件**: `data_manager.py`（API模式`_load_user`函数，第678-697行）
+
+**修复前**：
+```python
+if result.get('success'):
+    return result.get('user')  # ❌ 返回None
+```
+
+**修复后**：
+```python
+if result.get('success'):
+    # ✅ 兼容两种后端返回格式
+    if 'user' in result:
+        # 如果后端返回嵌套结构，直接使用
+        return result['user']
+    else:
+        # 后端返回扁平结构，构造完整的用户数据字典
+        return {
+            'user_id': result.get('user_id', user_id or 'unknown'),
+            'balance': float(result.get('balance', 0)),
+            'paragraphs_remaining': int(result.get('paragraphs_remaining', 0)),
+            'total_paragraphs_used': int(result.get('total_paragraphs_used', 0)),
+            'total_converted': int(result.get('total_converted', 0)),
+            'is_active': True,  # ✅ 用户已存在
+            'created_at': result.get('created_at', ''),
+            'last_login': result.get('last_login', ''),
+            'conversion_history': [],  # ✅ 包含所有必要字段
+            'style_mappings': {},
+        }
+```
+
+**关键改进**：
+1. ✅ 兼容两种后端返回格式（扁平/嵌套）
+2. ✅ 从扁平结构正确解析用户数据
+3. ✅ 包含所有必要字段（conversion_history, style_mappings）
+4. ✅ 设置is_active=True（表示用户已存在）
+
+#### 违反的编码原则
+
+1. **防御性编程原则** ⭐
+   - 没有考虑后端返回格式可能变更
+   - 硬编码期望嵌套结构
+
+2. **接口契约一致性**
+   - 前端期望的返回格式与后端实际返回不一致
+   - 缺少接口文档或类型定义
+
+3. **错误处理不完善**
+   - 即使API返回`success=True`，仍然可能因为数据格式问题返回None
+   - 缺少对返回数据结构的验证
+
+#### 经验教训
+
+1. **API接口应该有明确的契约**：使用Pydantic模型或TypeScript接口定义返回格式
+2. **兼容旧版本**：如果后端格式可能变更，前端应该同时支持新旧格式
+3. **加强日志**：当`result.get('user')`返回None时，应该记录完整的response内容
+4. **全面测试**：API模式下所有调用`load_user_data()`的功能都应该测试
+
+#### Git提交记录
+
+- **发布目录**: `e2de2ec` - "修复: API模式_load_user正确解析后端扁平结构返回"
+- **工作目录**: `2581c05` - "修复: API模式_load_user正确解析后端扁平结构返回"
+
+---
+
 ### Bug #004: conversion_history字段缺失导致KeyError崩溃
 
 **日期**: 2026-05-15  
