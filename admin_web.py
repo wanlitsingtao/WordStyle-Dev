@@ -459,7 +459,7 @@ def show_feedback_management():
     try:
         # ✅ 修复：使用 API 获取反馈统计（兼容多实例部署）
         import requests
-        from config import BACKEND_URL, ACTUAL_DATA_SOURCE
+        from config import BACKEND_URL
         
         if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
             # API 模式：通过后端 API 获取统计
