@@ -216,9 +216,6 @@ def show_feedback_dialog():
 @st.dialog("📋 我的转换历史")
 def show_history_dialog():
     """显示转换历史对话框"""
-    # 显示保留期说明
-    st.info("ℹ️ **提示：** 转换完成的文件将保留 7 天，过期后会自动清理。请及时下载您需要的文件。")
-    
     # ✅ 修复：优先从后端API获取转换历史（API模式）
     conversion_history = []
     from config import DATA_SOURCE, BACKEND_URL
@@ -1686,7 +1683,6 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
                 st.error(f"❌ {result['name']} 转换失败: {result.get('msg', '')}")
     
     st.subheader("📥 下载转换结果")
-    st.info("ℹ️ **提示：** 转换完成的文件将保留 7 天，过期后会自动清理。请及时下载您需要的文件。")
     
     # 显示所有转换结果文件
     if 'recent_results' in st.session_state and st.session_state.recent_results:

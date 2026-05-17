@@ -708,11 +708,11 @@ def show_file_management():
             )
         
         with col4:
-            expired = stats.get('expired_results_count', 0)
+            results_count = stats.get('results_count', 0)
             st.metric(
-                "⏰ 过期文件",
-                f"{expired}个",
-                delta_color="inverse" if expired > 0 else "normal"
+                "📄 结果文件",
+                f"{results_count}个",
+                f"{stats.get('results_size_mb', 0):.2f}MB"
             )
         
         st.markdown(f"**总占用空间**: {stats.get('total_size_mb', 0):.2f}MB")
@@ -722,11 +722,11 @@ def show_file_management():
         col_btn1, col_btn2 = st.columns([1, 4])
         
         with col_btn1:
-            if st.button("🗑️ 清理所有过期文件", type="primary", use_container_width=True):
+            if st.button("🗑️ 清理所有临时文件", type="primary", use_container_width=True):
                 from file_manager import get_file_manager
                 fm = get_file_manager()
-                cleanup_result = fm.cleanup_all_expired()
-                st.success(f"✅ 清理完成！删除了 {cleanup_result['results']} 个过期文件")
+                cleanup_result = fm.cleanup_temp_files()
+                st.success(f"✅ 清理完成！删除了 {cleanup_result['source_files'] + cleanup_result['template_files']} 个临时文件")
                 st.rerun()
         
         with col_btn2:
@@ -781,7 +781,6 @@ def show_file_management():
                     '文件类型': file_info['file_type'],
                     '生成时间': file_info['created_at'][:19].replace('T', ' '),
                     '大小(KB)': file_info['size_kb'],
-                    '状态': '⏰ 已过期' if file_info.get('is_expired', False) else '✅ 正常',
                     '文件ID': file_id  # 隐藏列，用于删除
                 })
             
