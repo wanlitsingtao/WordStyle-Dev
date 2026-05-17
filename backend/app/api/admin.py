@@ -205,7 +205,8 @@ def get_user_by_id(
 def get_or_create_user_by_device_api(
     device_fingerprint: str = Body(..., embed=False),
     user_agent: Optional[str] = Body(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    request = None  # ✅ 新增：获取请求对象以记录IP
 ):
     """
     通过设备指纹获取或创建用户
@@ -220,8 +221,17 @@ def get_or_create_user_by_device_api(
     from datetime import datetime
     from app.config import FREE_PARAGRAPHS_DAILY
     import hashlib
+    from fastapi import Request
     
     try:
+        # ✅ 新增：获取客户端IP地址
+        client_ip = "unknown"
+        if request:
+            client_ip = request.client.host if request.client else "unknown"
+        
+        # ✅ 新增：记录API调用详情
+        logger.info(f"🔍 /users/by-device API被调用 - IP: {client_ip}, Device: {device_fingerprint[:16]}..., UA: {user_agent[:50] if user_agent else 'N/A'}...")
+        
         # 1. 优先通过device_fingerprint查询
         user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
         
@@ -230,7 +240,7 @@ def get_or_create_user_by_device_api(
             user.last_login = datetime.now()
             db.commit()
             
-            logger.info(f"✅ 从数据库恢复用户: {user.id} (device: {device_fingerprint[:8]}...)")
+            logger.info(f"✅ 从数据库恢复用户: {user.id} (device: {device_fingerprint[:8]}..., IP: {client_ip})")
             
             return {
                 'success': True,
@@ -248,6 +258,11 @@ def get_or_create_user_by_device_api(
         # 生成用户ID
         user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
         
+        # ✅ 新增：检测是否为测试用户
+        is_test_user = device_fingerprint.startswith('test_') or (user_agent and 'test' in user_agent.lower())
+        if is_test_user:
+            logger.warning(f"⚠️ 检测到测试用户创建请求 - Device: {device_fingerprint}, IP: {client_ip}")
+        
         # 创建用户记录
         new_user = User(
             id=user_id,
@@ -264,7 +279,7 @@ def get_or_create_user_by_device_api(
         db.add(new_user)
         db.commit()
         
-        logger.info(f"✅ 创建新用户: {user_id} (device: {device_fingerprint[:8]}...)")
+        logger.info(f"✅ 创建新用户: {user_id} (device: {device_fingerprint[:8]}..., IP: {client_ip}, Test: {is_test_user})")
         
         return {
             'success': True,
