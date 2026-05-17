@@ -177,9 +177,9 @@ def show_history_dialog():
     
     # ✅ 修复：优先从后端API获取转换历史（API模式）
     conversion_history = []
-    from config import ACTUAL_DATA_SOURCE, BACKEND_URL
+    from config import DATA_SOURCE, BACKEND_URL
     
-    if ACTUAL_DATA_SOURCE == 'api' and BACKEND_URL:
+    if DATA_SOURCE == 'api' and BACKEND_URL:
         # API模式：通过后端API获取用户转换历史
         try:
             import requests
