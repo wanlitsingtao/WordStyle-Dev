@@ -157,10 +157,30 @@ def get_user_by_id(
         用户信息字典，包含conversion_history
     """
     try:
+        from app.models import ConversionTask
+        
         user = db.query(User).filter(User.id == user_id).first()
         
         if not user:
             raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+        
+        # ✅ 修复：从 conversion_tasks 表实时查询用户的转换记录
+        tasks = db.query(ConversionTask).filter(
+            ConversionTask.user_id == user_id,
+            ConversionTask.status == 'COMPLETED'  # 只返回已完成的任务
+        ).order_by(ConversionTask.created_at.desc()).all()
+        
+        # 构建转换历史列表
+        conversion_history = []
+        for task in tasks:
+            conversion_history.append({
+                'time': task.completed_at.strftime('%Y-%m-%d %H:%M:%S') if task.completed_at else task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'files': 1,  # 每个任务对应一个文件
+                'success': 1 if task.status == 'COMPLETED' else 0,
+                'failed': 0 if task.status == 'COMPLETED' else 1,
+                'paragraphs_charged': 0,  # conversion_tasks表中没有段落数字段，暂时设为0
+                'mode': 'foreground'
+            })
         
         return {
             'success': True,
@@ -170,7 +190,7 @@ def get_user_by_id(
             'paragraphs_remaining': int(user.paragraphs_remaining or 0),
             'total_converted': int(user.total_converted or 0),
             'total_paragraphs_used': int(user.total_paragraphs_used or 0),
-            'conversion_history': user.conversion_history or [],  # ✅ 关键：返回转换历史
+            'conversion_history': conversion_history,  # ✅ 使用实时查询的数据
             'is_active': bool(user.is_active),
             'created_at': user.created_at.isoformat() if user.created_at else '',
             'last_login': user.last_login.isoformat() if user.last_login else '',
