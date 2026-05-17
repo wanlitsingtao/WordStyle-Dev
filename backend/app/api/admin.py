@@ -287,16 +287,24 @@ def get_task_statistics(db: Session = Depends(get_db)):
 
 @router.post("/tasks")
 def create_task_api(task_data: dict, db: Session = Depends(get_db)):
-    """创建任务（供 API 模式调用）"""
+    """创建任务（供 API 模式调用）- ✅ 修复：支持直接创建已完成的任务"""
     import uuid
     from app.models import ConversionTask
+    from datetime import datetime
+    
+    # ✅ 修复：根据传入的状态设置completed_at
+    status = task_data.get('status', 'pending')
+    completed_at = datetime.now() if status in ['COMPLETED', 'FAILED'] else None
     
     task = ConversionTask(
         user_id=task_data['user_id'],
         source_file=task_data.get('source_file', ''),
         template_file=task_data.get('template_file', ''),
-        status='pending',
-        progress=0
+        status=status,
+        progress=task_data.get('progress', 0),
+        error_message=task_data.get('error_message'),
+        completed_at=completed_at,
+        created_at=datetime.now()
     )
     db.add(task)
     db.commit()
@@ -310,8 +318,16 @@ def create_task_api(task_data: dict, db: Session = Depends(get_db)):
 
 @router.put("/tasks/{task_id}")
 def update_task_status_api(task_id: str, status_data: dict, db: Session = Depends(get_db)):
-    """更新任务状态（供 API 模式调用）"""
-    task = db.query(ConversionTask).filter(ConversionTask.task_id == task_id).first()
+    """更新任务状态（供 API 模式调用）- ✅ 修复：使用正确的字段名id"""
+    from uuid import UUID
+    
+    # ✅ 修复：将字符串task_id转换为UUID进行查询
+    try:
+        task_uuid = UUID(task_id)
+        task = db.query(ConversionTask).filter(ConversionTask.id == task_uuid).first()
+    except ValueError:
+        return {'success': False, 'error': '无效的任务ID格式'}
+    
     if not task:
         return {'success': False, 'error': '任务不存在'}
     
@@ -326,7 +342,7 @@ def update_task_status_api(task_id: str, status_data: dict, db: Session = Depend
         task.template_file = status_data['template_file']
     if 'converted_file' in status_data:
         task.converted_file = status_data['converted_file']
-    if task.status == 'completed':
+    if task.status in ['COMPLETED', 'FAILED']:
         task.completed_at = datetime.now()
     
     db.commit()

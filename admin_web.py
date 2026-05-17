@@ -383,15 +383,18 @@ def show_task_management():
                     'FAILED': '❌'
                 }.get(task.get('status', ''), '❓')
                 
+                # ✅ 修复：适配ConversionTask模型的实际字段
+                # 从source_file提取文件名
+                source_file = task.get('source_file', '') or ''
+                filename = source_file.split('/')[-1].split('\\')[-1] if source_file else '-'
+                
                 task_data.append({
-                    "任务ID": task.get('task_id', '-'),
+                    "任务ID": str(task.get('id', ''))[:8] + "..." if task.get('id') else '-',
                     "用户ID": str(task.get('user_id', ''))[:8] + "..." if task.get('user_id') else '-',
-                    "文件名": task.get('filename', '-') or '-',
-                    "段落数": task.get('paragraphs', '-') or '-',
-                    "费用": f"¥{task.get('cost', 0):.2f}" if task.get('cost') else '-',
+                    "源文件": filename,
                     "状态": f"{status_emoji} {task.get('status', '')}",
                     "进度": f"{task.get('progress', 0)}%",
-                    "错误信息": task.get('error_message', '-') or '-',
+                    "错误信息": (task.get('error_message', '-') or '-')[:50],
                     "创建时间": format_datetime(task.get('created_at', '')),
                     "完成时间": format_datetime(task.get('completed_at', ''))
                 })
@@ -407,8 +410,8 @@ def show_task_management():
                 # 使用统一数据访问层
                 from data_manager import update_task_status
                 
-                # 查找任务
-                task_found = any(t['task_id'] == selected_task_id for t in all_tasks)
+                # ✅ 修复：查找任务时使用id字段而不是task_id
+                task_found = any(str(t.get('id', '')) == selected_task_id for t in all_tasks)
                 
                 if task_found:
                     st.success(f"找到任务: {selected_task_id}")
@@ -507,13 +510,20 @@ def show_feedback_management():
             # 显示反馈列表
             feedback_data = []
             for fb in all_feedbacks:
+                # ✅ 修复：兼容created_at和timestamp两种字段名
+                submit_time = fb.get('created_at') or fb.get('timestamp') or ''
+                # ✅ 修复：UUID截取前8位显示
+                fb_id = str(fb.get('id', ''))
+                if fb_id and len(fb_id) > 8:
+                    fb_id = fb_id[:8] + "..."
+                
                 feedback_data.append({
-                    "ID": fb.get('id', '-'),
+                    "ID": fb_id if fb_id else '-',
                     "用户ID": str(fb.get('user_id', ''))[:12] + "..." if fb.get('user_id') else '-',
-                    "类型": fb.get('feedback_type', '-'),  # ✅ 修复：使用正确的字段名
-                    "内容": fb.get('title', '-')[:50] + "..." if len(fb.get('title', '')) > 50 else fb.get('title', '-'),  # ✅ 修复：使用title而非content
-                    "状态": "✅ 已处理" if fb.get('status') == 'resolved' else ("🔄 处理中" if fb.get('status') == 'processing' else "⏳ 待处理"),  # ✅ 修复：使用status字段
-                    "提交时间": format_datetime(fb.get('timestamp', '')),  # ✅ 修复：使用timestamp而非created_at
+                    "类型": fb.get('feedback_type', '-'),
+                    "内容": fb.get('title', '-')[:50] + "..." if len(fb.get('title', '')) > 50 else fb.get('title', '-'),
+                    "状态": "✅ 已处理" if fb.get('status') == 'resolved' else ("🔄 处理中" if fb.get('status') == 'processing' else "⏳ 待处理"),
+                    "提交时间": submit_time,
                 })
             
             st.dataframe(feedback_data, use_container_width=True, hide_index=True)
@@ -537,7 +547,7 @@ def show_feedback_management():
                         st.write(f"**标题:** {feedback_found.get('title', '-')}")  # ✅ 修复：使用title
                         st.write(f"**描述:** {feedback_found.get('description', '-')}")  # ✅ 修复：使用description
                         st.write(f"**联系方式:** {feedback_found.get('contact', '-')}")
-                        st.write(f"**提交时间:** {format_datetime(feedback_found.get('timestamp', ''))}")  # ✅ 修复：使用timestamp
+                        st.write(f"**提交时间:** {feedback_found.get('created_at', feedback_found.get('timestamp', ''))}")  # ✅ 修复：优先使用created_at
                         status_text = "✅ 已处理" if feedback_found.get('status') == 'resolved' else ("🔄 处理中" if feedback_found.get('status') == 'processing' else "⏳ 待处理")
                         st.write(f"**状态:** {status_text}")  # ✅ 修复：使用status字段
                     

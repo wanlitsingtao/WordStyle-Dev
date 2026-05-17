@@ -142,7 +142,7 @@ def show_feedback_dialog():
                         )
                         response.raise_for_status()
                         result = response.json()
-                        feedback_id = result.get('feedback_id', 'N/A')
+                        feedback_id = result.get('id', result.get('feedback_id', 'N/A'))  # ✅ 修复：兼容两种字段名
                     else:
                         # 本地/Supabase 模式：使用本地存储（兜底逻辑）
                         feedback = add_feedback(
@@ -1526,6 +1526,15 @@ else:
                         user_data['conversion_history'] = []
                     
                     user_data['conversion_history'].append(conversion_record)
+                    
+                    # ✅ 修复：调用add_conversion_record写入conversion_tasks表（API模式）
+                    from data_manager import add_conversion_record
+                    add_conversion_record(
+                        files_count=len(current_source_files),
+                        success_count=success_count,
+                        failed_count=fail_count,
+                        user_id=st.session_state.user_id
+                    )
                     
                     # 保存用户数据（使用统一数据接口）
                     from data_manager import save_user_data

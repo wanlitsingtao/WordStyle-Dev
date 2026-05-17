@@ -741,8 +741,23 @@ elif DATA_SOURCE == "api":
             return False
         
         def _add_conversion_record(files_count, success_count, failed_count, user_id=None):
-            """添加转换记录（API 模式）"""
-            pass
+            """添加转换记录（API 模式）- 写入conversion_tasks表"""
+            if not user_id:
+                return False
+            
+            # ✅ 修复：API模式下，通过后端admin API创建ConversionTask记录
+            task_data = {
+                'user_id': user_id,
+                'source_file': 'multiple_files',  # 多文件转换
+                'template_file': 'default_template',
+                'status': 'COMPLETED',
+                'progress': 100,
+                'error_message': None
+            }
+            
+            # ✅ 修复：调用 /tasks 端点（_make_api_request会自动添加/api/admin前缀）
+            result = _make_api_request("/tasks", method="post", json=task_data)
+            return result.get('success', False)
         
         def _get_user_stats(user_id=None) -> Dict[str, Any]:
             """获取用户统计（API 模式）"""
