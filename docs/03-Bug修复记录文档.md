@@ -2,6 +2,385 @@
 
 ## Bug 修复记录
 
+### Bug #008: 转换历史查看数据不一致Bug
+
+**日期**: 2026-05-17  
+**严重级别**: 🟠 中危（Medium）  
+**影响范围**: API模式下用户查看自己的转换历史  
+**发现者**: 用户报告  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 问题描述
+
+用户在数据库中可以看到2条conversion_tasks记录，但在前端页面查看转换历史时只能看到1条。
+
+**具体表现**：
+- 数据库中有2条转换任务记录
+- 前端API返回的转换历史只有1条
+- 用户无法看到完整的转换历史记录
+
+---
+
+#### 根本原因
+
+**数据源不统一**：后端API `/api/admin/users/{user_id}` 返回的是 `users.conversion_history` JSON字段（静态缓存），而不是从 `conversion_tasks` 表实时查询。
+
+| 位置 | 问题 | 影响 |
+|------|------|------|
+| `backend/app/api/admin.py:145-202` | 返回users表的静态JSON字段 | 数据不是实时的，与conversion_tasks表不一致 |
+| `data_manager.py` | API模式未传递paragraphs参数 | 段落数信息丢失 |
+
+---
+
+#### 修复方案
+
+**修复1: 后端API改为实时查询**
+
+文件：`backend/app/api/admin.py:145-202`
+
+```python
+# 修复前：
+return {
+    'success': True,
+    'user_id': user.id,
+    'conversion_history': user.conversion_history or [],  # ❌ 静态JSON字段
+    # ...
+}
+
+# 修复后：
+from app.models import ConversionTask
+
+# ✅ 从 conversion_tasks 表实时查询用户的转换记录
+tasks = db.query(ConversionTask).filter(
+    ConversionTask.user_id == user_id,
+    ConversionTask.status == 'COMPLETED'
+).order_by(ConversionTask.created_at.desc()).all()
+
+# 构建转换历史列表
+conversion_history = []
+for task in tasks:
+    conversion_history.append({
+        'time': task.completed_at.strftime('%Y-%m-%d %H:%M:%S') if task.completed_at else task.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        'files': 1,
+        'success': 1 if task.status == 'COMPLETED' else 0,
+        'failed': 0 if task.status == 'COMPLETED' else 1,
+        'paragraphs_charged': int(task.paragraphs or 0),  # ✅ 从数据库读取段落数
+        'mode': 'foreground'
+    })
+
+return {
+    'success': True,
+    'user_id': user.id,
+    'conversion_history': conversion_history,  # ✅ 使用实时查询的数据
+    # ...
+}
+```
+
+**修复2: 创建数据库迁移脚本**
+
+文件：`backend/alembic/versions/20260517_1330_add_paragraphs_column.py`
+
+为 `conversion_tasks` 表添加 `paragraphs` 字段，用于存储每次转换的段落数。
+
+**修复3: 修改数据访问层**
+
+文件：`data_manager.py`
+
+- API模式的 `_add_conversion_record` 函数添加 `paragraphs` 参数
+- Supabase模式的 `_add_conversion_record` 函数添加 `paragraphs` 参数
+- 顶层导出函数添加 `paragraphs` 参数
+
+**修复4: 修改前端调用**
+
+文件：`app.py:1554-1560`
+
+```python
+# ✅ 修复：调用add_conversion_record写入conversion_tasks表（API模式）
+from data_manager import add_conversion_record
+add_conversion_record(
+    files_count=len(current_source_files),
+    success_count=success_count,
+    failed_count=fail_count,
+    user_id=st.session_state.user_id,
+    paragraphs=total_success_paragraphs  # ✅ 新增：传递段落数
+)
+```
+
+---
+
+#### 验证结果
+
+✅ 运行 `test_conversion_history_consistency.py` 测试通过  
+✅ API返回的数据包含 `paragraphs_charged` 字段  
+✅ 用户可以查看到所有转换历史记录  
+✅ 数据源统一：所有地方都从 `conversion_tasks` 表实时查询
+
+---
+
+#### 经验教训
+
+1. **单一数据源原则**：不要混合使用静态缓存和动态查询，应该始终从权威数据源（数据库表）实时查询
+2. **前后端一致性**：前端提交的数据结构必须与后端接收的结构一致
+3. **防御性编程**：使用条件检查避免重复操作，事务保护确保原子性
+
+---
+
+### Bug #009: 反馈管理数据不一致及UI优化Bug
+
+**日期**: 2026-05-17  
+**严重级别**: 🟠 中危（Medium）  
+**影响范围**: 管理后台反馈管理功能  
+**发现者**: 用户报告  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 问题描述
+
+用户提出了三个相关问题：
+
+1. **数据源不一致**：管理页面从本地JSON文件读取反馈，而用户端提交到Supabase数据库，导致数据显示不一致
+2. **缺少分页功能**：反馈列表没有分页，当反馈数量多时显示不便
+3. **表单缓存问题**：每次打开反馈对话框时，会显示上次提交的内容，而不是空白表单
+
+**具体表现**：
+- 数据库中有2条反馈记录，但管理页面看不到
+- 删除数据库中的2条记录后，管理页面出现了8条（来自本地JSON文件）
+- 反馈列表无分页，大量数据时难以浏览
+- 反馈表单保留上次提交的内容
+
+---
+
+#### 根本原因
+
+| # | 位置 | 问题 | 影响 |
+|---|------|------|------|
+| **问题1** | `admin_web.py:506-507` | 使用 `comments_manager.load_feedbacks()` 从本地JSON文件读取 | 与用户端提交到数据库的数据不同步 |
+| **问题2** | `admin_web.py:553` | 直接显示所有反馈，无分页控件 | 大量数据时用户体验差 |
+| **问题3** | `app.py:71-116` | 表单控件没有唯一key，Streamlit会缓存状态 | 每次打开对话框显示上次内容 |
+
+---
+
+#### 修复方案
+
+**修复1: 统一数据源 - 从数据库读取反馈**
+
+文件：`admin_web.py:490-511`
+
+```python
+# 修复前：
+from comments_manager import load_feedbacks, get_feedback_stats
+all_feedbacks = load_feedbacks()  # ❌ 从本地JSON文件读取
+
+# 修复后：
+all_feedbacks = []
+
+if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
+    # API 模式：通过后端 API 获取反馈
+    try:
+        api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/list"
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+        all_feedbacks = response.json()
+    except Exception as e:
+        st.error(f"❌ 加载反馈失败: {str(e)}")
+        all_feedbacks = []
+else:
+    # Supabase 模式：直接从数据库查询
+    try:
+        from data_manager import get_all_feedbacks_from_db
+        all_feedbacks = get_all_feedbacks_from_db()  # ✅ 从数据库读取
+    except Exception as e:
+        st.error(f"❌ 从数据库加载反馈失败: {str(e)}")
+        all_feedbacks = []
+```
+
+文件：`data_manager.py:536-562` (Supabase模式)
+
+```python
+def _get_all_feedbacks_from_db():
+    """从数据库获取所有反馈（Supabase 模式）"""
+    from app.models import Feedback
+    
+    db = SessionLocal()
+    try:
+        feedbacks = db.query(Feedback).order_by(Feedback.created_at.desc()).all()
+        
+        return [
+            {
+                'id': str(fb.id),
+                'user_id': fb.user_id,
+                'feedback_type': fb.feedback_type,
+                'title': fb.title,
+                'description': fb.description,
+                'contact': fb.contact,
+                'status': fb.status,
+                'created_at': fb.created_at.isoformat() if fb.created_at else '',
+            }
+            for fb in feedbacks
+        ]
+    except Exception as e:
+        print(f"[WARN] 获取反馈列表失败: {e}")
+        return []
+    finally:
+        db.close()
+```
+
+文件：`data_manager.py:906-909` (API模式)
+
+```python
+def _get_all_feedbacks_from_db():
+    """从数据库获取所有反馈（API 模式 - 通过后端API）"""
+    result = _make_api_request("/feedback/list")
+    return result if isinstance(result, list) else []
+```
+
+文件：`data_manager.py:977-979` (顶层导出)
+
+```python
+def get_all_feedbacks_from_db():
+    """从数据库获取所有反馈（统一数据源）"""
+    return _get_all_feedbacks_from_db()
+```
+
+**修复2: 添加分页功能**
+
+文件：`admin_web.py:513-540`
+
+```python
+if all_feedbacks:
+    # ✅ 新增：分页功能
+    PAGE_SIZE = 10  # 每页显示10条
+    total_pages = (len(all_feedbacks) + PAGE_SIZE - 1) // PAGE_SIZE
+    
+    # 分页控件
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        current_page = st.number_input(
+            "页码",
+            min_value=1,
+            max_value=total_pages if total_pages > 0 else 1,
+            value=1,
+            step=1,
+            format="%d",
+            help=f"共 {len(all_feedbacks)} 条反馈，{total_pages} 页"
+        )
+    
+    # 计算当前页的数据范围
+    start_idx = (current_page - 1) * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, len(all_feedbacks))
+    page_feedbacks = all_feedbacks[start_idx:end_idx]
+    
+    st.info(f"📄 第 {current_page}/{total_pages} 页，显示 {start_idx + 1}-{end_idx} 条，共 {len(all_feedbacks)} 条")
+    
+    # 显示反馈列表（仅当前页）
+    feedback_data = []
+    for fb in page_feedbacks:  # ✅ 只遍历当前页的数据
+        # ... 构建表格数据
+```
+
+**修复3: 重置表单缓存**
+
+文件：`app.py:71-116`
+
+```python
+@st.dialog("💡 提交需求或反馈")
+def show_feedback_dialog():
+    """显示反馈提交对话框"""
+    # ✅ 修复：每次打开对话框时重置表单状态
+    if 'feedback_form_reset' not in st.session_state:
+        st.session_state.feedback_form_reset = 0
+    
+    # 使用唯一的key前缀，每次打开时递增，强制重置所有表单控件
+    form_key_prefix = f"feedback_{st.session_state.feedback_form_reset}"
+    
+    st.markdown("我们非常重视您的意见，请告诉我们您的想法！")
+    
+    # 反馈类型
+    feedback_type = st.selectbox(
+        "反馈类型",
+        ["功能建议", "Bug报告", "使用问题", "其他"],
+        help="请选择反馈的类型",
+        key=f"{form_key_prefix}_type"  # ✅ 新增：唯一key
+    )
+    
+    # 标题（可选，有默认值）
+    default_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
+    feedback_title = st.text_input(
+        "标题（可选）",
+        value=default_title,
+        placeholder="也可以自定义标题",
+        help="如果不填写，将自动生成默认标题",
+        key=f"{form_key_prefix}_title"  # ✅ 新增：唯一key
+    )
+    
+    # 详细描述
+    feedback_description = st.text_area(
+        "详细描述",
+        placeholder="请详细描述您的需求、问题或建议...\n\n例如：\n- 我希望增加XX功能\n- 我遇到了XX问题\n- 我觉得XX可以改进",
+        height=150,
+        help="越详细越好，帮助我们更好地理解您的需求",
+        key=f"{form_key_prefix}_description"  # ✅ 新增：唯一key
+    )
+    
+    # 联系方式（可选）
+    feedback_contact = st.text_input(
+        "联系方式（可选）",
+        placeholder="微信/邮箱/电话",
+        help="如果需要我们回复您，请留下联系方式",
+        key=f"{form_key_prefix}_contact"  # ✅ 新增：唯一key
+    )
+```
+
+文件：`app.py:173-174` (提交成功后递增计数器)
+
+```python
+st.balloons()  # 🎈 彩带庆祝
+st.success(f"✅ 反馈提交成功！感谢您的宝贵意见")
+st.info(f"📝 反馈ID: {feedback_id}")
+
+# ✅ 修复：递增表单重置计数器，下次打开对话框时会使用新的key
+st.session_state.feedback_form_reset += 1
+
+# ✅ 直接返回，对话框自动关闭
+return
+```
+
+**修复4: 修正导入错误**
+
+文件：`admin_web.py:462`
+
+```python
+# 修复前：
+from config import BACKEND_URL, ACTUAL_DATA_SOURCE  # ❌ ACTUAL_DATA_SOURCE不存在
+
+# 修复后：
+from config import BACKEND_URL  # ✅ 只导入BACKEND_URL
+# ACTUAL_DATA_SOURCE已在第21行通过别名导入：DATA_SOURCE as ACTUAL_DATA_SOURCE
+```
+
+---
+
+#### 验证结果
+
+✅ 管理页面和用户端都从Supabase数据库读取反馈，数据完全一致  
+✅ 反馈列表支持分页显示（每页10条）  
+✅ 每次打开反馈对话框时，表单字段都是空白或默认值  
+✅ 代码已提交并推送到GitHub，Render自动重新部署
+
+---
+
+#### 经验教训
+
+1. **统一数据源原则**：不管是管理页面还是用户页面，数据源必须统一，都必须从数据库表中查询
+2. **分页必要性**：当数据量可能增长时，应该从一开始就实现分页功能
+3. **Streamlit表单状态管理**：使用唯一key可以强制重置表单控件状态
+4. **配置变量命名规范**：config.py中的变量名是`DATA_SOURCE`，不是`ACTUAL_DATA_SOURCE`
+
+---
+
 ### Bug #006: total_paragraphs_used累计值被重置Bug（双重Bug）
 
 **日期**: 2026-05-16  
