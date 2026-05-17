@@ -18,7 +18,10 @@ from data_manager import (
     get_task_stats,
     load_all_users_data,
     get_data_source,
-    DATA_SOURCE as ACTUAL_DATA_SOURCE
+    DATA_SOURCE as ACTUAL_DATA_SOURCE,
+    get_file_list,
+    delete_files,
+    get_storage_stats
 )
 from comments_manager import delete_comment  # ✅ 修复：只保留delete_comment，其他改用API
 from config import DATA_SOURCE as CONFIG_DATA_SOURCE, DATABASE_URL
@@ -663,6 +666,195 @@ def show_system_config():
     st.info("ℹ️ 系统配置功能暂未实现。当前版本使用config.py配置文件。")
     st.warning("如需动态配置管理，请切换到云端Supabase模式。")
 
+# ==================== 文件管理 ====================
+
+def show_file_management():
+    """显示文件管理页面"""
+    st.title("📁 文件管理")
+    st.markdown("---")
+    
+    # 初始化session_state
+    if 'file_page' not in st.session_state:
+        st.session_state.file_page = 1
+    if 'selected_files' not in st.session_state:
+        st.session_state.selected_files = []
+    
+    try:
+        # 获取存储统计信息
+        stats = get_storage_stats()
+        
+        # 显示存储统计卡片
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "📄 临时源文件",
+                f"{stats.get('temp_source_count', 0)}个",
+                f"{stats.get('temp_source_size_mb', 0):.2f}MB"
+            )
+        
+        with col2:
+            st.metric(
+                "📋 临时模板文件",
+                f"{stats.get('temp_template_count', 0)}个",
+                f"{stats.get('temp_template_size_mb', 0):.2f}MB"
+            )
+        
+        with col3:
+            st.metric(
+                "✅ 转换结果文件",
+                f"{stats.get('results_count', 0)}个",
+                f"{stats.get('results_size_mb', 0):.2f}MB"
+            )
+        
+        with col4:
+            expired = stats.get('expired_results_count', 0)
+            st.metric(
+                "⏰ 过期文件",
+                f"{expired}个",
+                delta_color="inverse" if expired > 0 else "normal"
+            )
+        
+        st.markdown(f"**总占用空间**: {stats.get('total_size_mb', 0):.2f}MB")
+        st.markdown("---")
+        
+        # 操作按钮
+        col_btn1, col_btn2 = st.columns([1, 4])
+        
+        with col_btn1:
+            if st.button("🗑️ 清理所有过期文件", type="primary", use_container_width=True):
+                from file_manager import get_file_manager
+                fm = get_file_manager()
+                cleanup_result = fm.cleanup_all_expired()
+                st.success(f"✅ 清理完成！删除了 {cleanup_result['results']} 个过期文件")
+                st.rerun()
+        
+        with col_btn2:
+            if st.session_state.selected_files:
+                if st.button(f"❌ 删除选中的 {len(st.session_state.selected_files)} 个文件", type="secondary", use_container_width=True):
+                    # 确认对话框
+                    st.warning(f"⚠️ 确定要删除 {len(st.session_state.selected_files)} 个文件吗？此操作不可恢复！")
+                    if st.button("✅ 确认删除", type="primary"):
+                        result = delete_files(st.session_state.selected_files)
+                        st.success(f"✅ 删除完成！成功: {result['success']}, 失败: {result['failed']}")
+                        if result['errors']:
+                            for error in result['errors']:
+                                st.error(error)
+                        st.session_state.selected_files = []
+                        st.rerun()
+        
+        st.markdown("---")
+        
+        # 获取文件列表（分页）
+        page_size = 20
+        file_data = get_file_list(page=st.session_state.file_page, page_size=page_size)
+        files = file_data.get('files', [])
+        pagination = file_data.get('pagination', {})
+        
+        if not files:
+            st.info("📭 暂无文件")
+        else:
+            # 构建表格数据
+            table_data = []
+            for file_info in files:
+                file_id = file_info['file_id']
+                is_selected = file_id in st.session_state.selected_files
+                
+                # 复选框
+                checkbox = st.checkbox(
+                    "选择",
+                    value=is_selected,
+                    key=f"checkbox_{file_id}",
+                    label_visibility="collapsed"
+                )
+                
+                # 更新选中状态
+                if checkbox and file_id not in st.session_state.selected_files:
+                    st.session_state.selected_files.append(file_id)
+                elif not checkbox and file_id in st.session_state.selected_files:
+                    st.session_state.selected_files.remove(file_id)
+                
+                table_data.append({
+                    '选择': checkbox,
+                    '用户ID': file_info.get('user_id', 'unknown')[:12],
+                    '文件名': file_info['filename'],
+                    '文件类型': file_info['file_type'],
+                    '生成时间': file_info['created_at'][:19].replace('T', ' '),
+                    '大小(KB)': file_info['size_kb'],
+                    '状态': '⏰ 已过期' if file_info.get('is_expired', False) else '✅ 正常',
+                    '文件ID': file_id  # 隐藏列，用于删除
+                })
+            
+            # 全选/取消全选按钮
+            col_select1, col_select2 = st.columns(2)
+            with col_select1:
+                if st.button("☑️ 全选", key="select_all"):
+                    for file_info in files:
+                        file_id = file_info['file_id']
+                        if file_id not in st.session_state.selected_files:
+                            st.session_state.selected_files.append(file_id)
+                    st.rerun()
+            
+            with col_select2:
+                if st.button("☐ 取消全选", key="deselect_all"):
+                    st.session_state.selected_files = []
+                    st.rerun()
+            
+            # 显示文件列表
+            st.dataframe(
+                table_data,
+                column_config={
+                    "选择": st.column_config.CheckboxColumn(width="small"),
+                    "用户ID": st.column_config.TextColumn(width="medium"),
+                    "文件名": st.column_config.TextColumn(width="large"),
+                    "文件类型": st.column_config.TextColumn(width="small"),
+                    "生成时间": st.column_config.DatetimeColumn(width="medium"),
+                    "大小(KB)": st.column_config.NumberColumn(format="%.2f", width="small"),
+                    "状态": st.column_config.TextColumn(width="small"),
+                    "文件ID": None  # 隐藏列
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # 分页控件
+            total_pages = pagination.get('total_pages', 1)
+            total_count = pagination.get('total_count', 0)
+            
+            st.markdown(f"**共 {total_count} 个文件，第 {st.session_state.file_page}/{total_pages} 页**")
+            
+            col_prev, col_mid, col_next = st.columns([1, 3, 1])
+            
+            with col_prev:
+                if st.session_state.file_page > 1:
+                    if st.button("⬅️ 上一页", use_container_width=True):
+                        st.session_state.file_page -= 1
+                        st.rerun()
+            
+            with col_next:
+                if st.session_state.file_page < total_pages:
+                    if st.button("下一页 ➡️", use_container_width=True):
+                        st.session_state.file_page += 1
+                        st.rerun()
+            
+            # 页码跳转
+            with col_mid:
+                new_page = st.number_input(
+                    "跳转到页码",
+                    min_value=1,
+                    max_value=total_pages,
+                    value=st.session_state.file_page,
+                    step=1,
+                    key="page_jump"
+                )
+                if new_page != st.session_state.file_page:
+                    st.session_state.file_page = new_page
+                    st.rerun()
+        
+    except Exception as e:
+        st.error(f"❌ 加载文件列表失败: {str(e)}")
+        st.exception(e)
+
 # ==================== 主界面 ====================
 
 def main():
@@ -681,7 +873,8 @@ def main():
                 "📝 转换任务",
                 "💬 用户反馈",
                 "💰 订单管理",
-                "⚙️ 系统配置"
+                "⚙️ 系统配置",
+                "📁 文件管理"
             ],
             label_visibility="collapsed"
         )
@@ -703,6 +896,8 @@ def main():
         show_order_management()
     elif page == "⚙️ 系统配置":
         show_system_config()
+    elif page == "📁 文件管理":
+        show_file_management()
 
 if __name__ == "__main__":
     main()

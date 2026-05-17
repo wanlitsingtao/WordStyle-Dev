@@ -1095,3 +1095,87 @@ def generate_device_fingerprint(user_agent: str) -> str:
     """
     import hashlib
     return hashlib.md5(user_agent.encode('utf-8')).hexdigest()[:32]
+
+
+# ==================== 文件管理 API ====================
+
+def get_file_list(page: int = 1, page_size: int = 50) -> Dict:
+    """
+    获取文件列表（支持分页）
+    
+    Args:
+        page: 页码（从1开始）
+        page_size: 每页数量
+    
+    Returns:
+        包含文件列表和分页信息的字典
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files?page={page}&page_size={page_size}"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API获取文件列表失败: {e}")
+            return {'files': [], 'pagination': {'total_count': 0}}
+    elif DATA_SOURCE == "local":
+        # Local模式使用file_manager
+        from file_manager import get_file_manager
+        fm = get_file_manager()
+        return fm.get_file_list(page=page, page_size=page_size)
+    else:
+        raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
+
+
+def delete_files(file_ids: List[str]) -> Dict[str, int]:
+    """
+    删除指定的文件
+    
+    Args:
+        file_ids: 文件ID列表
+    
+    Returns:
+        删除统计信息
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files/delete"
+            response = requests.post(api_url, json={'file_ids': file_ids}, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API删除文件失败: {e}")
+            return {'success': 0, 'failed': len(file_ids), 'errors': [str(e)]}
+    elif DATA_SOURCE == "local":
+        # Local模式使用file_manager
+        from file_manager import get_file_manager
+        fm = get_file_manager()
+        return fm.delete_files(file_ids)
+    else:
+        raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
+
+
+def get_storage_stats() -> Dict:
+    """
+    获取存储空间统计信息
+    
+    Returns:
+        存储统计信息
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files/stats"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API获取存储统计失败: {e}")
+            return {}
+    elif DATA_SOURCE == "local":
+        # Local模式使用file_manager
+        from file_manager import get_file_manager
+        fm = get_file_manager()
+        return fm.get_storage_stats()
+    else:
+        raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")

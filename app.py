@@ -33,6 +33,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger('WordStyle')
 
+# ✅ 服务启动时执行文件清理
+try:
+    from file_manager import cleanup_on_startup
+    cleanup_on_startup()
+except Exception as e:
+    logger.warning(f"启动时文件清理失败（不影响服务）: {e}")
+
+# ✅ 设置每日定时清理任务（每天零点执行）
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from file_manager import schedule_daily_cleanup
+    
+    scheduler = BackgroundScheduler()
+    # 每天零点执行清理
+    scheduler.add_job(
+        func=schedule_daily_cleanup,
+        trigger='cron',
+        hour=0,
+        minute=0,
+        id='daily_file_cleanup',
+        name='每日文件清理任务'
+    )
+    scheduler.start()
+    logger.info("✅ 每日文件清理任务已启动（每天零点执行）")
+except ImportError:
+    logger.warning("⚠️ APScheduler未安装，跳过定时清理任务")
+except Exception as e:
+    logger.warning(f"定时清理任务启动失败: {e}")
+
 # 添加当前目录到路径，以便导入其他模块
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -1453,9 +1482,10 @@ else:
                 st.session_state.conversion_file_results = []
                 
                 for idx, source_file_obj in enumerate(current_source_files):
-                    # 输出文件路径
+                    # 输出文件路径 - 保存到conversion_results目录
                     base_name = os.path.splitext(source_file_obj.name)[0]
-                    output_file = f"result_{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                    output_filename = f"result_{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                    output_file = os.path.join("conversion_results", output_filename)
                     temp_source = f"temp_source_{st.session_state.user_id}_{source_file_obj.name}"
                     
                     # ⚡ 性能优化：从缓存中获取段落数，避免重复读取
@@ -1601,6 +1631,15 @@ else:
                         'fail_count': fail_count,
                         'total_paragraphs': total_success_paragraphs
                     }
+                    
+                    # ✅ 清理临时文件（源文件和模板文件）
+                    try:
+                        from file_manager import get_file_manager
+                        fm = get_file_manager()
+                        cleanup_stats = fm.cleanup_temp_files(st.session_state.user_id)
+                        logger.info(f"临时文件清理完成: {cleanup_stats}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"临时文件清理失败（不影响转换结果）: {cleanup_error}")
                     
                     # ✅ 标记显示下载按钮（用于页面刷新后保持状态）
                     st.session_state.show_download_buttons = True

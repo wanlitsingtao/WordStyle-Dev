@@ -519,3 +519,75 @@ def deduct_paragraphs(user_id: str, paragraphs: int, db: Session = Depends(get_d
         'remaining': user.paragraphs_remaining,
         'message': f'已扣除 {paragraphs} 个段落'
     }
+
+
+# ==================== 文件管理 API ====================
+
+@router.get("/files")
+def get_files_list(page: int = 1, page_size: int = 50):
+    """
+    获取文件列表（支持分页）
+    
+    Args:
+        page: 页码（从1开始）
+        page_size: 每页数量
+    
+    Returns:
+        包含文件列表和分页信息的字典
+    """
+    try:
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        from file_manager import get_file_manager
+        
+        fm = get_file_manager()
+        return fm.get_file_list(page=page, page_size=page_size)
+    except Exception as e:
+        logger.error(f"获取文件列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
+
+
+@router.post("/files/delete")
+def delete_files_endpoint(file_ids: list = Body(...)):
+    """
+    删除指定的文件
+    
+    Args:
+        file_ids: 文件ID列表
+    
+    Returns:
+        删除统计信息
+    """
+    try:
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        from file_manager import get_file_manager
+        
+        fm = get_file_manager()
+        return fm.delete_files(file_ids)
+    except Exception as e:
+        logger.error(f"删除文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
+
+
+@router.get("/files/stats")
+def get_storage_statistics():
+    """
+    获取存储空间统计信息
+    
+    Returns:
+        存储统计信息
+    """
+    try:
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        from file_manager import get_file_manager
+        
+        fm = get_file_manager()
+        return fm.get_storage_stats()
+    except Exception as e:
+        logger.error(f"获取存储统计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取存储统计失败: {str(e)}")
