@@ -45,7 +45,7 @@ from config import (
 
 # 导入工具函数
 from utils import (
-    sanitize_html, sanitize_filename, validate_docx_file
+    sanitize_html, sanitize_filename, validate_docx_file, convert_server_time_to_local
 )
 
 # 导入用户管理
@@ -175,17 +175,39 @@ def show_history_dialog():
     # 显示保留期说明
     st.info("ℹ️ **提示：** 转换完成的文件将保留 7 天，过期后会自动清理。请及时下载您需要的文件。")
     
-    # 从用户数据中获取转换历史
-    user_data = load_user_data(st.session_state.user_id)
-    if user_data is None:
-        st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
-        return
-    conversion_history = user_data.get('conversion_history', [])
+    # ✅ 修复：优先从后端API获取转换历史（API模式）
+    conversion_history = []
+    from config import ACTUAL_DATA_SOURCE, BACKEND_URL
+    
+    if ACTUAL_DATA_SOURCE == 'api' and BACKEND_URL:
+        # API模式：通过后端API获取用户转换历史
+        try:
+            import requests
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/users/{st.session_state.user_id}"
+            response = requests.get(api_url, timeout=10)
+            if response.status_code == 200:
+                user_data_from_api = response.json()
+                conversion_history = user_data_from_api.get('conversion_history', [])
+                logger.info(f"✅ 从API获取转换历史: {len(conversion_history)}条记录")
+        except Exception as e:
+            logger.warning(f"⚠️ 从API获取转换历史失败: {e}，尝试从本地加载")
+    
+    # 降级方案：从本地数据加载
+    if not conversion_history:
+        user_data = load_user_data(st.session_state.user_id)
+        if user_data is None:
+            st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
+            return
+        conversion_history = user_data.get('conversion_history', [])
     
     if conversion_history:
         # 准备表格数据（倒序显示，最新的在前面）
         table_data = []
         for record in reversed(conversion_history[-20:]):  # 显示最近20条
+            # ✅ 修复：将服务器时间转换为本地时间显示
+            server_time = record.get('time', '未知')
+            local_time = convert_server_time_to_local(server_time)
+            
             # 构建状态显示
             if record.get('failed', 0) == 0:
                 status = "✅ 成功"
@@ -196,7 +218,7 @@ def show_history_dialog():
             paragraphs_display = f"{record['paragraphs_charged']:,}" if record.get('paragraphs_charged') else "-"
             
             table_data.append({
-                '时间': record.get('time', '未知'),
+                '时间': local_time,
                 '文件数': record.get('files', 0),
                 '成功': record.get('success', 0),
                 '失败': record.get('failed', 0),

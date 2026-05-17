@@ -510,19 +510,38 @@ def show_feedback_management():
             # 显示反馈列表
             feedback_data = []
             for fb in all_feedbacks:
-                # ✅ 修复：兼容created_at和timestamp两种字段名
-                submit_time = fb.get('created_at') or fb.get('timestamp') or ''
-                # ✅ 修复：UUID截取前8位显示
-                fb_id = str(fb.get('id', ''))
+                # ✅ 修复：兼容多种字段名（API返回、数据库直接读取、本地存储）
+                # ID字段：优先使用id，其次feedback_id
+                fb_id_raw = fb.get('id') or fb.get('feedback_id') or ''
+                fb_id = str(fb_id_raw)
                 if fb_id and len(fb_id) > 8:
                     fb_id = fb_id[:8] + "..."
                 
+                # 时间字段：优先使用created_at，其次timestamp
+                submit_time = fb.get('created_at') or fb.get('timestamp') or ''
+                
+                # 类型字段：优先使用feedback_type，其次type
+                feedback_type = fb.get('feedback_type') or fb.get('type') or '-'
+                
+                # 用户ID字段
+                user_id = fb.get('user_id') or '-'
+                if user_id and len(str(user_id)) > 12:
+                    user_id = str(user_id)[:12] + "..."
+                
+                # 标题/内容字段
+                title = fb.get('title', '-')
+                content_display = title[:50] + "..." if len(title) > 50 else title
+                
+                # 状态字段
+                status = fb.get('status', 'pending')
+                status_display = "✅ 已处理" if status == 'resolved' else ("🔄 处理中" if status == 'processing' else "⏳ 待处理")
+                
                 feedback_data.append({
                     "ID": fb_id if fb_id else '-',
-                    "用户ID": str(fb.get('user_id', ''))[:12] + "..." if fb.get('user_id') else '-',
-                    "类型": fb.get('feedback_type', '-'),
-                    "内容": fb.get('title', '-')[:50] + "..." if len(fb.get('title', '')) > 50 else fb.get('title', '-'),
-                    "状态": "✅ 已处理" if fb.get('status') == 'resolved' else ("🔄 处理中" if fb.get('status') == 'processing' else "⏳ 待处理"),
+                    "用户ID": user_id,
+                    "类型": feedback_type,
+                    "内容": content_display,
+                    "状态": status_display,
                     "提交时间": submit_time,
                 })
             

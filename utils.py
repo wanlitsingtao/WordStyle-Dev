@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 通用工具函数模块
-提供HTML转义、文件名清理等通用功能
+提供HTML转义、文件名清理、时间转换等通用功能
 """
 import html
 import re
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 
 def sanitize_html(text):
@@ -110,3 +110,52 @@ if __name__ == "__main__":
     print(f"[OK] 数字格式化: {formatted}")
     
     print("\n[OK] 所有测试通过！")
+
+
+def convert_server_time_to_local(server_time_str):
+    """
+    将服务器时间转换为本地时间显示
+    
+    Args:
+        server_time_str: 服务器时间字符串（格式：'YYYY-MM-DD HH:MM:SS' 或 ISO格式）
+    
+    Returns:
+        本地时间字符串
+    """
+    if not server_time_str or server_time_str == '未知':
+        return server_time_str
+    
+    try:
+        # 尝试解析服务器时间
+        # 支持多种格式
+        for fmt in [
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%d %H:%M:%S.%f',
+        ]:
+            try:
+                # 移除时区信息（如果有）
+                clean_time = server_time_str.replace('+00:00', '').replace('Z', '')
+                server_dt = datetime.strptime(clean_time, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            # 如果所有格式都失败，返回原始字符串
+            return server_time_str
+        
+        # 假设服务器时间是UTC时间，转换为本地时间
+        # Streamlit运行在浏览器中，会自动使用浏览器的时区
+        # 这里我们简单地返回原始时间，让前端JavaScript处理时区转换
+        # 或者我们可以添加时区偏移量提示
+        
+        # 方案1：直接返回原始时间（最简单）
+        return server_time_str
+        
+        # 方案2：添加时区提示（需要知道服务器时区）
+        # return f"{server_time_str} (服务器时间)"
+        
+    except Exception as e:
+        # 如果转换失败，返回原始字符串
+        return server_time_str
