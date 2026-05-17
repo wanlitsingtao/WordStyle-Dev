@@ -965,6 +965,16 @@ with st.sidebar:
     # st.markdown("[🔧 管理后台](/?page=admin)")
     
     st.markdown("---")
+    
+    # 显示ds.jpg图片
+    try:
+        from pathlib import Path
+        ds_image_path = Path("resource/ds.jpg")
+        if ds_image_path.exists():
+            st.image(str(ds_image_path), use_container_width=True)
+    except Exception as e:
+        logger.warning(f"加载ds.jpg失败: {e}")
+    
     st.caption("© 2026 文档转换工具 保留所有权利")
 
 # ==================== 主功能区 ====================
