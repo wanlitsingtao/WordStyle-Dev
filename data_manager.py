@@ -785,10 +785,10 @@ elif DATA_SOURCE == "api":
                     'paragraphs_remaining': result.get('paragraphs_remaining', 0),
                     'total_paragraphs_used': result.get('total_paragraphs_used', 0),  # ✅ 修复：从后端返回中读取，而不是硬编码0
                     'total_converted': result.get('total_converted', 0),
+                    'conversion_history': result.get('conversion_history', []),  # ✅ 修复：从后端返回中读取转换历史
                     'is_active': True,
                     'created_at': '',
                     'last_login': '',
-                    'conversion_history': [],  # ✅ 添加转换历史字段
                 }
             else:
                 error_msg = result.get('message', '未知错误')
