@@ -459,7 +459,7 @@ def show_feedback_management():
     try:
         # ✅ 修复：使用 API 获取反馈统计（兼容多实例部署）
         import requests
-        from config import BACKEND_URL
+        from config import BACKEND_URL, ACTUAL_DATA_SOURCE
         
         if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
             # API 模式：通过后端 API 获取统计
@@ -487,9 +487,9 @@ def show_feedback_management():
         
         st.markdown("---")
         
-        # ✅ 修复：使用 API 加载反馈（兼容多实例部署）
-        import requests
-        from config import BACKEND_URL
+        # ✅ 修复：统一数据源 - 始终从Supabase数据库读取反馈
+        # 不再使用本地JSON文件，确保与管理页面数据一致
+        all_feedbacks = []
         
         if BACKEND_URL and ACTUAL_DATA_SOURCE == 'api':
             # API 模式：通过后端 API 获取反馈
@@ -502,14 +502,42 @@ def show_feedback_management():
                 st.error(f"❌ 加载反馈失败: {str(e)}")
                 all_feedbacks = []
         else:
-            # 本地/Supabase 模式：使用本地文件（兜底逻辑）
-            from comments_manager import load_feedbacks, get_feedback_stats
-            all_feedbacks = load_feedbacks()
+            # Supabase 模式：直接从数据库查询
+            try:
+                from data_manager import get_all_feedbacks_from_db
+                all_feedbacks = get_all_feedbacks_from_db()
+            except Exception as e:
+                st.error(f"❌ 从数据库加载反馈失败: {str(e)}")
+                all_feedbacks = []
         
         if all_feedbacks:
-            # 显示反馈列表
+            # ✅ 新增：分页功能
+            PAGE_SIZE = 10  # 每页显示10条
+            total_pages = (len(all_feedbacks) + PAGE_SIZE - 1) // PAGE_SIZE
+            
+            # 分页控件
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                current_page = st.number_input(
+                    "页码",
+                    min_value=1,
+                    max_value=total_pages if total_pages > 0 else 1,
+                    value=1,
+                    step=1,
+                    format="%d",
+                    help=f"共 {len(all_feedbacks)} 条反馈，{total_pages} 页"
+                )
+            
+            # 计算当前页的数据范围
+            start_idx = (current_page - 1) * PAGE_SIZE
+            end_idx = min(start_idx + PAGE_SIZE, len(all_feedbacks))
+            page_feedbacks = all_feedbacks[start_idx:end_idx]
+            
+            st.info(f"📄 第 {current_page}/{total_pages} 页，显示 {start_idx + 1}-{end_idx} 条，共 {len(all_feedbacks)} 条")
+            
+            # 显示反馈列表（仅当前页）
             feedback_data = []
-            for fb in all_feedbacks:
+            for fb in page_feedbacks:
                 # ✅ 修复：兼容多种字段名（API返回、数据库直接读取、本地存储）
                 # ID字段：优先使用id，其次feedback_id
                 fb_id_raw = fb.get('id') or fb.get('feedback_id') or ''

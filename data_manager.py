@@ -533,6 +533,33 @@ elif DATA_SOURCE == "supabase":
             finally:
                 db.close()
         
+        def _get_all_feedbacks_from_db():
+            """从数据库获取所有反馈（Supabase 模式）"""
+            from app.models import Feedback
+            
+            db = SessionLocal()
+            try:
+                feedbacks = db.query(Feedback).order_by(Feedback.created_at.desc()).all()
+                
+                return [
+                    {
+                        'id': str(fb.id),
+                        'user_id': fb.user_id,
+                        'feedback_type': fb.feedback_type,
+                        'title': fb.title,
+                        'description': fb.description,
+                        'contact': fb.contact,
+                        'status': fb.status,
+                        'created_at': fb.created_at.isoformat() if fb.created_at else '',
+                    }
+                    for fb in feedbacks
+                ]
+            except Exception as e:
+                print(f"[WARN] 获取反馈列表失败: {e}")
+                return []
+            finally:
+                db.close()
+        
         print(f"[OK] 数据访问层初始化：Supabase 模式 (PostgreSQL)")
     
     except ImportError as e:
@@ -875,6 +902,11 @@ elif DATA_SOURCE == "api":
         def _cleanup_expired_tasks():
             """清理过期任务（API 模式）"""
             return 0
+        
+        def _get_all_feedbacks_from_db():
+            """从数据库获取所有反馈（API 模式 - 通过后端API）"""
+            result = _make_api_request("/feedback/list")
+            return result if isinstance(result, list) else []
 
 # ==================== 统一 API ====================
 
@@ -941,6 +973,10 @@ def get_all_tasks(status_filter=None, limit=100, offset=0):
 def get_task_stats():
     """获取任务统计"""
     return _get_task_stats()
+
+def get_all_feedbacks_from_db():
+    """从数据库获取所有反馈（统一数据源）"""
+    return _get_all_feedbacks_from_db()
 
 def get_user_active_task(user_id):
     """获取用户活动任务"""

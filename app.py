@@ -71,21 +71,31 @@ from doc_converter import DocumentConverter
 @st.dialog("💡 提交需求或反馈")
 def show_feedback_dialog():
     """显示反馈提交对话框"""
+    # ✅ 修复：每次打开对话框时重置表单状态
+    if 'feedback_form_reset' not in st.session_state:
+        st.session_state.feedback_form_reset = 0
+    
+    # 使用唯一的key前缀，每次打开时递增，强制重置所有表单控件
+    form_key_prefix = f"feedback_{st.session_state.feedback_form_reset}"
+    
     st.markdown("我们非常重视您的意见，请告诉我们您的想法！")
     
     # 反馈类型
     feedback_type = st.selectbox(
         "反馈类型",
         ["功能建议", "Bug报告", "使用问题", "其他"],
-        help="请选择反馈的类型"
+        help="请选择反馈的类型",
+        key=f"{form_key_prefix}_type"  # ✅ 新增：唯一key
     )
     
     # 标题（可选，有默认值）
+    default_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
     feedback_title = st.text_input(
         "标题（可选）",
-        value=f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}",
+        value=default_title,
         placeholder="也可以自定义标题",
-        help="如果不填写，将自动生成默认标题"
+        help="如果不填写，将自动生成默认标题",
+        key=f"{form_key_prefix}_title"  # ✅ 新增：唯一key
     )
     
     # 详细描述
@@ -93,14 +103,16 @@ def show_feedback_dialog():
         "详细描述",
         placeholder="请详细描述您的需求、问题或建议...\n\n例如：\n- 我希望增加XX功能\n- 我遇到了XX问题\n- 我觉得XX可以改进",
         height=150,
-        help="越详细越好，帮助我们更好地理解您的需求"
+        help="越详细越好，帮助我们更好地理解您的需求",
+        key=f"{form_key_prefix}_description"  # ✅ 新增：唯一key
     )
     
     # 联系方式（可选）
     feedback_contact = st.text_input(
         "联系方式（可选）",
         placeholder="微信/邮箱/电话",
-        help="如果需要我们回复您，请留下联系方式"
+        help="如果需要我们回复您，请留下联系方式",
+        key=f"{form_key_prefix}_contact"  # ✅ 新增：唯一key
     )
     
     col1, col2 = st.columns([1, 1])
@@ -157,6 +169,9 @@ def show_feedback_dialog():
                     st.balloons()  # 🎈 彩带庆祝
                     st.success(f"✅ 反馈提交成功！感谢您的宝贵意见")
                     st.info(f"📝 反馈ID: {feedback_id}")
+                    
+                    # ✅ 修复：递增表单重置计数器，下次打开对话框时会使用新的key
+                    st.session_state.feedback_form_reset += 1
                     
                     # ✅ 直接返回，对话框自动关闭
                     return

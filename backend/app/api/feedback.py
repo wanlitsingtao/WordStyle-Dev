@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-用户反馈和需求提交 API
+用户反馈和需求提交 API（数据库版本）
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from datetime import datetime
-import json
-from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+
+from ..core.database import get_db
+from ..models import Feedback
 
 router = APIRouter()
-
-# 数据文件路径（使用相对路径，兼容不同部署环境）
-import os
-FEEDBACK_FILE = Path(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "feedback_data.json"))
 
 class FeedbackRequest(BaseModel):
     """反馈请求"""
@@ -25,171 +23,183 @@ class FeedbackRequest(BaseModel):
 
 class FeedbackResponse(BaseModel):
     """反馈响应"""
-    success: bool
-    message: str
-    feedback_id: str
+    id: str  # UUID字符串
+    user_id: str
+    feedback_type: str
+    title: str
+    description: str
+    contact: Optional[str] = None
+    status: str
+    created_at: str
+    
+    class Config:
+        from_attributes = True
 
 @router.post("/submit", response_model=FeedbackResponse)
-def submit_feedback(request: FeedbackRequest):
+def submit_feedback(
+    request: FeedbackRequest,
+    db: Session = Depends(get_db)
+):
     """
-    提交用户反馈或需求
+    提交用户反馈或需求（保存到数据库）
     
     Args:
         request: 反馈信息
+        db: 数据库会话
         
     Returns:
         提交结果
     """
     try:
-        # 生成反馈ID
-        import uuid
-        feedback_id = f"FB{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
+        # 创建反馈记录
+        new_feedback = Feedback(
+            user_id=request.user_id,
+            feedback_type=request.feedback_type,
+            title=request.title,
+            description=request.description,
+            contact=request.contact,
+            status='pending',
+            reply=None
+        )
         
-        # 读取现有反馈数据
-        if FEEDBACK_FILE.exists():
-            with open(FEEDBACK_FILE, 'r', encoding='utf-8') as f:
-                try:
-                    all_feedback = json.load(f)
-                except:
-                    all_feedback = []
-        else:
-            all_feedback = []
-        
-        # 创建新的反馈记录
-        feedback_record = {
-            'feedback_id': feedback_id,
-            'user_id': request.user_id,
-            'type': request.feedback_type,
-            'title': request.title,
-            'description': request.description,
-            'contact': request.contact,
-            'status': 'pending',  # pending, reviewing, completed, rejected
-            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'admin_reply': None
-        }
-        
-        # 添加到列表
-        all_feedback.append(feedback_record)
-        
-        # 保存
-        with open(FEEDBACK_FILE, 'w', encoding='utf-8') as f:
-            json.dump(all_feedback, f, ensure_ascii=False, indent=2)
+        db.add(new_feedback)
+        db.commit()
+        db.refresh(new_feedback)
         
         return FeedbackResponse(
-            success=True,
-            message="✅ 感谢您的反馈！我们会尽快处理",
-            feedback_id=feedback_id
+            id=str(new_feedback.id),
+            user_id=new_feedback.user_id,
+            feedback_type=new_feedback.feedback_type,
+            title=new_feedback.title,
+            description=new_feedback.description,
+            contact=new_feedback.contact,
+            status=new_feedback.status,
+            created_at=new_feedback.created_at.strftime('%Y-%m-%d %H:%M:%S') if new_feedback.created_at else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         )
     
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
 
-@router.get("/list")
-def get_feedback_list(status: Optional[str] = None, limit: int = 50):
+@router.get("/list", response_model=List[FeedbackResponse])
+def get_feedback_list(
+    status: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
     """
     获取反馈列表（管理员使用）
     
     Args:
         status: 筛选状态（可选）
         limit: 返回数量限制
+        db: 数据库会话
         
     Returns:
         反馈列表
     """
-    if not FEEDBACK_FILE.exists():
-        return []
+    try:
+        query = db.query(Feedback)
+        
+        # 按状态筛选
+        if status:
+            query = query.filter(Feedback.status == status)
+        
+        # 按时间倒序排列并限制数量
+        feedbacks = query.order_by(Feedback.created_at.desc()).limit(limit).all()
+        
+        return [
+            FeedbackResponse(
+                id=str(f.id),
+                user_id=f.user_id,
+                feedback_type=f.feedback_type,
+                title=f.title,
+                description=f.description,
+                contact=f.contact,
+                status=f.status,
+                created_at=f.created_at.strftime('%Y-%m-%d %H:%M:%S') if f.created_at else ''
+            )
+            for f in feedbacks
+        ]
     
-    with open(FEEDBACK_FILE, 'r', encoding='utf-8') as f:
-        try:
-            all_feedback = json.load(f)
-        except:
-            return []
-    
-    # 按状态筛选
-    if status:
-        all_feedback = [f for f in all_feedback if f['status'] == status]
-    
-    # 按时间倒序排列
-    all_feedback.sort(key=lambda x: x['created_at'], reverse=True)
-    
-    # 限制数量
-    return all_feedback[:limit]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取反馈列表失败: {str(e)}")
 
 @router.get("/stats")
-def get_feedback_stats():
+def get_feedback_stats(db: Session = Depends(get_db)):
     """
     获取反馈统计信息
     
     Returns:
         统计数据
     """
-    if not FEEDBACK_FILE.exists():
-        return {
-            'total': 0,
-            'by_type': {},
-            'by_status': {}
-        }
-    
-    with open(FEEDBACK_FILE, 'r', encoding='utf-8') as f:
-        try:
-            all_feedback = json.load(f)
-        except:
-            return {'total': 0, 'by_type': {}, 'by_status': {}}
-    
-    # 统计
-    stats = {
-        'total': len(all_feedback),
-        'by_type': {},
-        'by_status': {}
-    }
-    
-    for feedback in all_feedback:
+    try:
+        from sqlalchemy import func
+        
+        # 总反馈数
+        total = db.query(func.count(Feedback.id)).scalar()
+        
         # 按类型统计
-        fb_type = feedback.get('type', 'other')
-        stats['by_type'][fb_type] = stats['by_type'].get(fb_type, 0) + 1
+        by_type = {}
+        type_counts = db.query(Feedback.feedback_type, func.count(Feedback.id))\
+            .group_by(Feedback.feedback_type)\
+            .all()
+        
+        for fb_type, count in type_counts:
+            by_type[fb_type or 'other'] = count
         
         # 按状态统计
-        fb_status = feedback.get('status', 'pending')
-        stats['by_status'][fb_status] = stats['by_status'].get(fb_status, 0) + 1
+        by_status = {}
+        status_counts = db.query(Feedback.status, func.count(Feedback.id))\
+            .group_by(Feedback.status)\
+            .all()
+        
+        for fb_status, count in status_counts:
+            by_status[fb_status or 'pending'] = count
+        
+        return {
+            'total': total,
+            'by_type': by_type,
+            'by_status': by_status
+        }
     
-    return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
 
 @router.put("/update-status/{feedback_id}")
-def update_feedback_status(feedback_id: str, status: str, admin_reply: Optional[str] = None):
+def update_feedback_status(
+    feedback_id: str,
+    status: str,
+    admin_reply: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     """
     更新反馈状态（管理员使用）
     
     Args:
-        feedback_id: 反馈ID
+        feedback_id: 反馈ID（UUID字符串）
         status: 新状态
         admin_reply: 管理员回复（可选）
+        db: 数据库会话
     """
-    if not FEEDBACK_FILE.exists():
-        raise HTTPException(status_code=404, detail="反馈不存在")
+    try:
+        import uuid
+        feedback = db.query(Feedback).filter(Feedback.id == uuid.UUID(feedback_id)).first()
+        
+        if not feedback:
+            raise HTTPException(status_code=404, detail="反馈不存在")
+        
+        feedback.status = status
+        feedback.updated_at = datetime.now()
+        if admin_reply:
+            feedback.reply = admin_reply
+        
+        db.commit()
+        
+        return {"success": True, "message": "状态已更新"}
     
-    with open(FEEDBACK_FILE, 'r', encoding='utf-8') as f:
-        try:
-            all_feedback = json.load(f)
-        except:
-            raise HTTPException(status_code=500, detail="数据读取失败")
-    
-    # 查找反馈
-    found = False
-    for feedback in all_feedback:
-        if feedback['feedback_id'] == feedback_id:
-            feedback['status'] = status
-            feedback['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            if admin_reply:
-                feedback['admin_reply'] = admin_reply
-            found = True
-            break
-    
-    if not found:
-        raise HTTPException(status_code=404, detail="反馈不存在")
-    
-    # 保存
-    with open(FEEDBACK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(all_feedback, f, ensure_ascii=False, indent=2)
-    
-    return {"success": True, "message": "状态已更新"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")

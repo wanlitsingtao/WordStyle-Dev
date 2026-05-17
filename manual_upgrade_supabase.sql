@@ -62,7 +62,11 @@ DELETE FROM alembic_version;
 -- 插入最新版本号
 INSERT INTO alembic_version (version_num) VALUES ('20260517_1330');
 
-RAISE NOTICE '✅ 成功更新 alembic_version 到 20260517_1330';
+-- 显示成功消息
+DO $$
+BEGIN
+    RAISE NOTICE '✅ 成功更新 alembic_version 到 20260517_1330';
+END $$;
 
 -- =====================================================
 -- 验证升级结果
