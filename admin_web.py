@@ -665,6 +665,46 @@ def show_system_config():
     
     st.info("ℹ️ 系统配置功能暂未实现。当前版本使用config.py配置文件。")
     st.warning("如需动态配置管理，请切换到云端Supabase模式。")
+    
+    # 显示当前配置项列表（只读）
+    st.subheader("📋 当前配置项")
+    
+    try:
+        from config import (
+            PARAGRAPH_PRICE,
+            MIN_RECHARGE,
+            FREE_PARAGRAPHS_DAILY,
+            ADMIN_CONTACT,
+            MAX_FILE_SIZE_MB,
+            TASK_EXPIRY_DAYS,
+        )
+        
+        # 计费配置
+        with st.expander("💰 计费配置", expanded=False):
+            st.write(f"- **段落单价**: {PARAGRAPH_PRICE} 元/段")
+            st.write(f"- **最低充值**: {MIN_RECHARGE} 元")
+        
+        # 免费额度
+        with st.expander("🎁 免费额度", expanded=False):
+            st.write(f"- **每日免费段落数**: {FREE_PARAGRAPHS_DAILY:,} 段")
+        
+        # 管理员联系
+        with st.expander("👤 管理员联系", expanded=False):
+            st.write(f"- **联系方式**: {ADMIN_CONTACT}")
+        
+        # 文件配置
+        with st.expander("📄 文件配置", expanded=False):
+            st.write(f"- **最大文件大小**: {MAX_FILE_SIZE_MB} MB")
+        
+        # 任务清理
+        with st.expander("🗑️ 任务清理", expanded=False):
+            st.write(f"- **任务保留天数**: {TASK_EXPIRY_DAYS} 天")
+        
+    except Exception as e:
+        st.error(f"❌ 加载配置失败: {str(e)}")
+    
+    st.markdown("---")
+    st.caption("💡 提示：以上配置为只读显示，修改需编辑config.py文件并重启服务")
 
 # ==================== 文件管理 ====================
 
