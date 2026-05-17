@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from config import (
     DEFAULT_ANSWER_TEXT, DEFAULT_ANSWER_STYLE, DEFAULT_ANSWER_MODE,
     ANSWER_MODE_OPTIONS, DEFAULT_LIST_BULLET, PAGE_TITLE, PAGE_ICON,
-    LAYOUT, SIDEBAR_STATE, FREE_PARAGRAPHS_DAILY
+    LAYOUT, SIDEBAR_STATE, FREE_PARAGRAPHS_DAILY, DATA_SOURCE  # ✅ 修复：添加DATA_SOURCE导入
 )
 
 # 导入工具函数
@@ -330,7 +330,29 @@ if 'has_seen_guide' not in st.session_state:
 COMMENTS_FILE = Path("comments_data.json")
 
 def load_comments():
-    """加载评论数据"""
+    """加载评论数据（优先从API获取）"""
+    # ✅ 修复：使用 API 加载评论（兼容多实例部署）
+    from config import BACKEND_URL
+    
+    if BACKEND_URL and DATA_SOURCE == 'api':
+        # API 模式：通过后端 API 获取
+        try:
+            import requests
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/list?limit=100"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            comments = response.json()
+            # 转换UUID为字符串，保持兼容性
+            for c in comments:
+                if isinstance(c.get('id'), str) and len(c['id']) > 20:
+                    # UUID格式，截取前8位作为显示ID
+                    c['display_id'] = c['id'][:8]
+            return comments
+        except Exception as e:
+            logger.error(f"❌ API加载评论失败: {e}，降级到本地文件")
+            # 降级到本地文件
+    
+    # 本地/Supabase 模式：使用本地文件（兜底逻辑）
     if COMMENTS_FILE.exists():
         with open(COMMENTS_FILE, 'r', encoding='utf-8') as f:
             try:
@@ -345,7 +367,41 @@ def save_comments(comments):
         json.dump(comments, f, ensure_ascii=False, indent=2)
 
 def add_comment(username, content, rating=5):
-    """添加新评论"""
+    """添加新评论（使用API提交到数据库）"""
+    # ✅ 修复：使用 API 提交评论（兼容多实例部署）
+    from config import BACKEND_URL
+    
+    if BACKEND_URL and DATA_SOURCE == 'api':
+        # API 模式：通过后端 API 提交
+        try:
+            import requests
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/submit"
+            response = requests.post(
+                api_url,
+                json={
+                    'username': username or f'用户{st.session_state.user_id[:6]}',
+                    'content': content,
+                    'rating': rating,
+                    'user_id': st.session_state.user_id
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            result = response.json()
+            return {
+                'id': result.get('id'),
+                'username': result.get('username'),
+                'content': result.get('content'),
+                'rating': result.get('rating'),
+                'timestamp': result.get('timestamp'),
+                'likes': result.get('likes', 0),
+                'user_id': result.get('user_id')
+            }
+        except Exception as e:
+            logger.error(f"❌ API提交评论失败: {e}，降级到本地存储")
+            # 降级到本地存储
+    
+    # 本地/Supabase 模式：使用本地存储（兜底逻辑）
     comments = load_comments()
     
     new_comment = {

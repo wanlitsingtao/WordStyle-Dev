@@ -5,7 +5,7 @@ FastAPI 主应用
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import admin, feedback, monitoring
+from app.api import admin, feedback, comments, monitoring  # ✅ 添加comments导入
 # 已移除的路由：auth, wechat_auth, conversions, users（这些功能未实现或与业务需求不符）
 # 注意：users.py依赖认证系统，暂不可用
 import logging
@@ -72,6 +72,7 @@ def create_application() -> FastAPI:
     # application.include_router(users.router, prefix="/api/users", tags=["用户"])  # 暂不可用 - 依赖认证系统
     application.include_router(admin.router, prefix="/api/admin", tags=["管理员"])
     application.include_router(feedback.router, prefix="/api/feedback", tags=["用户反馈"])
+    application.include_router(comments.router, prefix="/api/comments", tags=["评论"])  # ✅ 新增：评论API
     application.include_router(monitoring.router, prefix="/monitoring", tags=["监控"])
     
     # 健康检查（同时支持 GET 和 POST，兼容 UptimeRobot 只能发送 POST 的限制）
