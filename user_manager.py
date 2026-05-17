@@ -320,7 +320,7 @@ def deduct_paragraphs(paragraphs, user_id=None):
 
 
 def add_conversion_record(files_count, success_count, failed_count, 
-                          paragraphs_charged, cost, mode='foreground', user_id=None):
+                          paragraphs_charged, cost, mode='foreground', user_id=None, paragraphs=0):
     """添加转换记录"""
     user_data = load_user_data(user_id)
     

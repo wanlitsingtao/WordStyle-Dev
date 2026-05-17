@@ -69,6 +69,7 @@ class ConversionTask(Base):
     converted_file = Column(String(500))  # 转换后文件路径
     status = Column(String(20), default='pending')  # 任务状态
     progress = Column(Integer, default=0)  # 进度（0-100）
+    paragraphs = Column(Integer, default=0)  # ✅ 新增：段落数
     error_message = Column(Text)  # 错误信息
     completed_at = Column(DateTime(timezone=True))  # 完成时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间

@@ -390,7 +390,7 @@ elif DATA_SOURCE == "supabase":
             finally:
                 db.close()
         
-        def _add_conversion_record(files_count, success_count, failed_count, user_id=None):
+        def _add_conversion_record(files_count, success_count, failed_count, user_id=None, paragraphs=0):
             """添加转换记录（Supabase 模式）"""
             # Supabase 模式下，转换记录通过 ConversionTask 表管理
             # 此函数主要用于兼容性，实际在任务完成时自动记录
@@ -740,7 +740,7 @@ elif DATA_SOURCE == "api":
                 return result.get('success', False)
             return False
         
-        def _add_conversion_record(files_count, success_count, failed_count, user_id=None):
+        def _add_conversion_record(files_count, success_count, failed_count, user_id=None, paragraphs=0):
             """添加转换记录（API 模式）- 写入conversion_tasks表"""
             if not user_id:
                 return False
@@ -752,6 +752,7 @@ elif DATA_SOURCE == "api":
                 'template_file': 'default_template',
                 'status': 'COMPLETED',
                 'progress': 100,
+                'paragraphs': paragraphs,  # ✅ 从参数获取段落数
                 'error_message': None
             }
             
@@ -905,9 +906,9 @@ def deduct_paragraphs(paragraphs, user_id=None):
     """扣除段落"""
     return _deduct_paragraphs(paragraphs, user_id)
 
-def add_conversion_record(files_count, success_count, failed_count, user_id=None):
+def add_conversion_record(files_count, success_count, failed_count, user_id=None, paragraphs=0):
     """添加转换记录"""
-    return _add_conversion_record(files_count, success_count, failed_count, user_id)
+    return _add_conversion_record(files_count, success_count, failed_count, user_id, paragraphs)
 
 def get_user_stats(user_id=None):
     """获取用户统计"""

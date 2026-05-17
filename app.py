@@ -1555,7 +1555,8 @@ else:
                         files_count=len(current_source_files),
                         success_count=success_count,
                         failed_count=fail_count,
-                        user_id=st.session_state.user_id
+                        user_id=st.session_state.user_id,
+                        paragraphs=total_success_paragraphs  # ✅ 新增：传递段落数
                     )
                     
                     # 保存用户数据（使用统一数据接口）

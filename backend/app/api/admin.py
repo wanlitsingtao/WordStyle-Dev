@@ -178,7 +178,7 @@ def get_user_by_id(
                 'files': 1,  # 每个任务对应一个文件
                 'success': 1 if task.status == 'COMPLETED' else 0,
                 'failed': 0 if task.status == 'COMPLETED' else 1,
-                'paragraphs_charged': 0,  # conversion_tasks表中没有段落数字段，暂时设为0
+                'paragraphs_charged': int(task.paragraphs or 0),  # ✅ 从数据库读取段落数
                 'mode': 'foreground'
             })
         
@@ -361,6 +361,7 @@ def create_task_api(task_data: dict, db: Session = Depends(get_db)):
         template_file=task_data.get('template_file', ''),
         status=status,
         progress=task_data.get('progress', 0),
+        paragraphs=task_data.get('paragraphs', 0),  # ✅ 新增：段落数
         error_message=task_data.get('error_message'),
         completed_at=completed_at,
         created_at=datetime.now()
