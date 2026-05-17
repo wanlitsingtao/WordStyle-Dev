@@ -953,9 +953,9 @@ with st.sidebar:
     st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
     st.metric("累计转换文档", user_data['total_converted'])
     
-    # 查看转换历史按钮
-    if st.button("📋 查看转换历史", use_container_width=True, key="view_history_btn"):
-        show_history_dialog()
+    # ✅ 暂时隐藏查看转换历史按钮
+    # if st.button("📋 查看转换历史", use_container_width=True, key="view_history_btn"):
+    #     show_history_dialog()
     
     # 需求提交入口
     if st.button("💡 提交需求/反馈", use_container_width=True, key="feedback_btn"):
