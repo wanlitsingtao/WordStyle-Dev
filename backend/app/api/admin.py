@@ -591,3 +591,286 @@ def get_storage_statistics():
     except Exception as e:
         logger.error(f"获取存储统计失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取存储统计失败: {str(e)}")
+
+# ==================== 系统配置管理 API ====================
+
+class SystemConfigItem(BaseModel):
+    """单个配置项"""
+    config_key: str
+    config_value: str
+    description: Optional[str] = None
+
+class SystemConfigBatchUpdate(BaseModel):
+    """批量更新配置"""
+    configs: dict
+
+@router.get("/configs")
+def get_all_configs(db: Session = Depends(get_db)):
+    """
+    获取所有系统配置
+    
+    Returns:
+        配置列表
+    """
+    try:
+        configs = db.query(SystemConfig).all()
+        return {
+            "success": True,
+            "data": [
+                {
+                    "config_key": c.config_key,
+                    "config_value": c.config_value,
+                    "description": c.description,
+                    "updated_at": c.updated_at.isoformat() if c.updated_at else None
+                }
+                for c in configs
+            ]
+        }
+    except Exception as e:
+        logger.error(f"获取配置列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取配置列表失败: {str(e)}")
+
+@router.get("/config/{key}")
+def get_config(key: str, db: Session = Depends(get_db)):
+    """
+    获取单个配置项
+    
+    Args:
+        key: 配置键
+        
+    Returns:
+        配置项信息
+    """
+    try:
+        config = db.query(SystemConfig).filter(
+            SystemConfig.config_key == key
+        ).first()
+        
+        if not config:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"配置项 '{key}' 不存在"
+            )
+        
+        return {
+            "success": True,
+            "data": {
+                "config_key": config.config_key,
+                "config_value": config.config_value,
+                "description": config.description,
+                "updated_at": config.updated_at.isoformat() if config.updated_at else None
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
+
+@router.put("/config/{key}")
+def update_config(key: str, config_data: ConfigUpdate, db: Session = Depends(get_db)):
+    """
+    更新单个配置项
+    
+    Args:
+        key: 配置键
+        config_data: 新的配置值
+        
+    Returns:
+        更新后的配置
+    """
+    try:
+        # 验证配置值的合法性
+        _validate_config_value(key, config_data.config_value)
+        
+        config = db.query(SystemConfig).filter(
+            SystemConfig.config_key == key
+        ).first()
+        
+        if not config:
+            # 如果不存在，创建新配置
+            config = SystemConfig(
+                config_key=key,
+                config_value=config_data.config_value,
+                description=config_data.description or f"配置项: {key}"
+            )
+            db.add(config)
+        else:
+            # 更新现有配置
+            old_value = config.config_value
+            config.config_value = config_data.config_value
+            if config_data.description:
+                config.description = config_data.description
+            
+            logger.info(f"配置更新: {key} = {old_value} -> {config_data.config_value}")
+        
+        db.commit()
+        db.refresh(config)
+        
+        return {
+            "success": True,
+            "message": f"配置 '{key}' 更新成功",
+            "data": {
+                "config_key": config.config_key,
+                "config_value": config.config_value,
+                "description": config.description,
+                "updated_at": config.updated_at.isoformat() if config.updated_at else None
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+@router.post("/configs/batch")
+def batch_update_configs(batch_data: SystemConfigBatchUpdate, db: Session = Depends(get_db)):
+    """
+    批量更新配置
+    
+    Args:
+        batch_data: 配置字典 {key: value}
+        
+    Returns:
+        更新结果
+    """
+    try:
+        updated_count = 0
+        errors = []
+        
+        for key, value in batch_data.configs.items():
+            try:
+                # 验证配置值
+                _validate_config_value(key, str(value))
+                
+                config = db.query(SystemConfig).filter(
+                    SystemConfig.config_key == key
+                ).first()
+                
+                if not config:
+                    config = SystemConfig(
+                        config_key=key,
+                        config_value=str(value),
+                        description=f"配置项: {key}"
+                    )
+                    db.add(config)
+                else:
+                    config.config_value = str(value)
+                
+                updated_count += 1
+                logger.info(f"批量配置更新: {key} = {value}")
+                
+            except ValueError as e:
+                errors.append({"key": key, "error": str(e)})
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"成功更新 {updated_count} 个配置",
+            "updated_count": updated_count,
+            "errors": errors
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"批量更新配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量更新配置失败: {str(e)}")
+
+@router.post("/config/init-defaults")
+def init_default_configs(db: Session = Depends(get_db)):
+    """
+    初始化默认配置
+    
+    Returns:
+        初始化结果
+    """
+    try:
+        default_configs = [
+            {
+                "config_key": "paragraph_price",
+                "config_value": "0.001",
+                "description": "每个段落的价格（元）"
+            },
+            {
+                "config_key": "min_recharge",
+                "config_value": "1.0",
+                "description": "最低充值金额（元）"
+            },
+            {
+                "config_key": "free_paragraphs_daily",
+                "config_value": "10000",
+                "description": "每日免费段落数"
+            },
+            {
+                "config_key": "admin_contact",
+                "config_value": "微信号：your_wechat_id",
+                "description": "管理员联系方式"
+            },
+            {
+                "config_key": "max_file_size_mb",
+                "config_value": "50",
+                "description": "最大文件大小（MB）"
+            },
+            {
+                "config_key": "task_expiry_days",
+                "config_value": "7",
+                "description": "转换任务保留天数"
+            },
+        ]
+        
+        created_count = 0
+        for config_data in default_configs:
+            existing = db.query(SystemConfig).filter(
+                SystemConfig.config_key == config_data["config_key"]
+            ).first()
+            
+            if not existing:
+                config = SystemConfig(**config_data)
+                db.add(config)
+                created_count += 1
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"成功初始化 {created_count} 个默认配置",
+            "created_count": created_count
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"初始化默认配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"初始化默认配置失败: {str(e)}")
+
+def _validate_config_value(key: str, value: str):
+    """
+    验证配置值的合法性
+    
+    Args:
+        key: 配置键
+        value: 配置值
+        
+    Raises:
+        ValueError: 配置值不合法
+    """
+    validators = {
+        'paragraph_price': lambda v: float(v) > 0,
+        'min_recharge': lambda v: float(v) > 0,
+        'free_paragraphs_daily': lambda v: int(v) >= 0,
+        'admin_contact': lambda v: len(v) > 0 and len(v) <= 500,
+        'max_file_size_mb': lambda v: int(v) > 0 and int(v) <= 500,
+        'task_expiry_days': lambda v: int(v) > 0 and int(v) <= 365,
+    }
+    
+    validator = validators.get(key)
+    if validator:
+        try:
+            if not validator(value):
+                raise ValueError(f"配置值 '{value}' 不合法")
+        except (ValueError, TypeError):
+            raise ValueError(f"配置值 '{value}' 格式错误")

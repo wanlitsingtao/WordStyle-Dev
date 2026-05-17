@@ -1179,3 +1179,215 @@ def get_storage_stats() -> Dict:
         return fm.get_storage_stats()
     else:
         raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
+
+# ==================== 系统配置管理 API ====================
+
+def get_all_configs() -> Dict:
+    """
+    获取所有系统配置
+    
+    Returns:
+        配置列表
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/configs"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API获取配置列表失败: {e}")
+            return {"success": False, "data": []}
+    elif DATA_SOURCE == "supabase":
+        # Supabase模式直接查询数据库
+        try:
+            from supabase import create_client
+            supabase = create_client(DATABASE_URL, os.getenv("SUPABASE_KEY", ""))
+            result = supabase.table('system_config').select('*').execute()
+            return {
+                "success": True,
+                "data": result.data if result.data else []
+            }
+        except Exception as e:
+            logger.error(f"❌ Supabase获取配置列表失败: {e}")
+            return {"success": False, "data": []}
+    else:
+        # Local模式返回空（暂不支持）
+        return {"success": False, "data": [], "message": "Local模式不支持配置管理"}
+
+def get_config(key: str) -> Optional[str]:
+    """
+    获取单个配置项的值
+    
+    Args:
+        key: 配置键
+        
+    Returns:
+        配置值，不存在则返回None
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/{key}"
+            response = requests.get(api_url, timeout=10)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+            return data.get('data', {}).get('config_value')
+        except Exception as e:
+            logger.error(f"❌ API获取配置失败: {e}")
+            return None
+    elif DATA_SOURCE == "supabase":
+        try:
+            from supabase import create_client
+            supabase = create_client(DATABASE_URL, os.getenv("SUPABASE_KEY", ""))
+            result = supabase.table('system_config').select('config_value').eq('config_key', key).execute()
+            if result.data and len(result.data) > 0:
+                return result.data[0]['config_value']
+            return None
+        except Exception as e:
+            logger.error(f"❌ Supabase获取配置失败: {e}")
+            return None
+    else:
+        return None
+
+def update_config(key: str, value: str, description: str = None) -> Dict:
+    """
+    更新配置项
+    
+    Args:
+        key: 配置键
+        value: 配置值
+        description: 配置描述（可选）
+        
+    Returns:
+        更新结果
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/{key}"
+            payload = {
+                "config_value": value,
+                "description": description
+            }
+            response = requests.put(api_url, json=payload, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API更新配置失败: {e}")
+            return {"success": False, "message": str(e)}
+    elif DATA_SOURCE == "supabase":
+        try:
+            from supabase import create_client
+            supabase = create_client(DATABASE_URL, os.getenv("SUPABASE_KEY", ""))
+            
+            # 检查是否存在
+            existing = supabase.table('system_config').select('id').eq('config_key', key).execute()
+            
+            if existing.data and len(existing.data) > 0:
+                # 更新
+                update_data = {"config_value": value}
+                if description:
+                    update_data["description"] = description
+                result = supabase.table('system_config').update(update_data).eq('config_key', key).execute()
+            else:
+                # 创建
+                insert_data = {
+                    "config_key": key,
+                    "config_value": value
+                }
+                if description:
+                    insert_data["description"] = description
+                result = supabase.table('system_config').insert(insert_data).execute()
+            
+            return {"success": True, "message": f"配置 '{key}' 更新成功"}
+        except Exception as e:
+            logger.error(f"❌ Supabase更新配置失败: {e}")
+            return {"success": False, "message": str(e)}
+    else:
+        return {"success": False, "message": "Local模式不支持配置管理"}
+
+def batch_update_configs(configs: dict) -> Dict:
+    """
+    批量更新配置
+    
+    Args:
+        configs: 配置字典 {key: value}
+        
+    Returns:
+        更新结果
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/configs/batch"
+            payload = {"configs": configs}
+            response = requests.post(api_url, json=payload, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API批量更新配置失败: {e}")
+            return {"success": False, "message": str(e)}
+    elif DATA_SOURCE == "supabase":
+        # 逐个更新
+        results = []
+        for key, value in configs.items():
+            result = update_config(key, str(value))
+            results.append({"key": key, "success": result.get("success", False)})
+        
+        success_count = sum(1 for r in results if r["success"])
+        return {
+            "success": True,
+            "message": f"成功更新 {success_count} 个配置",
+            "updated_count": success_count,
+            "results": results
+        }
+    else:
+        return {"success": False, "message": "Local模式不支持配置管理"}
+
+def init_default_configs() -> Dict:
+    """
+    初始化默认配置
+    
+    Returns:
+        初始化结果
+    """
+    if DATA_SOURCE == "api":
+        try:
+            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/init-defaults"
+            response = requests.post(api_url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"❌ API初始化默认配置失败: {e}")
+            return {"success": False, "message": str(e)}
+    elif DATA_SOURCE == "supabase":
+        try:
+            from supabase import create_client
+            supabase = create_client(DATABASE_URL, os.getenv("SUPABASE_KEY", ""))
+            
+            default_configs = [
+                {"config_key": "paragraph_price", "config_value": "0.001", "description": "每个段落的价格（元）"},
+                {"config_key": "min_recharge", "config_value": "1.0", "description": "最低充值金额（元）"},
+                {"config_key": "free_paragraphs_daily", "config_value": "10000", "description": "每日免费段落数"},
+                {"config_key": "admin_contact", "config_value": "微信号：your_wechat_id", "description": "管理员联系方式"},
+                {"config_key": "max_file_size_mb", "config_value": "50", "description": "最大文件大小（MB）"},
+                {"config_key": "task_expiry_days", "config_value": "7", "description": "转换任务保留天数"},
+            ]
+            
+            created_count = 0
+            for config_data in default_configs:
+                existing = supabase.table('system_config').select('id').eq('config_key', config_data['config_key']).execute()
+                if not existing.data or len(existing.data) == 0:
+                    supabase.table('system_config').insert(config_data).execute()
+                    created_count += 1
+            
+            return {
+                "success": True,
+                "message": f"成功初始化 {created_count} 个默认配置",
+                "created_count": created_count
+            }
+        except Exception as e:
+            logger.error(f"❌ Supabase初始化默认配置失败: {e}")
+            return {"success": False, "message": str(e)}
+    else:
+        return {"success": False, "message": "Local模式不支持配置管理"}
