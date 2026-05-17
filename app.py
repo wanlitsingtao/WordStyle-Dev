@@ -1753,7 +1753,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.expander("📖 使用说明", expanded=False):
-    st.markdown("""
+    # 动态获取免费额度配置
+    try:
+        from data_manager import get_config
+        free_paragraphs_value = get_config('free_paragraphs_daily')
+        if free_paragraphs_value:
+            free_paragraphs_display = f"{int(free_paragraphs_value):,}"
+        else:
+            free_paragraphs_display = "10,000"  # 默认值
+    except Exception:
+        free_paragraphs_display = "10,000"  # 降级方案
+    
+    st.markdown(f"""
 
 ### 🎯 本工具能帮你解决什么
 
@@ -1778,6 +1789,18 @@ with st.expander("📖 使用说明", expanded=False):
 4. **点击开始转换**：系统会自动处理并生成结果
 5. **下载结果**：下载转换后的文档
     
+---
+
+### 🎁 免费额度说明：
+
+**每日免费额度**：每位用户每天可获得 **{free_paragraphs_display}** 段落的免费转换额度
+
+**额度规则**：
+- 免费额度按日计算，每天自动重置
+- 只统计非标题的正文段落（详见下方段落定义）
+- 转换失败的文件不计入额度消耗
+- 超出免费额度后需要充值才能继续使用
+
 ---
 
 ### 📊 段落定义：
@@ -1816,8 +1839,6 @@ with st.expander("📖 使用说明", expanded=False):
 **好消息：**
 - 即使有上述限制，工具也已经帮你完成了 80%-90% 的工作
 - 剩下的就是舒心地检查核对，把标书做得更完美
-
-</div>
 
 </div>
     """)
