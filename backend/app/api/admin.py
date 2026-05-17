@@ -142,6 +142,45 @@ def get_users_list(
         ]
     }
 
+@router.get("/users/{user_id}")
+def get_user_by_id(
+    user_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    通过用户ID获取用户信息（包含转换历史）
+    
+    Args:
+        user_id: 用户ID
+    
+    Returns:
+        用户信息字典，包含conversion_history
+    """
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+        
+        return {
+            'success': True,
+            'user_id': user.id,
+            'device_fingerprint': user.device_fingerprint,
+            'balance': float(user.balance or 0),
+            'paragraphs_remaining': int(user.paragraphs_remaining or 0),
+            'total_converted': int(user.total_converted or 0),
+            'total_paragraphs_used': int(user.total_paragraphs_used or 0),
+            'conversion_history': user.conversion_history or [],  # ✅ 关键：返回转换历史
+            'is_active': bool(user.is_active),
+            'created_at': user.created_at.isoformat() if user.created_at else '',
+            'last_login': user.last_login.isoformat() if user.last_login else '',
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取用户信息失败: {e}")
+        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
+
 @router.post("/users/by-device")
 def get_or_create_user_by_device_api(
     device_fingerprint: str = Body(..., embed=False),

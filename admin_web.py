@@ -532,6 +532,10 @@ def show_feedback_management():
                 title = fb.get('title', '-')
                 content_display = title[:50] + "..." if len(title) > 50 else title
                 
+                # 详细描述字段（用于表格显示）
+                description = fb.get('description', '')
+                desc_display = description[:30] + "..." if description and len(description) > 30 else (description or '-')
+                
                 # 状态字段
                 status = fb.get('status', 'pending')
                 status_display = "✅ 已处理" if status == 'resolved' else ("🔄 处理中" if status == 'processing' else "⏳ 待处理")
@@ -540,7 +544,8 @@ def show_feedback_management():
                     "ID": fb_id if fb_id else '-',
                     "用户ID": user_id,
                     "类型": feedback_type,
-                    "内容": content_display,
+                    "标题": content_display,
+                    "详细描述": desc_display,
                     "状态": status_display,
                     "提交时间": submit_time,
                 })
