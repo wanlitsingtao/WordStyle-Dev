@@ -288,6 +288,7 @@ def get_tasks_list(
     skip: int = 0,
     limit: int = 100,
     status_filter: Optional[str] = None,
+    user_id: Optional[str] = None,  # ✅ 新增：支持按用户ID过滤
     db: Session = Depends(get_db)
 ):
     """获取任务列表"""
@@ -296,6 +297,8 @@ def get_tasks_list(
     query = db.query(ConversionTask)
     if status_filter and status_filter != 'ALL':
         query = query.filter(ConversionTask.status == status_filter)
+    if user_id:  # ✅ 新增：按用户ID过滤
+        query = query.filter(ConversionTask.user_id == user_id)
     
     tasks = query.order_by(ConversionTask.created_at.desc()).offset(skip).limit(limit).all()
     total = query.count()
@@ -311,6 +314,7 @@ def get_tasks_list(
                 'converted_file': t.converted_file or '',
                 'status': t.status,
                 'progress': t.progress,
+                'paragraphs': int(t.paragraphs or 0),  # ✅ 新增：段落数
                 'created_at': t.created_at.isoformat() if t.created_at else '',
                 'completed_at': t.completed_at.isoformat() if t.completed_at else '',
                 'error_message': t.error_message,
