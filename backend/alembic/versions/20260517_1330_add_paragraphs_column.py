@@ -1,7 +1,7 @@
 """add paragraphs column to conversion_tasks
 
 Revision ID: 20260517_1330
-Revises: 20260530_120000_add_conversion_history_to_users
+Revises: 20260530_120000
 Create Date: 2026-05-17 13:30:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '20260517_1330'
-down_revision = '20260530_120000_add_conversion_history_to_users'
+down_revision = '20260530_120000'  # 依赖于 add_conversion_history_to_users
 branch_labels = None
 depends_on = None
 
