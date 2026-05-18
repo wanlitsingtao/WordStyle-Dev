@@ -1191,22 +1191,14 @@ def get_all_configs() -> Dict:
     Returns:
         配置列表
     """
-    # [DEBUG] 添加调试日志
-    logger.info(f"[DEBUG] DATA_SOURCE={DATA_SOURCE}, BACKEND_URL={BACKEND_URL}")
-    
     if DATA_SOURCE == "api":
         try:
             api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/configs"
-            logger.info(f"[DEBUG] 请求 API: {api_url}")
-            # [FIX] 增加超时时间到 30 秒
-            response = requests.get(api_url, timeout=30)
-            logger.info(f"[DEBUG] API 响应状态码: {response.status_code}")
+            response = requests.get(api_url, timeout=10)
             response.raise_for_status()
-            result = response.json()
-            logger.info(f"[DEBUG] API 返回成功，配置数量: {len(result.get('data', []))}")
-            return result
+            return response.json()
         except Exception as e:
-            logger.error(f"[ERROR] API获取配置列表失败: {e}")
+            logger.error(f"API获取配置列表失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return {"success": False, "data": []}
