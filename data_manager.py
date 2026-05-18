@@ -1114,7 +1114,7 @@ def get_file_list(page: int = 1, page_size: int = 50) -> Dict:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files?page={page}&page_size={page_size}"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/files?page={page}&page_size={page_size}"
             response = requests.get(api_url, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -1142,7 +1142,7 @@ def delete_files(file_ids: List[str]) -> Dict[str, int]:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files/delete"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/files/delete"
             response = requests.post(api_url, json={'file_ids': file_ids}, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -1167,7 +1167,7 @@ def get_storage_stats() -> Dict:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/files/stats"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/files/stats"
             response = requests.get(api_url, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -1196,7 +1196,7 @@ def get_all_configs() -> Dict:
     
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/configs"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/configs"
             logger.info(f"[DEBUG] 请求 API: {api_url}")
             # [FIX] 增加超时时间到 30 秒
             response = requests.get(api_url, timeout=30)
@@ -1290,7 +1290,7 @@ def get_config(key: str) -> Optional[str]:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/{key}"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/config/{key}"
             response = requests.get(api_url, timeout=10)
             if response.status_code == 404:
                 return None
@@ -1361,7 +1361,7 @@ def update_config(key: str, value: str, description: str = None) -> Dict:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/{key}"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/config/{key}"
             payload = {
                 "config_value": value,
                 "description": description
@@ -1471,7 +1471,7 @@ def batch_update_configs(configs: dict) -> Dict:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/configs/batch"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/configs/batch"
             payload = {"configs": configs}
             response = requests.post(api_url, json=payload, timeout=10)
             response.raise_for_status()
@@ -1505,7 +1505,7 @@ def init_default_configs() -> Dict:
     """
     if DATA_SOURCE == "api":
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/admin/config/init-defaults"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/config/init-defaults"
             response = requests.post(api_url, timeout=10)
             response.raise_for_status()
             return response.json()
