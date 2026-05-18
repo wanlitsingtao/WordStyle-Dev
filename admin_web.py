@@ -691,8 +691,21 @@ def show_system_config():
     # 获取所有配置
     try:
         from data_manager import get_all_configs, update_config
+        from config import DATA_SOURCE, BACKEND_URL, USE_SUPABASE
+        
+        # [DEBUG] 显示配置诊断信息
+        st.markdown("### 🔍 配置诊断")
+        st.json({
+            "DATA_SOURCE": DATA_SOURCE,
+            "BACKEND_URL": BACKEND_URL,
+            "USE_SUPABASE": USE_SUPABASE
+        })
         
         configs_response = get_all_configs()
+        
+        # [DEBUG] 显示 API 响应
+        st.markdown("### 📡 API 响应")
+        st.json(configs_response)
         
         if not configs_response.get('success'):
             st.warning("⚠️ 无法加载配置数据")
