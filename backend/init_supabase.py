@@ -32,7 +32,7 @@ def get_database_url():
     """获取数据库连接URL"""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        print("❌ 错误：未设置 DATABASE_URL 环境变量")
+        print("[ERROR] 错误：未设置 DATABASE_URL 环境变量")
         print("\n请在 backend/.env.production 中配置 DATABASE_URL")
         print("格式：postgresql://postgres:password@db.xxx.supabase.co:5432/postgres")
         sys.exit(1)
@@ -45,10 +45,10 @@ def check_connection(db_url):
         engine = create_engine(db_url)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        print("✅ 数据库连接成功")
+        print("[OK] 数据库连接成功")
         return engine
     except Exception as e:
-        print(f"❌ 数据库连接失败: {e}")
+        print(f"[ERROR] 数据库连接失败: {e}")
         print("\n请检查：")
         print("1. DATABASE_URL 格式是否正确")
         print("2. 密码是否包含特殊字符（需要URL编码）")
@@ -71,12 +71,12 @@ def check_tables(engine):
     missing_tables = [t for t in required_tables if t not in tables]
     
     if missing_tables:
-        print(f"⚠️  缺少表: {', '.join(missing_tables)}")
+        print(f"[WARN]  缺少表: {', '.join(missing_tables)}")
         print("\n请先执行 SQL Editor 中的初始化脚本")
         print("位置: Supabase控制台 → SQL Editor → New query")
         return False
     else:
-        print("✅ 所有必需的表已存在")
+        print("[OK] 所有必需的表已存在")
         return True
 
 
@@ -105,7 +105,7 @@ def init_default_config(engine):
     
     if inserted:
         session.commit()
-        print(f"✅ 已插入默认配置: {', '.join(inserted)}")
+        print(f"[OK] 已插入默认配置: {', '.join(inserted)}")
     else:
         print("ℹ️  默认配置已存在，跳过初始化")
     
@@ -118,7 +118,7 @@ def show_summary(engine):
     session = Session()
     
     print("\n" + "="*60)
-    print("📊 数据库初始化报告")
+    print("[STATS] 数据库初始化报告")
     print("="*60)
     
     # 统计表数量
@@ -146,7 +146,7 @@ def show_summary(engine):
         print(f"    说明: {config.description}")
     
     print("\n" + "="*60)
-    print("✅ 数据库初始化完成！")
+    print("[OK] 数据库初始化完成！")
     print("="*60)
     print("\n下一步：")
     print("1. 启动后端服务: python run_dev.py")
@@ -157,7 +157,7 @@ def show_summary(engine):
 
 
 if __name__ == "__main__":
-    print("🚀 开始初始化Supabase数据库...\n")
+    print("[LAUNCH] 开始初始化Supabase数据库...\n")
     
     # 1. 获取数据库URL
     db_url = get_database_url()
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     
     # 3. 检查表结构
     if not check_tables(engine):
-        print("\n❌ 初始化失败，请先执行SQL脚本创建表结构")
+        print("\n[ERROR] 初始化失败，请先执行SQL脚本创建表结构")
         print("\nSQL脚本位置: DEPLOYMENT_UPGRADE_PLAN.md 第一步.1.2.A")
         sys.exit(1)
     

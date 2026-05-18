@@ -197,19 +197,19 @@ if __name__ == "__main__":
         try:
             # 测试上传
             url = await upload_file_to_supabase(test_file, "test_user")
-            print(f"✅ 上传成功: {url}")
+            print(f"[OK] 上传成功: {url}")
             
             # 测试列出文件
             files = await list_user_files("test_user")
-            print(f"✅ 文件列表: {files}")
+            print(f"[OK] 文件列表: {files}")
             
             # 清理测试文件
             if files:
                 await delete_file_from_supabase(files[0])
-                print("✅ 清理完成")
+                print("[OK] 清理完成")
             
         except Exception as e:
-            print(f"❌ 测试失败: {e}")
+            print(f"[ERROR] 测试失败: {e}")
         finally:
             # 删除本地测试文件
             if os.path.exists(test_file):

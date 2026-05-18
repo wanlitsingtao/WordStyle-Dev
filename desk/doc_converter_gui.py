@@ -268,7 +268,7 @@ class DocumentConverterGUI:
         visio_hint_frame.pack(fill=X, pady=(0, 8))
         
         visio_hint = Label(visio_hint_frame, 
-                          text="💡 提示：建议提前将源文档中的 Visio 图提前转换为 JPG/PNG 等图片格式，为保证转换后文档最大可用性，本软件暂不支持viso等OLE对象的复制。",
+                          text="[TIP] 提示：建议提前将源文档中的 Visio 图提前转换为 JPG/PNG 等图片格式，为保证转换后文档最大可用性，本软件暂不支持viso等OLE对象的复制。",
                           font=("微软雅黑", 9), fg="#FF6B35", justify=CENTER)
         visio_hint.pack(anchor=CENTER)
         

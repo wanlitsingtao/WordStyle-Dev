@@ -31,7 +31,7 @@ elif settings.DATABASE_URL.startswith("postgresql"):
         if not user_part.startswith(f"postgres.{project_id}"):
             new_user = f"postgres.{project_id}"
             original_url = original_url.replace(f"://{user_part}@", f"://{new_user}@")
-            logger.info(f"✅ 连接池器用户名已转换: {user_part} -> {new_user}")
+            logger.info(f"[OK] 连接池器用户名已转换: {user_part} -> {new_user}")
             
         # 动态获取连接池器地址（根据原始 URL 中的区域或默认使用通用地址）
         # 注意：不同区域的 Supabase 项目可能对应不同的 Pooler 域名
@@ -40,11 +40,11 @@ elif settings.DATABASE_URL.startswith("postgresql"):
             f"db.{project_id}.supabase.co:5432",
             f"{project_id}.pooler.supabase.com:6543"
         )
-        logger.info(f"✅ 检测到 Supabase 直接连接，自动切换为连接池器")
+        logger.info(f"[OK] 检测到 Supabase 直接连接，自动切换为连接池器")
         logger.info(f"   原始 URL: {settings.DATABASE_URL[:60]}...")
         logger.info(f"   池化 URL: {final_url[:60]}...")
 
-logger.info(f"🔗 数据库引擎创建 - URL: {final_url[:60]}...")
+logger.info(f"[LINK] 数据库引擎创建 - URL: {final_url[:60]}...")
 engine = create_engine(final_url, connect_args=connect_args)
 
 # 创建会话工厂

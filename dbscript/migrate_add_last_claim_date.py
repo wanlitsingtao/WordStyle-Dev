@@ -16,7 +16,7 @@ from sqlalchemy import text
 def add_last_claim_date_column():
     """添加 last_claim_date 字段"""
     print("=" * 60)
-    print("📊 添加 last_claim_date 字段")
+    print("[STATS] 添加 last_claim_date 字段")
     print("=" * 60)
     
     db = SessionLocal()
@@ -31,11 +31,11 @@ def add_last_claim_date_column():
         result = db.execute(text(check_sql)).fetchone()
         
         if result:
-            print("✅ last_claim_date 字段已存在，无需添加")
+            print("[OK] last_claim_date 字段已存在，无需添加")
             return True
         
         # 添加字段
-        print("📝 正在添加 last_claim_date 字段...")
+        print("[INFO] 正在添加 last_claim_date 字段...")
         add_sql = """
             ALTER TABLE users 
             ADD COLUMN last_claim_date TIMESTAMP WITH TIME ZONE
@@ -43,12 +43,12 @@ def add_last_claim_date_column():
         db.execute(text(add_sql))
         db.commit()
         
-        print("✅ last_claim_date 字段添加成功")
+        print("[OK] last_claim_date 字段添加成功")
         return True
         
     except Exception as e:
         db.rollback()
-        print(f"❌ 添加字段失败: {e}")
+        print(f"[ERROR] 添加字段失败: {e}")
         return False
     finally:
         db.close()
@@ -56,8 +56,8 @@ def add_last_claim_date_column():
 if __name__ == "__main__":
     success = add_last_claim_date_column()
     if success:
-        print("\n✅ 数据库迁移完成")
+        print("\n[OK] 数据库迁移完成")
         sys.exit(0)
     else:
-        print("\n❌ 数据库迁移失败")
+        print("\n[ERROR] 数据库迁移失败")
         sys.exit(1)

@@ -115,7 +115,7 @@ else:
 if BACKEND_URL and USE_SUPABASE:
     # Streamlit Cloud 等受限环境：通过后端 API 访问
     DATA_SOURCE = "api"
-    print(f"🌐 数据源模式: API (后端: {BACKEND_URL})")
+    print(f"[API] 数据源模式: API (后端: {BACKEND_URL})")
 elif USE_SUPABASE and DATABASE_URL:
     # Render 等允许出站连接的环境：直接连接数据库
     DATA_SOURCE = "supabase"
@@ -126,7 +126,7 @@ else:
     print(f"[INFO] 数据源模式: 本地 (SQLite + JSON)")
 
 # ========== 配置诊断（方便生产环境排查）==========
-print(f"  [诊断] USE_SUPABASE={USE_SUPABASE}, BACKEND_URL={'✅ 已设置' if BACKEND_URL else '❌ 未设置'}, DATABASE_URL={'✅ 已设置' if DATABASE_URL else '❌ 未设置'}")
+print(f"  [诊断] USE_SUPABASE={USE_SUPABASE}, BACKEND_URL={'[OK]' if BACKEND_URL else '[NO]'}, DATABASE_URL={'[OK]' if DATABASE_URL else '[NO]'}")
 
 # ==================== 计费配置 ====================
 # 计费规则：100个段落 = 0.1元
@@ -203,7 +203,7 @@ LOCK_TIMEOUT_SECONDS = 10  # 文件锁超时时间
 
 # ==================== UI配置 ====================
 PAGE_TITLE = "标书抄写神器（Beta测试版）"
-PAGE_ICON = "📄"
+PAGE_ICON = "[FILE]"
 LAYOUT = "wide"  # wide 或 centered
 SIDEBAR_STATE = "expanded"  # expanded 或 collapsed
 

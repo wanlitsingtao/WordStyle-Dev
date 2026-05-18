@@ -164,7 +164,7 @@ def get_user_by_id(
         if not user:
             raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
         
-        # ✅ 修复：从 conversion_tasks 表实时查询用户的转换记录
+        # [OK] 修复：从 conversion_tasks 表实时查询用户的转换记录
         tasks = db.query(ConversionTask).filter(
             ConversionTask.user_id == user_id,
             ConversionTask.status == 'COMPLETED'  # 只返回已完成的任务
@@ -178,7 +178,7 @@ def get_user_by_id(
                 'files': 1,  # 每个任务对应一个文件
                 'success': 1 if task.status == 'COMPLETED' else 0,
                 'failed': 0 if task.status == 'COMPLETED' else 1,
-                'paragraphs_charged': int(task.paragraphs or 0),  # ✅ 从数据库读取段落数
+                'paragraphs_charged': int(task.paragraphs or 0),  # [OK] 从数据库读取段落数
                 'mode': 'foreground'
             })
         
@@ -190,7 +190,7 @@ def get_user_by_id(
             'paragraphs_remaining': int(user.paragraphs_remaining or 0),
             'total_converted': int(user.total_converted or 0),
             'total_paragraphs_used': int(user.total_paragraphs_used or 0),
-            'conversion_history': conversion_history,  # ✅ 使用实时查询的数据
+            'conversion_history': conversion_history,  # [OK] 使用实时查询的数据
             'is_active': bool(user.is_active),
             'created_at': user.created_at.isoformat() if user.created_at else '',
             'last_login': user.last_login.isoformat() if user.last_login else '',
@@ -198,7 +198,7 @@ def get_user_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 获取用户信息失败: {e}")
+        logger.error(f"[ERROR] 获取用户信息失败: {e}")
         raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 @router.post("/users/by-device")
@@ -206,7 +206,7 @@ def get_or_create_user_by_device_api(
     device_fingerprint: str = Body(..., embed=False),
     user_agent: Optional[str] = Body(None),
     db: Session = Depends(get_db),
-    request = None  # ✅ 新增：获取请求对象以记录IP
+    request = None  # [OK] 新增：获取请求对象以记录IP
 ):
     """
     通过设备指纹获取或创建用户
@@ -224,13 +224,13 @@ def get_or_create_user_by_device_api(
     from fastapi import Request
     
     try:
-        # ✅ 新增：获取客户端IP地址
+        # [OK] 新增：获取客户端IP地址
         client_ip = "unknown"
         if request:
             client_ip = request.client.host if request.client else "unknown"
         
-        # ✅ 新增：记录API调用详情
-        logger.info(f"🔍 /users/by-device API被调用 - IP: {client_ip}, Device: {device_fingerprint[:16]}..., UA: {user_agent[:50] if user_agent else 'N/A'}...")
+        # [OK] 新增：记录API调用详情
+        logger.info(f"[SEARCH] /users/by-device API被调用 - IP: {client_ip}, Device: {device_fingerprint[:16]}..., UA: {user_agent[:50] if user_agent else 'N/A'}...")
         
         # 1. 优先通过device_fingerprint查询
         user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
@@ -240,7 +240,7 @@ def get_or_create_user_by_device_api(
             user.last_login = datetime.now()
             db.commit()
             
-            logger.info(f"✅ 从数据库恢复用户: {user.id} (device: {device_fingerprint[:8]}..., IP: {client_ip})")
+            logger.info(f"[OK] 从数据库恢复用户: {user.id} (device: {device_fingerprint[:8]}..., IP: {client_ip})")
             
             return {
                 'success': True,
@@ -249,8 +249,8 @@ def get_or_create_user_by_device_api(
                 'paragraphs_remaining': user.paragraphs_remaining,
                 'balance': float(user.balance or 0),
                 'total_converted': user.total_converted,
-                'total_paragraphs_used': user.total_paragraphs_used,  # ✅ 修复：添加累计使用段落数字段
-                'conversion_history': user.conversion_history or [],  # ✅ 修复：添加转换历史字段
+                'total_paragraphs_used': user.total_paragraphs_used,  # [OK] 修复：添加累计使用段落数字段
+                'conversion_history': user.conversion_history or [],  # [OK] 修复：添加转换历史字段
                 'message': '用户已存在'
             }
         
@@ -258,10 +258,10 @@ def get_or_create_user_by_device_api(
         # 生成用户ID
         user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
         
-        # ✅ 新增：检测是否为测试用户
+        # [OK] 新增：检测是否为测试用户
         is_test_user = device_fingerprint.startswith('test_') or (user_agent and 'test' in user_agent.lower())
         if is_test_user:
-            logger.warning(f"⚠️ 检测到测试用户创建请求 - Device: {device_fingerprint}, IP: {client_ip}")
+            logger.warning(f"[WARN] 检测到测试用户创建请求 - Device: {device_fingerprint}, IP: {client_ip}")
         
         # 创建用户记录
         new_user = User(
@@ -279,7 +279,7 @@ def get_or_create_user_by_device_api(
         db.add(new_user)
         db.commit()
         
-        logger.info(f"✅ 创建新用户: {user_id} (device: {device_fingerprint[:8]}..., IP: {client_ip}, Test: {is_test_user})")
+        logger.info(f"[OK] 创建新用户: {user_id} (device: {device_fingerprint[:8]}..., IP: {client_ip}, Test: {is_test_user})")
         
         return {
             'success': True,
@@ -289,13 +289,13 @@ def get_or_create_user_by_device_api(
             'balance': 0.0,
             'total_converted': 0,
             'total_paragraphs_used': 0,
-            'conversion_history': [],  # ✅ 修复：新用户初始化转换历史为空列表
+            'conversion_history': [],  # [OK] 修复：新用户初始化转换历史为空列表
             'message': '新用户创建成功'
         }
         
     except Exception as e:
         db.rollback()
-        logger.error(f"❌ 获取或创建用户失败: {e}")
+        logger.error(f"[ERROR] 获取或创建用户失败: {e}")
         raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 @router.get("/tasks")
@@ -303,7 +303,7 @@ def get_tasks_list(
     skip: int = 0,
     limit: int = 100,
     status_filter: Optional[str] = None,
-    user_id: Optional[str] = None,  # ✅ 新增：支持按用户ID过滤
+    user_id: Optional[str] = None,  # [OK] 新增：支持按用户ID过滤
     db: Session = Depends(get_db)
 ):
     """获取任务列表"""
@@ -312,7 +312,7 @@ def get_tasks_list(
     query = db.query(ConversionTask)
     if status_filter and status_filter != 'ALL':
         query = query.filter(ConversionTask.status == status_filter)
-    if user_id:  # ✅ 新增：按用户ID过滤
+    if user_id:  # [OK] 新增：按用户ID过滤
         query = query.filter(ConversionTask.user_id == user_id)
     
     tasks = query.order_by(ConversionTask.created_at.desc()).offset(skip).limit(limit).all()
@@ -329,7 +329,7 @@ def get_tasks_list(
                 'converted_file': t.converted_file or '',
                 'status': t.status,
                 'progress': t.progress,
-                'paragraphs': int(t.paragraphs or 0),  # ✅ 新增：段落数
+                'paragraphs': int(t.paragraphs or 0),  # [OK] 新增：段落数
                 'created_at': t.created_at.isoformat() if t.created_at else '',
                 'completed_at': t.completed_at.isoformat() if t.completed_at else '',
                 'error_message': t.error_message,
@@ -365,12 +365,12 @@ def get_task_statistics(db: Session = Depends(get_db)):
 
 @router.post("/tasks")
 def create_task_api(task_data: dict, db: Session = Depends(get_db)):
-    """创建任务（供 API 模式调用）- ✅ 修复：支持直接创建已完成的任务"""
+    """创建任务（供 API 模式调用）- [OK] 修复：支持直接创建已完成的任务"""
     import uuid
     from app.models import ConversionTask
     from datetime import datetime
     
-    # ✅ 修复：根据传入的状态设置completed_at
+    # [OK] 修复：根据传入的状态设置completed_at
     status = task_data.get('status', 'pending')
     completed_at = datetime.now() if status in ['COMPLETED', 'FAILED'] else None
     
@@ -380,7 +380,7 @@ def create_task_api(task_data: dict, db: Session = Depends(get_db)):
         template_file=task_data.get('template_file', ''),
         status=status,
         progress=task_data.get('progress', 0),
-        paragraphs=task_data.get('paragraphs', 0),  # ✅ 新增：段落数
+        paragraphs=task_data.get('paragraphs', 0),  # [OK] 新增：段落数
         error_message=task_data.get('error_message'),
         completed_at=completed_at,
         created_at=datetime.now()
@@ -397,10 +397,10 @@ def create_task_api(task_data: dict, db: Session = Depends(get_db)):
 
 @router.put("/tasks/{task_id}")
 def update_task_status_api(task_id: str, status_data: dict, db: Session = Depends(get_db)):
-    """更新任务状态（供 API 模式调用）- ✅ 修复：使用正确的字段名id"""
+    """更新任务状态（供 API 模式调用）- [OK] 修复：使用正确的字段名id"""
     from uuid import UUID
     
-    # ✅ 修复：将字符串task_id转换为UUID进行查询
+    # [OK] 修复：将字符串task_id转换为UUID进行查询
     try:
         task_uuid = UUID(task_id)
         task = db.query(ConversionTask).filter(ConversionTask.id == task_uuid).first()
@@ -440,7 +440,7 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
         user.paragraphs_remaining = user_data.get('paragraphs_remaining', user.paragraphs_remaining)
         user.total_paragraphs_used = user_data.get('total_paragraphs_used', user.total_paragraphs_used)
         user.total_converted = user_data.get('total_converted', user.total_converted)
-        user.conversion_history = user_data.get('conversion_history', user.conversion_history)  # ✅ 修复：保存转换历史
+        user.conversion_history = user_data.get('conversion_history', user.conversion_history)  # [OK] 修复：保存转换历史
         user.last_login = datetime.now()
     else:
         # 创建新用户
@@ -450,7 +450,7 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
             paragraphs_remaining=user_data.get('paragraphs_remaining', 0),
             total_paragraphs_used=user_data.get('total_paragraphs_used', 0),
             total_converted=user_data.get('total_converted', 0),
-            conversion_history=user_data.get('conversion_history', []),  # ✅ 修复：保存转换历史
+            conversion_history=user_data.get('conversion_history', []),  # [OK] 修复：保存转换历史
             is_active=True,
             last_login=datetime.now(),
         )

@@ -366,5 +366,24 @@
         "date": "2026-05-14"
       }
     ]
+  },
+  "7063c43cc2aa": {
+    "balance": 0.0,
+    "paragraphs_remaining": 10000,
+    "total_converted": 0,
+    "total_paragraphs_used": 0,
+    "recharge_history": [],
+    "conversion_history": [],
+    "last_free_quota_date": "2026-05-18",
+    "style_mappings": {},
+    "free_quota_history": [
+      {
+        "time": "2026-05-18 09:05:51",
+        "amount": 10000,
+        "type": "daily_free_quota",
+        "date": "2026-05-18"
+      }
+    ],
+    "last_login": "2026-05-18T09:09:50.486828"
   }
 }

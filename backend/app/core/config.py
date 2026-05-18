@@ -22,14 +22,14 @@ def _load_database_url():
             secrets_db_url = st.secrets.get('DATABASE_URL')
             if secrets_db_url:
                 database_url = secrets_db_url
-                print(f"✅ 从 Streamlit Secrets 加载 DATABASE_URL")
+                print(f"[OK] 从 Streamlit Secrets 加载 DATABASE_URL")
     except Exception as e:
-        print(f"⚠️ 读取 Streamlit Secrets 失败: {e}")
+        print(f"[WARN] 读取 Streamlit Secrets 失败: {e}")
     
     # 2. 从环境变量读取
     if not database_url:
         database_url = os.getenv("DATABASE_URL", "sqlite:///./wordstyle.db")
-        print(f"📝 从环境变量加载 DATABASE_URL")
+        print(f"[INFO] 从环境变量加载 DATABASE_URL")
     
     # 3. 自动转换连接池器为直连地址（Streamlit Cloud 兼容）
     if database_url and database_url.startswith("postgresql"):
@@ -69,10 +69,10 @@ def _load_database_url():
                     parsed.fragment
                 ))
                 
-                print(f"✅ 自动转换连接池器为直连地址（Streamlit Cloud 兼容）")
+                print(f"[OK] 自动转换连接池器为直连地址（Streamlit Cloud 兼容）")
                 print(f"   原始: {database_url[:60]}...")
             except Exception as e:
-                print(f"⚠️ URL 转换失败: {e}，使用原始 URL")
+                print(f"[WARN] URL 转换失败: {e}，使用原始 URL")
     
     return database_url
 

@@ -29,16 +29,16 @@ def upgrade() -> None:
         # PostgreSQL 使用 JSONB，SQLite 使用 JSON
         if conn.dialect.name == 'postgresql':
             op.add_column('users', sa.Column('conversion_history', JSONB, nullable=True, server_default='[]'))
-            print("✅ 已添加 conversion_history 字段 (JSONB)")
+            print("[OK] 已添加 conversion_history 字段 (JSONB)")
         else:
             # SQLite 不支持 JSONB，使用 TEXT 存储 JSON
             op.add_column('users', sa.Column('conversion_history', sa.Text, nullable=True))
-            print("✅ 已添加 conversion_history 字段 (TEXT for SQLite)")
+            print("[OK] 已添加 conversion_history 字段 (TEXT for SQLite)")
     else:
-        print("⚠️ conversion_history 字段已存在，跳过")
+        print("[WARN] conversion_history 字段已存在，跳过")
 
 
 def downgrade() -> None:
     """回滚：删除conversion_history字段"""
     op.drop_column('users', 'conversion_history')
-    print("✅ 已删除 conversion_history 字段")
+    print("[OK] 已删除 conversion_history 字段")

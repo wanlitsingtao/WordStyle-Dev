@@ -33,9 +33,9 @@ if os.path.exists(ws_db):
     
     if modifications:
         conn.commit()
-        print(f"\n✅ 成功添加了 {len(modifications)} 个字段: {', '.join(modifications)}")
+        print(f"\n[OK] 成功添加了 {len(modifications)} 个字段: {', '.join(modifications)}")
     else:
-        print("\n✅ 表结构已是最新的，无需修改")
+        print("\n[OK] 表结构已是最新的，无需修改")
     
     # 验证修复结果
     cursor.execute("PRAGMA table_info(users)")
@@ -46,7 +46,7 @@ if os.path.exists(ws_db):
     
     conn.close()
 else:
-    print("❌ 数据库文件不存在")
+    print("[ERROR] 数据库文件不存在")
 
 print("\n" + "="*60)
 print("=== 验证修复 ===")
@@ -58,8 +58,8 @@ if os.path.exists(ws_db):
     field_names = [col[1] for col in columns]
     
     if 'total_paragraphs_used' in field_names and 'total_converted' in field_names:
-        print("✅ 验证通过！所有必需字段都存在")
+        print("[OK] 验证通过！所有必需字段都存在")
     else:
-        print("❌ 验证失败！仍有缺失字段")
+        print("[ERROR] 验证失败！仍有缺失字段")
     
     conn.close()

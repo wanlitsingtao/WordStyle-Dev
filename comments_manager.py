@@ -188,21 +188,21 @@ if __name__ == "__main__":
     
     # 测试添加评论
     comment = add_comment("测试用户", "这是一个测试评论", 5, "test_user_123")
-    print(f"✅ 添加评论成功: ID={comment['id']}")
+    print(f"[OK] 添加评论成功: ID={comment['id']}")
     
     # 测试获取统计
     stats = get_comment_stats()
-    print(f"📊 评论统计: {stats}")
+    print(f"[STATS] 评论统计: {stats}")
     
     # 测试点赞
     like_comment(comment['id'])
-    print(f"👍 点赞成功")
+    print(f"[THUMBS_UP] 点赞成功")
     
     # 测试获取评论列表
     comments, total = get_comments()
-    print(f"📝 获取评论列表: {len(comments)} 条评论，共 {total} 条")
+    print(f"[INFO] 获取评论列表: {len(comments)} 条评论，共 {total} 条")
     
-    print("\n✅ 所有测试通过！")
+    print("\n[OK] 所有测试通过！")
 
 
 # ==================== 反馈管理功能 ====================

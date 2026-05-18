@@ -23,7 +23,7 @@ from data_manager import (
     delete_files,
     get_storage_stats
 )
-from comments_manager import delete_comment  # ✅ 修复：只保留delete_comment，其他改用API
+from comments_manager import delete_comment  # 修复：只保留delete_comment，其他改用API
 from config import DATA_SOURCE as CONFIG_DATA_SOURCE, DATABASE_URL
 
 # 在页面顶部显示数据源配置信息（用于调试）
@@ -339,7 +339,7 @@ def show_user_management():
 
 def show_task_management():
     """显示转换任务管理"""
-    st.title("📝 转换任务管理")
+    st.title("📋 转换任务管理")
     st.markdown("---")
     
     try:
@@ -386,7 +386,7 @@ def show_task_management():
                     'FAILED': '❌'
                 }.get(task.get('status', ''), '❓')
                 
-                # ✅ 修复：适配ConversionTask模型的实际字段
+                # [OK] 修复：适配ConversionTask模型的实际字段
                 # 从source_file提取文件名
                 source_file = task.get('source_file', '') or ''
                 filename = source_file.split('/')[-1].split('\\')[-1] if source_file else '-'
@@ -413,7 +413,7 @@ def show_task_management():
                 # 使用统一数据访问层
                 from data_manager import update_task_status
                 
-                # ✅ 修复：查找任务时使用id字段而不是task_id
+                # [OK] 修复：查找任务时使用id字段而不是task_id
                 task_found = any(str(t.get('id', '')) == selected_task_id for t in all_tasks)
                 
                 if task_found:
@@ -460,7 +460,7 @@ def show_feedback_management():
     st.markdown("---")
     
     try:
-        # ✅ 修复：使用 API 获取反馈统计（兼容多实例部署）
+        # [OK] 修复：使用 API 获取反馈统计（兼容多实例部署）
         import requests
         from config import BACKEND_URL
         
@@ -482,15 +482,15 @@ def show_feedback_management():
         # 显示统计信息
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("📝 总反馈数", stats.get('total', 0))
+            st.metric("ℹ️ 总反馈数", stats.get('total', 0))
         with col2:
-            st.metric("⏳ 待处理", stats.get('by_status', {}).get('pending', 0))  # ✅ 修复：使用正确的统计字段
+            st.metric("⏳ 待处理", stats.get('by_status', {}).get('pending', 0))  # [OK] 修复：使用正确的统计字段
         with col3:
-            st.metric("✅ 已处理", stats.get('by_status', {}).get('resolved', 0))  # ✅ 修复：使用resolved而非processed
+            st.metric("✅ 已处理", stats.get('by_status', {}).get('resolved', 0))  # 修复：使用resolved而非processed
         
         st.markdown("---")
         
-        # ✅ 修复：统一数据源 - 始终从Supabase数据库读取反馈
+        # [OK] 修复：统一数据源 - 始终从Supabase数据库读取反馈
         # 不再使用本地JSON文件，确保与管理页面数据一致
         all_feedbacks = []
         
@@ -514,7 +514,7 @@ def show_feedback_management():
                 all_feedbacks = []
         
         if all_feedbacks:
-            # ✅ 新增：分页功能
+            # [OK] 新增：分页功能
             PAGE_SIZE = 10  # 每页显示10条
             total_pages = (len(all_feedbacks) + PAGE_SIZE - 1) // PAGE_SIZE
             
@@ -541,7 +541,7 @@ def show_feedback_management():
             # 显示反馈列表（仅当前页）
             feedback_data = []
             for fb in page_feedbacks:
-                # ✅ 修复：兼容多种字段名（API返回、数据库直接读取、本地存储）
+                # [OK] 修复：兼容多种字段名（API返回、数据库直接读取、本地存储）
                 # ID字段：优先使用id，其次feedback_id
                 fb_id_raw = fb.get('id') or fb.get('feedback_id') or ''
                 fb_id = str(fb_id_raw)
@@ -598,20 +598,20 @@ def show_feedback_management():
                     # 显示完整内容
                     with st.expander("查看完整反馈内容", expanded=True):
                         st.write(f"**用户ID:** {feedback_found.get('user_id', '-')}")
-                        st.write(f"**类型:** {feedback_found.get('feedback_type', '-')}")  # ✅ 修复：使用正确的字段名
-                        st.write(f"**标题:** {feedback_found.get('title', '-')}")  # ✅ 修复：使用title
-                        st.write(f"**描述:** {feedback_found.get('description', '-')}")  # ✅ 修复：使用description
+                        st.write(f"**类型:** {feedback_found.get('feedback_type', '-')}")  # [OK] 修复：使用正确的字段名
+                        st.write(f"**标题:** {feedback_found.get('title', '-')}")  # [OK] 修复：使用title
+                        st.write(f"**描述:** {feedback_found.get('description', '-')}")  # [OK] 修复：使用description
                         st.write(f"**联系方式:** {feedback_found.get('contact', '-')}")
-                        st.write(f"**提交时间:** {feedback_found.get('created_at', feedback_found.get('timestamp', ''))}")  # ✅ 修复：优先使用created_at
+                        st.write(f"**提交时间:** {feedback_found.get('created_at', feedback_found.get('timestamp', ''))}")  # [OK] 修复：优先使用created_at
                         status_text = "✅ 已处理" if feedback_found.get('status') == 'resolved' else ("🔄 处理中" if feedback_found.get('status') == 'processing' else "⏳ 待处理")
-                        st.write(f"**状态:** {status_text}")  # ✅ 修复：使用status字段
+                        st.write(f"**状态:** {status_text}")  # [OK] 修复：使用status字段
                     
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        if feedback_found.get('status') != 'resolved':  # ✅ 修复：使用status字段
+                        if feedback_found.get('status') != 'resolved':  # [OK] 修复：使用status字段
                             if st.button("标记为已处理", key=f"process_{selected_feedback_id}"):
-                                # ✅ 修复：使用 API 更新状态
+                                # [OK] 修复：使用 API 更新状态
                                 import requests
                                 from config import BACKEND_URL
                                 
@@ -877,6 +877,46 @@ def show_system_config():
             with col_info5:
                 st.caption(f"最后更新: {task_expiry_config.get('updated_at', 'N/A')}")
         
+        # ==================== 维护模式 ====================
+        with st.expander("🔧 维护模式配置", expanded=False):
+            st.markdown("**系统维护模式开关（启用后用户将无法访问主应用）**")
+            
+            maintenance_mode_config = configs_dict.get('maintenance_mode', {})
+            current_mode = maintenance_mode_config.get('config_value', 'false').lower() == 'true'
+            
+            maintenance_mode = st.toggle(
+                "启用维护模式",
+                value=current_mode,
+                help="启用后，所有用户访问主应用时将显示维护页面，管理员仍可访问管理后台",
+                key="input_maintenance_mode"
+            )
+            
+            # 显示当前状态
+            if current_mode:
+                st.warning("⚠️ **当前状态：维护模式已启用** - 用户无法访问主应用")
+            else:
+                st.success("✅ **当前状态：正常运行** - 用户可以正常访问")
+            
+            col_save6, col_info6 = st.columns([1, 4])
+            with col_save6:
+                if st.button("💾 保存维护模式", key="save_maintenance", use_container_width=True, type="primary" if maintenance_mode != current_mode else "secondary"):
+                    try:
+                        result = update_config('maintenance_mode', 'true' if maintenance_mode else 'false')
+                        if result.get('success'):
+                            if maintenance_mode:
+                                st.success("✅ 维护模式已启用 - 用户将被重定向到维护页面")
+                            else:
+                                st.success("✅ 维护模式已禁用 - 系统恢复正常")
+                            st.session_state.config_refresh += 1
+                            st.rerun()
+                        else:
+                            st.error("❌ 保存失败")
+                    except Exception as e:
+                        st.error(f"❌ 保存失败: {str(e)}")
+            
+            with col_info6:
+                st.caption(f"最后更新: {maintenance_mode_config.get('updated_at', 'N/A')}")
+        
         # ==================== 批量操作 ====================
         st.markdown("---")
         st.subheader("🚀 批量操作")
@@ -889,7 +929,7 @@ def show_system_config():
                 config_export = {k: v['config_value'] for k, v in configs_dict.items()}
                 st.json(config_export)
                 st.download_button(
-                    label="📥 下载配置文件",
+                    label="[DOWNLOAD] 下载配置文件",
                     data=json.dumps(config_export, indent=2, ensure_ascii=False),
                     file_name="system_config.json",
                     mime="application/json"
@@ -912,7 +952,7 @@ def show_system_config():
         st.exception(e)
     
     st.markdown("---")
-    st.caption("💡 提示：修改配置后立即生效，无需重启服务")
+    st.caption("[TIP] 提示：修改配置后立即生效，无需重启服务")
 
 # ==================== 文件管理 ====================
 
@@ -1117,7 +1157,7 @@ def main():
             [
                 "📊 数据看板",
                 "👥 用户管理",
-                "📝 转换任务",
+                "📋 转换任务",
                 "💬 用户反馈",
                 "💰 订单管理",
                 "⚙️ 系统配置",
@@ -1135,7 +1175,7 @@ def main():
         show_dashboard()
     elif page == "👥 用户管理":
         show_user_management()
-    elif page == "📝 转换任务":
+    elif page == "📋 转换任务":
         show_task_management()
     elif page == "💬 用户反馈":
         show_feedback_management()

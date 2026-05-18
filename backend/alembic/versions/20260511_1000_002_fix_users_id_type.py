@@ -32,41 +32,41 @@ def upgrade():
     print("第1步：删除外键约束...")
     op.drop_constraint('orders_user_id_fkey', 'orders', type_='foreignkey')
     op.drop_constraint('conversion_tasks_user_id_fkey', 'conversion_tasks', type_='foreignkey')
-    print("✅ 外键约束已删除")
+    print("[OK] 外键约束已删除")
     
     # 第2步：删除 users 表的主键约束
     print("第2步：删除主键约束...")
     op.drop_constraint('users_pkey', 'users', type_='primary')
-    print("✅ 主键约束已删除")
+    print("[OK] 主键约束已删除")
     
     # 第3步：删除旧的 UUID 类型 id 列
     print("第3步：删除旧的 id 列...")
     op.drop_column('users', 'id')
-    print("✅ 旧 id 列已删除")
+    print("[OK] 旧 id 列已删除")
     
     # 第4步：添加新的 VARCHAR(12) 类型 id 列（不带 primary_key 参数）
     print("第4步：添加新的 id 列...")
     op.add_column('users', sa.Column('id', sa.String(12), nullable=False))
-    print("✅ 新 id 列已添加")
+    print("[OK] 新 id 列已添加")
     
     # 第4b步：创建主键约束
     print("第4b步：创建主键约束...")
     op.create_primary_key('users_pkey', 'users', ['id'])
-    print("✅ 主键约束已创建")
+    print("[OK] 主键约束已创建")
     
     # 第5步：修改 orders 表的 user_id 字段类型
     print("第5步：修改 orders.user_id 类型...")
     op.alter_column('orders', 'user_id',
                     existing_type=sa.String(36),  # UUID 字符串长度
                     type_=sa.String(12))
-    print("✅ orders.user_id 类型已修改")
+    print("[OK] orders.user_id 类型已修改")
     
     # 第6步：修改 conversion_tasks 表的 user_id 字段类型
     print("第6步：修改 conversion_tasks.user_id 类型...")
     op.alter_column('conversion_tasks', 'user_id',
                     existing_type=sa.String(36),  # UUID 字符串长度
                     type_=sa.String(12))
-    print("✅ conversion_tasks.user_id 类型已修改")
+    print("[OK] conversion_tasks.user_id 类型已修改")
     
     # 第7步：重新添加外键约束
     print("第7步：重新添加外键约束...")
@@ -74,9 +74,9 @@ def upgrade():
                           ['user_id'], ['id'])
     op.create_foreign_key('conversion_tasks_user_id_fkey', 'conversion_tasks', 'users',
                           ['user_id'], ['id'])
-    print("✅ 外键约束已重新添加")
+    print("[OK] 外键约束已重新添加")
     
-    print("\n🎉 数据库迁移完成！")
+    print("\n[PARTY] 数据库迁移完成！")
 
 
 def downgrade():

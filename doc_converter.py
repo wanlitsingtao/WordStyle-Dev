@@ -625,7 +625,7 @@ class DocumentConverter:
             cleaned_text = self.remove_manual_numbering(full_text)
             new_para.clear()
             new_para.add_run(cleaned_text)
-            # ⚡ 使用统一的图片处理方法
+            # [HIGH_VOLTAGE] 使用统一的图片处理方法
             self.extract_and_add_images(source_para, new_para, page_width_emu, available_width_emu)
             return new_para
         
@@ -637,7 +637,7 @@ class DocumentConverter:
             cleaned_text = clean_list_numbering(full_text)
             if cleaned_text:
                 new_para.add_run(cleaned_text)
-            # ⚡ 使用统一的图片处理方法
+            # [HIGH_VOLTAGE] 使用统一的图片处理方法
             self.extract_and_add_images(source_para, new_para, page_width_emu, available_width_emu)
             return new_para
         
@@ -646,7 +646,7 @@ class DocumentConverter:
             if run.text:
                 new_para.add_run(run.text)
         
-        # ⚡ 使用统一的图片处理方法
+        # [HIGH_VOLTAGE] 使用统一的图片处理方法
         self.extract_and_add_images(source_para, new_para, page_width_emu, available_width_emu)
         
         return new_para
@@ -852,7 +852,7 @@ class DocumentConverter:
                 if outline_check is not None:
                     val_check = outline_check.get(qn('w:val'))
         
-        # ⚡ 性能优化：使用缓存的样式列表，避免重复分析
+        # [HIGH_VOLTAGE] 性能优化：使用缓存的样式列表，避免重复分析
         if source_styles_cache:
             self.source_styles = source_styles_cache
         else:
@@ -1898,7 +1898,7 @@ class DocumentConverter:
                      source_styles_cache=None):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
-        ⚡ 性能优化：合并为一次性流水线，避免多次加载/保存文档
+        [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
         :param source_file: 源文件
         :param template_file: 模板文件
         :param output_file: 最终输出文件
@@ -1923,7 +1923,7 @@ class DocumentConverter:
         if progress_callback:
             progress_callback(1, "正在进行转换...")
         
-        # ========== ⚡ 性能优化：一次性流水线处理 ==========
+        # ========== [HIGH_VOLTAGE] 性能优化：一次性流水线处理 ==========
         # 原来：Load → StyleConv → Save → Load → MoodConv → Save → Load → AnswerInsert → Save
         # 现在：  Load → StyleConv → MoodConv → AnswerInsert → Save（一次加载，一次保存）
         
@@ -2048,7 +2048,7 @@ class DocumentConverter:
     def _convert_styles_in_memory(self, source_file, template_file, custom_style_map=None, list_bullet=None,
                                    warning_callback=None, source_styles_cache=None):
         """
-        ⚡ 性能优化：在内存中进行样式转换，不保存中间文件
+        [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
         :return: Document对象或None（失败时）
         """
         try:
@@ -2119,7 +2119,7 @@ class DocumentConverter:
     
     def _convert_mood_in_memory(self, doc):
         """
-        ⚡ 性能优化：在内存中进行语气转换，不保存中间文件
+        [HIGH_VOLTAGE] 性能优化：在内存中进行语气转换，不保存中间文件
         :param doc: Document对象
         :return: True/False
         """
@@ -2150,7 +2150,7 @@ class DocumentConverter:
     
     def _insert_response_in_memory(self, doc, answer_text=None, answer_style=None, mode='before_heading'):
         """
-        ⚡ 性能优化：在内存中插入应答句，不保存中间文件
+        [HIGH_VOLTAGE] 性能优化：在内存中插入应答句，不保存中间文件
         :param doc: Document对象
         :param answer_text: 应答文本
         :param answer_style: 应答样式

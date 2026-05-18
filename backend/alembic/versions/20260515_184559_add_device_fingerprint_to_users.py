@@ -27,13 +27,13 @@ def upgrade() -> None:
     if 'device_fingerprint' not in columns:
         op.add_column('users', sa.Column('device_fingerprint', sa.String(64), nullable=True))
         op.create_index(op.f('ix_users_device_fingerprint'), 'users', ['device_fingerprint'], unique=False)
-        print("✅ 已添加 device_fingerprint 字段")
+        print("[OK] 已添加 device_fingerprint 字段")
     else:
-        print("⚠️ device_fingerprint 字段已存在，跳过")
+        print("[WARN] device_fingerprint 字段已存在，跳过")
 
 
 def downgrade() -> None:
     """回滚：删除device_fingerprint字段"""
     op.drop_index(op.f('ix_users_device_fingerprint'), table_name='users')
     op.drop_column('users', 'device_fingerprint')
-    print("✅ 已删除 device_fingerprint 字段")
+    print("[OK] 已删除 device_fingerprint 字段")

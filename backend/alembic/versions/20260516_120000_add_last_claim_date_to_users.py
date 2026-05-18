@@ -26,12 +26,12 @@ def upgrade() -> None:
     
     if 'last_claim_date' not in columns:
         op.add_column('users', sa.Column('last_claim_date', sa.DateTime(timezone=True), nullable=True))
-        print("✅ 已添加 last_claim_date 字段")
+        print("[OK] 已添加 last_claim_date 字段")
     else:
-        print("⚠️ last_claim_date 字段已存在，跳过")
+        print("[WARN] last_claim_date 字段已存在，跳过")
 
 
 def downgrade() -> None:
     """回滚：删除last_claim_date字段"""
     op.drop_column('users', 'last_claim_date')
-    print("✅ 已删除 last_claim_date 字段")
+    print("[OK] 已删除 last_claim_date 字段")
