@@ -1198,7 +1198,8 @@ def get_all_configs() -> Dict:
         try:
             api_url = f"{BACKEND_URL.rstrip('/')}/admin/configs"
             logger.info(f"[DEBUG] 请求 API: {api_url}")
-            response = requests.get(api_url, timeout=10)
+            # [FIX] 增加超时时间到 30 秒
+            response = requests.get(api_url, timeout=30)
             logger.info(f"[DEBUG] API 响应状态码: {response.status_code}")
             response.raise_for_status()
             result = response.json()
