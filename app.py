@@ -810,7 +810,7 @@ try:
 <style>
     /* 全局样式 */
     .stApp {
-        background-color: #000000;
+        background-color: #000000 !important;
         margin: 0 !important;
         padding: 0 !important;
     }
@@ -837,6 +837,14 @@ try:
     main {
         padding-top: 0 !important;
         margin-top: 0 !important;
+        display: block !important;
+        visibility: visible !important;
+    }
+    
+    /* 确保内容可见 */
+    div[data-testid="stVerticalBlock"] {
+        display: block !important;
+        visibility: visible !important;
     }
     
     /* 呼吸动画文字 */
@@ -847,12 +855,14 @@ try:
     
     .breathe-text {
         animation: breathe 3s ease-in-out infinite;
-        color: #ffffff;
+        color: #ffffff !important;
         font-size: 2rem;
         font-weight: bold;
         text-align: center;
         margin-top: 2rem;
         text-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
+        display: block !important;
+        visibility: visible !important;
     }
 </style>
 """, unsafe_allow_html=True)
