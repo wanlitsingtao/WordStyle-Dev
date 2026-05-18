@@ -859,15 +859,24 @@ try:
         
         # 显示Logo图片
         if logo_path.exists():
-            with open(logo_path, 'rb') as f:
-                encoded_image = base64.b64encode(f.read()).decode()
-            
-            st.markdown(f'''
-            <div style="width: 100%; margin: 0; padding: 0;">
-                <img src="data:image/png;base64,{encoded_image}" 
-                     style="width: 100%; height: auto; display: block; margin: 0; padding: 0;">
-            </div>
-            ''', unsafe_allow_html=True)
+            try:
+                with open(logo_path, 'rb') as f:
+                    encoded_image = base64.b64encode(f.read()).decode()
+                logger.info(f"[维护模式] Logo图片加载成功，大小: {len(encoded_image)} bytes")
+                
+                st.markdown(f'''
+                <div style="width: 100%; margin: 0; padding: 0;">
+                    <img src="data:image/png;base64,{encoded_image}" 
+                         style="width: 100%; height: auto; display: block; margin: 0; padding: 0;">
+                </div>
+                ''', unsafe_allow_html=True)
+            except Exception as e:
+                logger.error(f"[维护模式] Logo图片加载失败: {e}")
+                st.markdown('<div style="text-align: center; color: white; padding: 2rem;">🔧</div>', unsafe_allow_html=True)
+        else:
+            logger.warning(f"[维护模式] Logo图片不存在: {logo_path}")
+            # 显示备用图标
+            st.markdown('<div style="text-align: center; color: white; padding: 2rem; font-size: 4rem;">🔧</div>', unsafe_allow_html=True)
         
         # 显示呼吸文字
         st.markdown('''
