@@ -5,6 +5,8 @@
 - local: 本地开发（SQLite + JSON）
 - supabase: 直接连接 Supabase（Render 等允许出站数据库连接的环境）
 - api: 通过后端 API 获取数据（Streamlit Cloud 等受限环境）
+
+[2026-05-18] 修复：确保 get_all_configs 和 update_config 函数可被正确导入
 """
 import os
 import sys
