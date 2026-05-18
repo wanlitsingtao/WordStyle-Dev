@@ -84,7 +84,13 @@ try:
         script_dir = Path(__file__).parent
         logo_path = script_dir / "resource" / "wh.png"
         
-        # 注意：st.set_page_config 已在第9行调用，这里不再重复调用
+        # 重新设置页面配置（覆盖第9行的配置）
+        st.set_page_config(
+            page_title="系统维护中",
+            page_icon="🔧",
+            layout="wide",
+            initial_sidebar_state="collapsed"
+        )
         
         # 自定义CSS - 黑色背景，移除所有空白
         st.markdown("""
