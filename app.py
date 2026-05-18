@@ -873,7 +873,7 @@ try:
                     encoded_image = base64.b64encode(f.read()).decode()
                 
                 st.markdown(f'''
-                <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: -1;">
+                <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0;">
                     <img src="data:image/png;base64,{encoded_image}" 
                          style="width: 100%; height: 100%; object-fit: cover; display: block; margin: 0; padding: 0;">
                 </div>
@@ -881,9 +881,9 @@ try:
             except Exception as e:
                 logger.error(f"[维护模式] Logo图片加载失败: {e}")
         
-        # 显示呼吸文字
+        # 显示呼吸文字（确保在图片上方）
         st.markdown('''
-<div class="breathe-text">
+<div class="breathe-text" style="position: relative; z-index: 1;">
     我会回来的！
 </div>
 ''', unsafe_allow_html=True)
