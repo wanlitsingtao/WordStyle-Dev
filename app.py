@@ -1389,13 +1389,22 @@ def render_conversion_config():
     3. 预计算索引，避免重复遍历
     """
     
-    # 第一行：四个选项横向等距分布
+    # 第一行:四个选项横向等距分布
     col1, col2, col3, col4 = st.columns(4)
-
+    
     with col1:
-        if st.button("📊 样式映射", key="open_style_mapping_btn", use_container_width=True, help="如果不采用系统给的默认配置，可自定义样式映射"):
-            # 直接调用对话框，不使用session_state标记
+        if st.button("📊 样式映射", key="open_style_mapping_btn", use_container_width=True, help="如果不采用系统给的默认配置,可自定义样式映射"):
+            # 直接调用对话框,不使用session_state标记
             show_style_mapping_dialog()
+            # [FIX] 对话框显示后,返回默认值避免解包错误
+            return (
+                st.session_state.do_mood_config,
+                st.session_state.do_answer_config,
+                st.session_state.list_bullet_config,
+                st.session_state.answer_text_config,
+                st.session_state.answer_style_config,
+                st.session_state.answer_mode_config
+            )
 
     with col2:
         do_mood = st.checkbox(
