@@ -72,7 +72,119 @@ from config import (
     LAYOUT, SIDEBAR_STATE, FREE_PARAGRAPHS_DAILY, DATA_SOURCE  # [OK] 修复：添加DATA_SOURCE导入
 )
 
-# [OK] 维护模式检查已移至 main() 函数内，以便每次页面渲染时检查
+# [OK] 检查维护模式（在所有业务逻辑之前）
+try:
+    from data_manager import get_config
+    maintenance_mode = get_config('maintenance_mode')
+    if maintenance_mode and maintenance_mode.lower() == 'true':
+        # 如果启用维护模式，显示维护页面
+        import base64
+        
+        # 获取当前脚本所在目录
+        script_dir = Path(__file__).parent
+        logo_path = script_dir / "resource" / "wh.png"
+        
+        # 注意：st.set_page_config 已在第9行调用，这里不再重复调用
+        
+        # 自定义CSS - 黑色背景，移除所有空白
+        st.markdown("""
+<style>
+    /* 全局样式 */
+    .stApp {
+        background-color: #000000;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* 隐藏默认Streamlit元素 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    [data-testid="stHeader"] {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    
+    /* 移除所有默认内边距 */
+    .block-container {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        max-width: 100% !important;
+    }
+    
+    /* main容器 */
+    main {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }
+    
+    /* 呼吸动画文字 */
+    @keyframes breathe {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.6; transform: scale(1.05); }
+    }
+    
+    .breathe-text {
+        animation: breathe 3s ease-in-out infinite;
+        color: #ffffff;
+        font-size: 2rem;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 2rem;
+        text-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
+    }
+</style>
+""", unsafe_allow_html=True)
+        
+        # 显示Logo图片
+        if logo_path.exists():
+            with open(logo_path, 'rb') as f:
+                encoded_image = base64.b64encode(f.read()).decode()
+            
+            st.markdown(f'''
+            <div style="width: 100%; margin: 0; padding: 0;">
+                <img src="data:image/png;base64,{encoded_image}" 
+                     style="width: 100%; height: auto; display: block; margin: 0; padding: 0;">
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # 显示呼吸文字
+        st.markdown('''
+<div class="breathe-text">
+    我会回来的！
+</div>
+''', unsafe_allow_html=True)
+        
+        # 隐藏Streamlit默认菜单和footer
+        st.markdown("""
+<script>
+    // 隐藏Streamlit的部署按钮
+    if (window.parent.document.querySelector('[data-testid="stToolbar"]')) {
+        window.parent.document.querySelector('[data-testid="stToolbar"]').style.display = 'none';
+    }
+    
+    // 移除顶部空白
+    setTimeout(function() {
+        var main = window.parent.document.querySelector('main');
+        if (main) {
+            main.style.paddingTop = '0';
+            main.style.marginTop = '0';
+        }
+        
+        var blockContainer = window.parent.document.querySelector('.block-container');
+        if (blockContainer) {
+            blockContainer.style.paddingTop = '0';
+            blockContainer.style.marginTop = '0';
+        }
+    }, 100);
+</script>
+""", unsafe_allow_html=True)
+        
+        st.stop()  # 停止执行后续代码
+except Exception as e:
+    logger.warning(f"维护模式检查失败（不影响服务）: {e}")
 
 # 导入工具函数
 from utils import (
@@ -791,113 +903,6 @@ except Exception as e:
 # ==================== 应用启动时清理临时文件 ====================
 # [WARN] 已禁用：cleanup_on_startup 函数已被移除
 # 临时文件清理功能已整合到其他模块中
-
-# ==================== 维护模式检查（每次页面渲染时执行）====================
-try:
-    from data_manager import get_config
-    maintenance_mode = get_config('maintenance_mode')
-    
-    if maintenance_mode and maintenance_mode.lower() == 'true':
-        # 如果启用维护模式，显示维护页面并停止执行
-        import base64
-        
-        # 获取当前脚本所在目录
-        script_dir = Path(__file__).parent
-        logo_path = script_dir / "resource" / "wh.png"
-        
-        # 自定义CSS - 黑色背景，移除所有空白
-        st.markdown("""
-<style>
-    /* 全局样式 */
-    .stApp {
-        background-color: #000000 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    
-    /* 隐藏默认Streamlit元素 */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    [data-testid="stHeader"] {display: none !important;}
-    [data-testid="stToolbar"] {display: none !important;}
-    
-    /* 移除所有默认内边距 */
-    .block-container {
-        padding-top: 0 !important;
-        padding-bottom: 0 !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-        margin-top: 0 !important;
-        margin-bottom: 0 !important;
-        max-width: 100% !important;
-    }
-    
-    /* main容器 */
-    main {
-        padding-top: 0 !important;
-        margin-top: 0 !important;
-        display: block !important;
-        visibility: visible !important;
-    }
-    
-    /* 确保内容可见 */
-    div[data-testid="stVerticalBlock"] {
-        display: block !important;
-        visibility: visible !important;
-    }
-    
-    /* 呼吸动画文字 */
-    @keyframes breathe {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.6; transform: scale(1.05); }
-    }
-    
-    .breathe-text {
-        animation: breathe 3s ease-in-out infinite;
-        color: #ffffff !important;
-        font-size: 2rem;
-        font-weight: bold;
-        text-align: center;
-        margin-top: 2rem;
-        text-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
-        display: block !important;
-        visibility: visible !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-        
-        # 显示Logo图片
-        if logo_path.exists():
-            try:
-                with open(logo_path, 'rb') as f:
-                    encoded_image = base64.b64encode(f.read()).decode()
-                logger.info(f"[维护模式] Logo图片加载成功，大小: {len(encoded_image)} bytes")
-                
-                st.markdown(f'''
-                <div style="width: 100%; margin: 0; padding: 0;">
-                    <img src="data:image/png;base64,{encoded_image}" 
-                         style="width: 100%; height: auto; display: block; margin: 0; padding: 0;">
-                </div>
-                ''', unsafe_allow_html=True)
-            except Exception as e:
-                logger.error(f"[维护模式] Logo图片加载失败: {e}")
-                st.markdown('<div style="text-align: center; color: white; padding: 2rem;">🔧</div>', unsafe_allow_html=True)
-        else:
-            logger.warning(f"[维护模式] Logo图片不存在: {logo_path}")
-            # 显示备用图标
-            st.markdown('<div style="text-align: center; color: white; padding: 2rem; font-size: 4rem;">🔧</div>', unsafe_allow_html=True)
-        
-        # 显示呼吸文字
-        st.markdown('''
-<div class="breathe-text">
-    我会回来的！
-</div>
-''', unsafe_allow_html=True)
-        
-        st.stop()  # 停止执行后续代码
-except Exception as e:
-    logger.warning(f"维护模式检查失败（不影响服务）: {e}")
 
 # ==================== 主界面 ====================
 st.title("📄 标书抄写神器（Beta0.1）")
