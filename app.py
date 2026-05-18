@@ -75,8 +75,13 @@ from config import (
 # [OK] 检查维护模式（在所有业务逻辑之前）
 try:
     from data_manager import get_config
+    logger.info(f"[维护模式] 开始检查 maintenance_mode 配置 (DATA_SOURCE={DATA_SOURCE})")
+    
     maintenance_mode = get_config('maintenance_mode')
+    logger.info(f"[维护模式] 获取结果: {maintenance_mode}")
+    
     if maintenance_mode and maintenance_mode.lower() == 'true':
+        logger.info("[维护模式] ✅ 维护模式已启用，显示维护页面")
         # 如果启用维护模式，显示维护页面
         import base64
         
