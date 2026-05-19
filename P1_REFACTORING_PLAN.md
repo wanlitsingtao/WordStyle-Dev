@@ -11,32 +11,18 @@
 
 - **P0**: style_mapping.py 添加 st.rerun() ✅ (Commit: e9ebdb8)
 
-## 🎯 P1-1: 拆分 app.py（当前任务）
+## 🎯 P1-1: 拆分 app.py（已完成）
 
-### 目标
-将 app.py 从 1311行减少到 ~600行
+### ✅ 已完成
+- 创建 components/upload.py (100行)
+- 提取4个工具函数: count_paragraphs, get_template_styles_list, analyze_source_styles, count_pages
+- app.py 从 1312行 → 1123行 (减少189行, 14.4%)
+- Commit: 8fcabfa
 
-### 计划拆分的组件
-```
-components/
-├── upload.py       # 文件上传与样式分析工具函数
-├── conversion.py   # 转换执行逻辑
-└── download.py     # 下载展示逻辑
-```
-
-### 执行步骤
-1. ✅ 创建组件目录结构
-2. ⏳ 提取 upload 相关函数（count_paragraphs, get_template_styles_list, analyze_source_styles, count_pages）
-3. ⏳ 提取 conversion 相关代码
-4. ⏳ 提取 download 相关代码
-5. ⏳ 更新 app.py 导入语句
-6. ⏳ 从 app.py 删除已提取的代码
-7. ⏳ 验证语法和功能
-
-### 预期成果
-- app.py: 1311行 → ~600行（减少54%）
-- 新增3个组件文件
-- 所有功能保持不变
+### ℹ️ 说明
+- conversion.py 和 download.py 暂不需要创建
+- 原因：当前版本中转换执行和下载功能尚未完全实现
+- 只有余额检查逻辑引用了 show_download_buttons
 
 ## 🎯 P1-2: data_manager.py 策略模式
 
