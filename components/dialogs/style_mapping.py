@@ -4,6 +4,7 @@
 从 app.py 提取
 """
 import streamlit as st
+from data_manager import load_user_data, save_user_data
 
 @st.dialog("📊 样式映射配置", width="large")
 def show_style_mapping_dialog():
