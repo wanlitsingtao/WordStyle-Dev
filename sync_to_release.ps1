@@ -72,9 +72,9 @@ Write-Host "  ✅ Alembic迁移脚本已同步" -ForegroundColor Green
 Write-Host ""
 
 # =====================================================
-# 步骤5: 同步数据库脚本和配置文件
+# 步骤5: 同步数据库脚本、配置文件和资源文件
 # =====================================================
-Write-Host "[5/6] 同步数据库脚本和配置..." -ForegroundColor Yellow
+Write-Host "[5/6] 同步数据库脚本、配置和资源..." -ForegroundColor Yellow
 
 # 数据库脚本
 if (Test-Path "$SourceDir\dbscript") {
@@ -88,6 +88,18 @@ if (Test-Path "$SourceDir\dbscript") {
 if (Test-Path "$SourceDir\.streamlit") {
     Copy-Item -Path "$SourceDir\.streamlit\*" -Destination "$TargetDir\.streamlit\" -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "  ✅ Streamlit配置已同步" -ForegroundColor Green
+}
+
+# 资源文件（图片等）
+if (Test-Path "$SourceDir\resource") {
+    # 确保目标目录存在
+    if (-not (Test-Path "$TargetDir\resource")) {
+        New-Item -ItemType Directory -Path "$TargetDir\resource" -Force | Out-Null
+    }
+    Copy-Item -Path "$SourceDir\resource\*" -Destination "$TargetDir\resource\" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "  ✅ 资源文件已同步" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠️  resource目录不存在，跳过" -ForegroundColor Yellow
 }
 
 Write-Host ""
