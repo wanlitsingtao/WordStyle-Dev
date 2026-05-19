@@ -29,7 +29,6 @@ from components.dialogs.style_mapping import show_style_mapping_dialog
 from state import app_state  # 统一状态管理器
 from components.config_panel import render_conversion_config
 from components.upload import count_paragraphs, get_template_styles_list, analyze_source_styles, count_pages
-from components.upload import count_paragraphs, get_template_styles_list, analyze_source_styles, count_pages
 
 # 配置日志系统
 logging.basicConfig(
@@ -243,12 +242,10 @@ def save_comments(comments):
 def add_comment(username, content, rating=5):
     """添加新评论（使用API提交到数据库）"""
     # [OK] 修复：使用 API 提交评论（兼容多实例部署）
-    from config import BACKEND_URL
     
     if BACKEND_URL and DATA_SOURCE == 'api':
         # API 模式：通过后端 API 提交
         try:
-            import requests
             api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/submit"
             response = requests.post(
                 api_url,
@@ -388,7 +385,6 @@ def show_comments_section():
 # ==================== 定期清理过期文件 ====================
 # 每次加载页面时检查并清理7天前的转换结果文件
 try:
-    from pathlib import Path
     import time
     results_dir = Path("conversion_results")
     if results_dir.exists():
@@ -705,7 +701,6 @@ with st.sidebar:
     
     # 显示ds.jpg图片
     try:
-        from pathlib import Path
         ds_image_path = Path("resource/ds.jpg")
         if ds_image_path.exists():
             st.image(str(ds_image_path), use_container_width=True)
@@ -769,7 +764,6 @@ if current_source_files:
         status_text.text(" 正在分析源文档...")
         
         # [HIGH_VOLTAGE] 性能优化：记录开始时间
-        import time
         start_time = time.time()
         
         # 分析源文档样式（基于段落数量更新进度条）
@@ -1028,7 +1022,6 @@ st.markdown("""
 with st.expander("📖 使用说明", expanded=False):
     # 动态获取免费额度配置
     try:
-        from data_manager import get_config
         free_paragraphs_value = get_config('free_paragraphs_daily')
         if free_paragraphs_value:
             free_paragraphs_display = f"{int(free_paragraphs_value):,}"
