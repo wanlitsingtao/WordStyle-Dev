@@ -796,7 +796,17 @@ try:
     from data_manager import get_config
     maintenance_mode = get_config('maintenance_mode')
     
-    if maintenance_mode and maintenance_mode.lower() == 'true':
+    # 处理多种可能的值类型：字符串'true'、布尔值True、字符串'1'等
+    is_maintenance = False
+    if maintenance_mode is not None:
+        if isinstance(maintenance_mode, bool):
+            is_maintenance = maintenance_mode
+        elif isinstance(maintenance_mode, str):
+            is_maintenance = maintenance_mode.lower() in ('true', '1', 'yes', 'on')
+        else:
+            is_maintenance = bool(maintenance_mode)
+    
+    if is_maintenance:
         # 如果启用维护模式，显示维护页面并停止执行
         import base64
         
