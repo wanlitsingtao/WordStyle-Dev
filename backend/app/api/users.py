@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from datetime import date, datetime
 from app.core.database import get_db
 from app.core.auth import get_current_user
-from app.models import User
+from app.models import User, SystemConfig
 from app.schemas import UserResponse, UserUpdate
 from app.core.config import settings
 
@@ -87,7 +87,12 @@ def claim_free_paragraphs(
                 }
         
         # 今日首次领取：重置为免费额度（不累计）
-        free_paragraphs = settings.FREE_PARAGRAPHS_DAILY
+        # [FIX] Bug#010: 优先从config表读取动态配置，若不存在则回退到settings硬编码值
+        config_record = db.query(SystemConfig).filter(
+            SystemConfig.config_key == "free_paragraphs_daily"
+        ).first()
+        free_paragraphs = int(config_record.config_value) if config_record else settings.FREE_PARAGRAPHS_DAILY
+        
         user.paragraphs_remaining = free_paragraphs
         user.last_claim_date = datetime.now()
         db.commit()

@@ -219,11 +219,17 @@ def get_or_create_user_by_device_api(
         用户信息字典
     """
     from datetime import datetime
-    from app.config import FREE_PARAGRAPHS_DAILY
+    from app.config import FREE_PARAGRAPHS_DAILY as FALLBACK_FREE_PARAGRAPHS
     import hashlib
     from fastapi import Request
     
     try:
+        # [FIX] Bug#010: 优先从config表读取动态配置，用于新用户初始额度
+        config_record = db.query(SystemConfig).filter(
+            SystemConfig.config_key == "free_paragraphs_daily"
+        ).first()
+        new_user_paragraphs = int(config_record.config_value) if config_record else FALLBACK_FREE_PARAGRAPHS
+        
         # [OK] 新增：获取客户端IP地址
         client_ip = "unknown"
         if request:
@@ -268,7 +274,7 @@ def get_or_create_user_by_device_api(
             id=user_id,
             device_fingerprint=device_fingerprint,
             balance=0.0,
-            paragraphs_remaining=FREE_PARAGRAPHS_DAILY,
+            paragraphs_remaining=new_user_paragraphs,
             total_paragraphs_used=0,
             total_converted=0,
             is_active=True,
@@ -285,7 +291,7 @@ def get_or_create_user_by_device_api(
             'success': True,
             'user_id': user_id,
             'is_new': True,
-            'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+            'paragraphs_remaining': new_user_paragraphs,
             'balance': 0.0,
             'total_converted': 0,
             'total_paragraphs_used': 0,
@@ -468,7 +474,7 @@ def create_or_update_user(user_id: str, user_data: dict, db: Session = Depends(g
 @router.post("/users/{user_id}/claim-free")
 def claim_free_paragraphs(user_id: str, db: Session = Depends(get_db)):
     """领取免费段落（供 API 模式调用）- 每日只领取一次"""
-    from app.config import FREE_PARAGRAPHS_DAILY
+    from app.config import FREE_PARAGRAPHS_DAILY as FALLBACK_FREE_PARAGRAPHS
     from datetime import datetime, date
     
     user = db.query(User).filter(User.id == user_id).first()
@@ -488,15 +494,21 @@ def claim_free_paragraphs(user_id: str, db: Session = Depends(get_db)):
                 'already_claimed': True
             }
     
+    # [FIX] Bug#010: 优先从config表读取动态配置，若不存在则回退到硬编码默认值
+    config_record = db.query(SystemConfig).filter(
+        SystemConfig.config_key == "free_paragraphs_daily"
+    ).first()
+    free_paragraphs = int(config_record.config_value) if config_record else FALLBACK_FREE_PARAGRAPHS
+    
     # 设置免费段落数并记录领取日期
-    user.paragraphs_remaining = FREE_PARAGRAPHS_DAILY
+    user.paragraphs_remaining = free_paragraphs
     user.last_claim_date = datetime.now()
     db.commit()
     
     return {
         'success': True,
-        'paragraphs': FREE_PARAGRAPHS_DAILY,
-        'message': f'已领取 {FREE_PARAGRAPHS_DAILY} 个免费段落',
+        'paragraphs': free_paragraphs,
+        'message': f'已领取 {free_paragraphs} 个免费段落',
         'already_claimed': False
     }
 
