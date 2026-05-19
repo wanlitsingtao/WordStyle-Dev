@@ -27,7 +27,7 @@ from components.dialogs.feedback import show_feedback_dialog
 from components.dialogs.history import show_history_dialog
 from components.dialogs.style_mapping import show_style_mapping_dialog
 from state import app_state  # 统一状态管理器
-from state import app_state
+from components.config_panel import render_conversion_config
 
 # 配置日志系统
 logging.basicConfig(

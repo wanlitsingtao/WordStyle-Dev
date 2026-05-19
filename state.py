@@ -318,6 +318,11 @@ class AppState:
         return st.session_state.get('feedback_form_reset', 0)
     
     @staticmethod
+    def set_feedback_form_reset(value: int):
+        """设置反馈表单重置计数器"""
+        st.session_state.feedback_form_reset = value
+    
+    @staticmethod
     def increment_feedback_form_reset():
         """递增反馈表单重置计数器"""
         st.session_state.feedback_form_reset = st.session_state.get('feedback_form_reset', 0) + 1
