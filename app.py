@@ -56,7 +56,7 @@ try:
         name='每日文件清理任务'
     )
     scheduler.start()
-    logger.info("[OK] 每日文件清理任务已启动（每天零点执行（)
+    logger.info("[OK] 每日文件清理任务已启动（每天零点执行）")
 except ImportError:
     logger.warning("[WARN] APScheduler未安装，跳过定时清理任务")
 except Exception as e:
