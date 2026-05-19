@@ -903,7 +903,7 @@ except Exception as e:
     logger.warning(f"维护模式检查失败（不影响服务）: {e}")
 
 # ==================== 主界面 ====================
-st.title("📄 标书抄写神器（Beta0.1）")
+st.title("📄 标书抄写神器")
 
 # 全屏提示
 st.markdown("""
