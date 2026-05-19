@@ -876,24 +876,24 @@ try:
 </style>
 """, unsafe_allow_html=True)
         
-        # 显示Logo图片（铺满全屏）
+        # 显示Logo图片（铺满全屏，完整显示不裁剪）
         if logo_path.exists():
             try:
                 with open(logo_path, 'rb') as f:
                     encoded_image = base64.b64encode(f.read()).decode()
                 
                 st.markdown(f'''
-                <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0;">
+                <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0; display: flex; align-items: center; justify-content: center;">
                     <img src="data:image/jpeg;base64,{encoded_image}" 
-                         style="width: 100%; height: 100%; object-fit: cover; display: block; margin: 0; padding: 0;">
+                         style="max-width: 100%; max-height: 85vh; object-fit: contain; display: block; margin: 0 auto;">
                 </div>
                 ''', unsafe_allow_html=True)
             except Exception as e:
                 logger.error(f"[维护模式] Logo图片加载失败: {e}")
         
-        # 显示呼吸文字（确保在图片上方）
+        # 显示呼吸文字（图片下方底部）
         st.markdown('''
-<div class="breathe-text" style="position: relative; z-index: 1;">
+<div class="breathe-text" style="position: fixed; bottom: 5vh; left: 0; right: 0; text-align: center; z-index: 1;">
     我会回来的！
 </div>
 ''', unsafe_allow_html=True)
