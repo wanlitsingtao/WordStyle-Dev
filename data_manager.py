@@ -92,11 +92,19 @@ if DATA_SOURCE == "local":
             # 用户不存在，创建新用户
             user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
             
+            # [FIX] 从 config 表动态读取免费额度，不再使用硬编码
+            try:
+                config = get_config('free_paragraphs_daily')
+                initial_paragraphs = int(config) if config else 10000
+            except Exception as e:
+                logger.warning(f"读取免费额度配置失败，使用默认值10000: {e}")
+                initial_paragraphs = 10000
+            
             # 准备用户数据
             new_user_data = {
                 'user_id': user_id,
                 'balance': 0.0,
-                'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+                'paragraphs_remaining': initial_paragraphs,
                 'total_paragraphs_used': 0,
                 'total_converted': 0,
                 'is_active': True,

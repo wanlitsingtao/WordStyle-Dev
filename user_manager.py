@@ -240,6 +240,8 @@ def _get_default_user_data():
 
 def claim_free_paragraphs(user_id=None):
     """领取每日免费额度（每天固定额度，不累计）"""
+    from data_manager import get_config
+    
     user_data = load_user_data(user_id)
     
     # 获取今天的日期
@@ -251,8 +253,13 @@ def claim_free_paragraphs(user_id=None):
         # 今天已经领取过，不再重复领取
         return 0
     
-    # 新的一天，重置免费额度
-    free_paragraphs = FREE_PARAGRAPHS_DAILY
+    # [FIX] 从 config 表动态读取免费额度，不再使用硬编码
+    try:
+        config = get_config('free_paragraphs_daily')
+        free_paragraphs = int(config) if config else 10000
+    except Exception as e:
+        logger.warning(f"读取免费额度配置失败，使用默认值10000: {e}")
+        free_paragraphs = 10000
     
     # 设置今日免费额度（不累计，直接设置为固定值）
     user_data['paragraphs_remaining'] = free_paragraphs
