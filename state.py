@@ -164,6 +164,18 @@ class AppState:
         """设置语气转换配置"""
         st.session_state.do_mood_config = enabled
     
+    
+    @staticmethod
+    def get_do_answer_config() -> bool:
+        """获取应答句插入配置"""
+        return st.session_state.get('do_answer_config', True)
+    
+    @staticmethod
+    def set_do_answer_config(enabled: bool):
+        """设置应答句插入配置"""
+        st.session_state.do_answer_config = enabled
+    
+    
     @staticmethod
     def get_answer_mode_config() -> str:
         """获取应答句插入模式"""
