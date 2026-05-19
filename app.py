@@ -1386,11 +1386,18 @@ def render_conversion_config():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button(" 样式映射", key="open_style_mapping_btn", use_container_width=True, help="如果不采用系统给的默认配置,可自定义样式映射"):
+        if st.button("📊 样式映射", key="open_style_mapping_btn", use_container_width=True, help="如果不采用系统给的默认配置,可自定义样式映射"):
             # 直接调用对话框,不使用session_state标记
             show_style_mapping_dialog()
-            # [FIX] 对话框关闭后，需要重新渲染fragment以显示其他配置
-            st.rerun()
+            # [FIX] 对话框显示后,返回默认值避免解包错误
+            return (
+                st.session_state.do_mood_config,
+                st.session_state.do_answer_config,
+                st.session_state.list_bullet_config,
+                st.session_state.answer_text_config,
+                st.session_state.answer_style_config,
+                st.session_state.answer_mode_config
+            )
 
     with col2:
         do_mood = st.checkbox(
@@ -2080,7 +2087,9 @@ def show_style_mapping_dialog():
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.success("✅ 样式映射已保存！")
-            # [OK] 不再使用st.rerun()，让对话框自然关闭
+            # [FIX] 必须调用st.rerun()关闭对话框，否则对话框不会自动关闭
+            # 用户需手动关闭对话框，这会导致fragment重渲染时widget状态丢失
+            st.rerun()
     
     with btn_col2:
         if st.button(" 恢复默认", key="reset_mapping_btn", use_container_width=True):
@@ -2093,7 +2102,8 @@ def show_style_mapping_dialog():
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.info("已恢复默认映射")
-            # [OK] 不再使用st.rerun()
+            # [FIX] 必须调用st.rerun()关闭对话框
+            st.rerun()
     
     with btn_col3:
         if st.button("❌ 关闭", key="cancel_mapping_btn", use_container_width=True):
