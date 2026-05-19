@@ -116,8 +116,8 @@ def show_style_mapping_dialog():
                 return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
-            st.success("✅ 样式映射已保存！")
-            st.rerun()  # [FIX] 刷新页面以应用新的样式映射
+            st.success(f"✅ 文件 '{selected_file.name}' 的样式映射已保存！您可以继续配置其他文件。")
+            # 注意：不要调用st.rerun()，让用户可以继续配置其他文件
     
     with btn_col2:
         if st.button(" 恢复默认", key="reset_mapping_btn", use_container_width=True):
@@ -129,8 +129,8 @@ def show_style_mapping_dialog():
                 return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
-            st.info("已恢复默认映射")
-            st.rerun()  # [FIX] 刷新页面以应用重置后的映射
+            st.info(f"已恢复文件 '{selected_file.name}' 的默认映射，您可以继续配置其他文件。")
+            # 注意：不要调用st.rerun()，让用户可以继续配置其他文件
     
     with btn_col3:
         if st.button("❌ 关闭", key="cancel_mapping_btn", use_container_width=True):

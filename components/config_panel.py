@@ -35,15 +35,7 @@ def render_conversion_config():
             # 直接调用对话框,不使用session_state标记
             from components.dialogs.style_mapping import show_style_mapping_dialog
             show_style_mapping_dialog()
-            # [FIX] 对话框显示后,返回默认值避免解包错误
-            return (
-                st.session_state.do_mood_config,
-                st.session_state.do_answer_config,
-                st.session_state.list_bullet_config,
-                st.session_state.answer_text_config,
-                st.session_state.answer_style_config,
-                st.session_state.answer_mode_config
-            )
+            # 注意：不要在这里return，让函数继续执行以渲染其他控件
 
     with col2:
         do_mood = st.checkbox(
