@@ -955,17 +955,34 @@ if 'answer_style_config' not in st.session_state:
 if 'answer_mode_config' not in st.session_state:
     app_state.set_answer_mode_config('before_heading')
 
-# ==================== [FIX] 调用配置区组件渲染实际的UI控件 ====================
-# render_conversion_config() 来自 components/config_panel.py
-# 包含：样式映射按钮、祈使语气转换checkbox、插入应答句checkbox、
-#       列表符号text_input、应答句文本、应答句样式selectbox、插入模式selectbox
-do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode = render_conversion_config()
+# 第一行：四个选项横向等距分布（中线对齐）
+# 使用CSS实现控件垂直居中对齐
+st.markdown("""
+<style>
+    /* 让所有列内的元素容器垂直居中 */
+    [data-testid="column"] > div {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        min-height: 40px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# 不插入应答句时使用默认值（确保变量存在）
-if not do_answer:
-    answer_text = app_state.get_answer_text_config()
-    answer_style = app_state.get_answer_style_config()
-    answer_mode = app_state.get_answer_mode_config()
+# ==================== 转换配置区（使用fragment隔离） ====================
+
+# 缓存稳定的options引用，避免每次重渲染都重建
+@st.cache_data(ttl=3600)
+def get_answer_mode_options():
+    """获取应答句插入模式选项（带缓存，保持引用稳定）"""
+    return {
+        'before_heading': '章节前插入',
+        'after_heading': '章节后插入',
+        'copy_chapter': '章节招标原文+应答句+招标原文副本',
+        'before_paragraph': '逐段前应答',
+        'after_paragraph': '逐段后应答'
+    }
 
 st.markdown("---")
 st.subheader("📖 使用说明")
