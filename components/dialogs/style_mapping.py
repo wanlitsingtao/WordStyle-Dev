@@ -116,7 +116,7 @@ def show_style_mapping_dialog():
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.success("✅ 样式映射已保存！")
-            # [OK] 不再使用st.rerun()，让对话框自然关闭
+            st.rerun()  # [FIX] 刷新页面以应用新的样式映射
     
     with btn_col2:
         if st.button(" 恢复默认", key="reset_mapping_btn", use_container_width=True):
@@ -129,7 +129,7 @@ def show_style_mapping_dialog():
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
             st.info("已恢复默认映射")
-            # [OK] 不再使用st.rerun()
+            st.rerun()  # [FIX] 刷新页面以应用重置后的映射
     
     with btn_col3:
         if st.button("❌ 关闭", key="cancel_mapping_btn", use_container_width=True):
