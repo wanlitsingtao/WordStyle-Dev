@@ -22,6 +22,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager  # 添加缺失的导入
 
+# ==================== 组件导入 ====================
+from components.dialogs.feedback import show_feedback_dialog
+from components.dialogs.history import show_history_dialog
+from components.dialogs.style_mapping import show_style_mapping_dialog
+
 # 配置日志系统
 logging.basicConfig(
     level=logging.INFO,
