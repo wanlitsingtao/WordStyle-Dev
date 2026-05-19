@@ -26,6 +26,8 @@ from contextlib import contextmanager  # 添加缺失的导入
 from components.dialogs.feedback import show_feedback_dialog
 from components.dialogs.history import show_history_dialog
 from components.dialogs.style_mapping import show_style_mapping_dialog
+from state import app_state  # 统一状态管理器
+from state import app_state
 
 # 配置日志系统
 logging.basicConfig(
@@ -108,10 +110,10 @@ def show_feedback_dialog():
     """显示反馈提交对话框"""
     # [OK] 修复：每次打开对话框时重置表单状态
     if 'feedback_form_reset' not in st.session_state:
-        st.session_state.feedback_form_reset = 0
+        app_state.set_feedback_form_reset(0)
     
     # 使用唯一的key前缀，每次打开时递增，强制重置所有表单控件
-    form_key_prefix = f"feedback_{st.session_state.feedback_form_reset}"
+    form_key_prefix = f"feedback_{app_state.get_feedback_form_reset()}"
     
     st.markdown("我们非常重视您的意见，请告诉我们您的想法！")
     
@@ -179,7 +181,7 @@ def show_feedback_dialog():
                         response = requests.post(
                             api_url,
                             json={
-                                'user_id': st.session_state.user_id,
+                                'user_id': app_state.get_user_id(),
                                 'feedback_type': type_map.get(feedback_type, 'other'),
                                 'title': feedback_title,
                                 'description': feedback_description,
@@ -193,7 +195,7 @@ def show_feedback_dialog():
                     else:
                         # 本地/Supabase 模式：使用本地存储（兜底逻辑）
                         feedback = add_feedback(
-                            user_id=st.session_state.user_id,
+                            user_id=app_state.get_user_id(),
                             feedback_type=type_map.get(feedback_type, 'other'),
                             title=feedback_title,
                             description=feedback_description,
@@ -206,7 +208,7 @@ def show_feedback_dialog():
                     st.info(f"ℹ️ 反馈ID: {feedback_id}")
                     
                     # [OK] 修复：递增表单重置计数器，下次打开对话框时会使用新的key
-                    st.session_state.feedback_form_reset += 1
+                    app_state.increment_feedback_form_reset()
                     
                     # [OK] 直接返回，对话框自动关闭
                     return
@@ -230,7 +232,7 @@ def show_history_dialog():
         # API模式：通过后端API获取用户转换历史
         try:
             import requests
-            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/users/{st.session_state.user_id}"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/admin/users/{app_state.get_user_id()}"
             response = requests.get(api_url, timeout=10)
             if response.status_code == 200:
                 user_data_from_api = response.json()
@@ -241,7 +243,7 @@ def show_history_dialog():
     
     # 降级方案：从本地数据加载
     if not conversion_history:
-        user_data = load_user_data(st.session_state.user_id)
+        user_data = load_user_data(app_state.get_user_id())
         if user_data is None:
             st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
             return
@@ -326,12 +328,12 @@ try:
     # 第二步：通过设备指纹从数据库获取或创建用户
     user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
     
-    # 设置session_state
-    st.session_state.user_id = user_data['user_id']
-    st.session_state.device_fingerprint = device_fingerprint
-    st.session_state.user_init_failed = False  # 标记初始化成功
+    # 设置session_state（使用统一状态管理器）
+    app_state.set_user_id(user_data['user_id'])
+    app_state.set_device_fingerprint(device_fingerprint)
+    app_state.set_user_init_failed(False)  # 标记初始化成功
     
-    logger.info(f"[OK] 用户初始化成功 - ID: {st.session_state.user_id}")
+    logger.info(f"[OK] 用户初始化成功 - ID: {app_state.get_user_id()}")
     user_init_success = True
     
 except Exception as e:
@@ -343,9 +345,9 @@ except Exception as e:
     except:
         fallback_id = f"temp_error_{id(st.session_state)}"
     
-    st.session_state.user_id = fallback_id
-    st.session_state.device_fingerprint = None
-    st.session_state.user_init_failed = True  # 标记初始化失败
+    app_state.set_user_id(fallback_id)
+    app_state.set_device_fingerprint(None)
+    app_state.set_user_init_failed(True)  # 标记初始化失败
     
     user_data = {
         'user_id': fallback_id,
@@ -363,36 +365,36 @@ except Exception as e:
 # 第三步：只有在初始化成功时才尝试领取免费额度（仅首次加载时执行）
 if user_init_success and 'free_claimed_today' not in st.session_state:
     try:
-        free_paragraphs = claim_free_paragraphs(st.session_state.user_id)
+        free_paragraphs = claim_free_paragraphs(app_state.get_user_id())
         if free_paragraphs > 0:
             st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
             user_data['paragraphs_remaining'] = free_paragraphs
             logger.info(f"[OK] 免费额度领取成功: {free_paragraphs}")
             # 标记今日已领取，避免重复显示toast
-            st.session_state.free_claimed_today = True
+            app_state.set_free_claimed_today(True)
         else:
             logger.info(f"ℹ️ 无需领取额度或已领取过，当前额度: {user_data.get('paragraphs_remaining', 0)}")
             # 即使没有新领取，也标记已检查过
-            st.session_state.free_claimed_today = True
+            app_state.set_free_claimed_today(True)
     except Exception as e:
         logger.warning(f"[WARN] 领取免费额度失败: {e}，但不影响用户使用")
-        st.session_state.free_claimed_today = True
+        app_state.set_free_claimed_today(True)
 else:
     if not user_init_success:
         logger.warning("[WARN] 用户初始化失败，跳过额度领取")
 
-logger.info(f"用户 {st.session_state.user_id} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
+logger.info(f"用户 {app_state.get_user_id()} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 
 
 # 新手引导标志
 if 'has_seen_guide' not in st.session_state:
-    st.session_state.has_seen_guide = False
+    app_state.set_has_seen_guide(False)
 
 # 每日免费额度机制，不再需要 free_paragraphs_claimed 标记
 # if 'free_paragraphs_claimed' not in st.session_state:
 #     user_data = load_user_data()
 #     has_used = (...)
-#     st.session_state.free_paragraphs_claimed = has_used
+#     app_state.set_free_paragraphs_claimed(has_used)
 
 # ==================== 评论区功能 ====================
 
@@ -448,10 +450,10 @@ def add_comment(username, content, rating=5):
             response = requests.post(
                 api_url,
                 json={
-                    'username': username or f'用户{st.session_state.user_id[:6]}',
+                    'username': username or f'用户{app_state.get_user_id()[:6]}',
                     'content': content,
                     'rating': rating,
-                    'user_id': st.session_state.user_id
+                    'user_id': app_state.get_user_id()
                 },
                 timeout=10
             )
@@ -475,12 +477,12 @@ def add_comment(username, content, rating=5):
     
     new_comment = {
         'id': len(comments) + 1,
-        'username': username or f'用户{st.session_state.user_id[:6]}',
+        'username': username or f'用户{app_state.get_user_id()[:6]}',
         'content': content,
         'rating': rating,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'likes': 0,
-        'user_id': st.session_state.user_id
+        'user_id': app_state.get_user_id()
     }
     
     comments.append(new_comment)
@@ -540,7 +542,7 @@ def show_comments_section():
                     new_comment = add_comment(None, content, rating)  # 匿名评论
                     st.success("✅ 评论发表成功！")
                     # 使用session_state标记，避免st.rerun()
-                    st.session_state.comment_refresh_needed = True
+                    app_state.set_comment_refresh_needed(True)
     
     st.markdown("---")
     
@@ -567,7 +569,7 @@ def show_comments_section():
                     if st.button(f"👍 {likes}", key=f"like_{comment['id']}"):
                         like_comment(comment['id'])
                         # 使用session_state标记，避免st.rerun()
-                        st.session_state.comment_refresh_needed = True
+                        app_state.set_comment_refresh_needed(True)
                 
                 # 显示评论内容
                 st.markdown(f"<div style='padding: 10px; background-color: #f0f2f6; border-radius: 5px; margin: 5px 0;'>{sanitize_html(comment.get('content', ''))}</div>", unsafe_allow_html=True)
@@ -736,7 +738,7 @@ def analyze_source_styles(source_files, user_id):
 #         actual_cost = calculate_cost(total_success_paragraphs)
 #         
 #         # 扣除段落数并更新统计
-#         deduct_paragraphs(total_success_paragraphs, st.session_state.user_id)
+#         deduct_paragraphs(total_success_paragraphs, app_state.get_user_id())
 #         
 #         # 记录转换历史
 #         add_conversion_record(
@@ -746,7 +748,7 @@ def analyze_source_styles(source_files, user_id):
 #             paragraphs_charged=total_success_paragraphs,
 #             cost=actual_cost,
 #             mode='background',
-#             user_id=st.session_state.user_id
+#             user_id=app_state.get_user_id()
 #         )
 #         
 #     except Exception as e:
@@ -1008,15 +1010,15 @@ with st.sidebar:
         st.error("❌ 获取用户ID失败")
         st.caption("用户服务暂时不可用，请稍后刷新页面重试")
     else:
-        st.caption(f"用户ID: {st.session_state.user_id[:12]}...")
+        st.caption(f"用户ID: {app_state.get_user_id()[:12]}...")
     
     # [OK] 只有初始化成功才从 API 加载数据
     if not st.session_state.get('user_init_failed', False):
-        user_data = load_user_data(st.session_state.user_id)
+        user_data = load_user_data(app_state.get_user_id())
     else:
         # 初始化失败：使用本地默认数据（额度为0）
         user_data = {
-            'user_id': st.session_state.user_id,
+            'user_id': app_state.get_user_id(),
             'balance': 0.0,
             'paragraphs_remaining': 0,  # [WARN] 失败时额度为0
             'total_paragraphs_used': 0,
@@ -1029,19 +1031,19 @@ with st.sidebar:
     
     # 🔧 容错处理：如果用户数据为空，尝试重新初始化
     if user_data is None:
-        logger.warning(f"[WARN] 用户数据加载失败: {st.session_state.user_id}，尝试重新初始化")
+        logger.warning(f"[WARN] 用户数据加载失败: {app_state.get_user_id()}，尝试重新初始化")
         try:
             # 通过设备指纹重新获取用户
             device_fingerprint = st.session_state.get('device_fingerprint', '')
             if device_fingerprint:
                 from data_manager import get_or_create_user_by_device
                 user_data = get_or_create_user_by_device(device_fingerprint)
-                st.session_state.user_id = user_data['user_id']
-                logger.info(f"[OK] 重新初始化用户成功: {st.session_state.user_id}")
+                app_state.set_user_id(user_data['user_id'])
+                logger.info(f"[OK] 重新初始化用户成功: {app_state.get_user_id()}")
             else:
                 # 降级方案：创建临时用户数据
                 user_data = {
-                    'user_id': st.session_state.user_id,
+                    'user_id': app_state.get_user_id(),
                     'balance': 0.0,
                     'paragraphs_remaining': 0,
                     'total_paragraphs_used': 0,
@@ -1055,7 +1057,7 @@ with st.sidebar:
         except Exception as e:
             logger.error(f"[ERROR] 重新初始化用户失败: {e}")
             user_data = {
-                'user_id': st.session_state.user_id,
+                'user_id': app_state.get_user_id(),
                 'balance': 0.0,
                 'paragraphs_remaining': 0,
                 'total_paragraphs_used': 0,
@@ -1110,7 +1112,7 @@ with st.sidebar:
 # 文件上传区（修复版：上下排列，避免st.columns导致的布局震荡）
 # 使用 session_state 保持上传器状态，避免页面刷新时消失
 if 'source_files_uploaded' not in st.session_state:
-    st.session_state.source_files_uploaded = False
+    app_state.set_source_files_uploaded(False)
 
 st.subheader("📄 上传源文档")
 source_files = st.file_uploader(
@@ -1122,15 +1124,15 @@ source_files = st.file_uploader(
 )
 
 # 标记已上传状态
-if source_files and not st.session_state.source_files_uploaded:
-    st.session_state.source_files_uploaded = True
+if source_files and not app_state.get_source_files_uploaded():
+    app_state.set_source_files_uploaded(True)
 
 # [OK] 修复：优先使用session_state中的文件，如果为空则使用file_uploader返回的文件
 current_source_files = st.session_state.get('current_source_files', None)
 if source_files:
     # 如果有新上传的文件，更新session_state
     current_source_files = source_files
-    st.session_state.current_source_files = source_files
+    app_state.set_current_source_files(source_files)
 
 if current_source_files:
     # [OK] 修复：不再重复设置，已经在第830-831行设置过了
@@ -1167,7 +1169,7 @@ if current_source_files:
         total_files = len(source_files)  # [WARN] 修复：定义total_files变量
         
         for idx, source_file in enumerate(source_files, 1):
-            temp_source = f"temp_source_{st.session_state.user_id}_{source_file.name}"
+            temp_source = f"temp_source_{app_state.get_user_id()}_{source_file.name}"
             with open(temp_source, 'wb') as f:
                 f.write(source_file.getbuffer())
             
@@ -1210,20 +1212,20 @@ if current_source_files:
         progress_bar.progress(1.0)
         status_text.text(f"[OK] 分析完成！耗时: {elapsed:.1f}秒")
         
-        st.session_state.file_styles_map = file_styles_map
-        st.session_state.file_paragraph_counts = file_paragraph_counts  # [HIGH_VOLTAGE] 保存段落数供后续使用
+        app_state.set_file_styles_map(file_styles_map)
+        app_state.set_file_paragraph_counts(file_paragraph_counts) # [HIGH_VOLTAGE] 保存段落数供后续使用
         
         # 合并所有文件的样式用于显示
         all_styles = set()
         for styles in file_styles_map.values():
             all_styles.update(styles)
         all_styles = sorted(list(all_styles))
-        st.session_state.source_styles = all_styles
+        app_state.set_source_styles(all_styles)
     else:
         # 使用已缓存的样式，显示进度条（直接100%）
-        file_styles_map = st.session_state.file_styles_map
+        file_styles_map = app_state.get_file_styles_map()
         file_paragraph_counts = st.session_state.get('file_paragraph_counts', {})  # [WARN] 修复：从缓存中恢复
-        all_styles = st.session_state.source_styles
+        all_styles = app_state.get_source_styles()
         progress_bar.progress(1.0)
         status_text.text("[OK] 已分析完成（使用缓存）")
     
@@ -1253,7 +1255,7 @@ if current_source_files:
 # 模板文档上传（上下排列）
 # 使用 session_state 保持上传器状态
 if 'template_file_uploaded' not in st.session_state:
-    st.session_state.template_file_uploaded = False
+    app_state.set_template_file_uploaded(False)
 
 st.subheader("📋 上传模板文档")
 template_file = st.file_uploader(
@@ -1264,8 +1266,8 @@ template_file = st.file_uploader(
 )
 
 # 标记已上传状态
-if template_file and not st.session_state.template_file_uploaded:
-    st.session_state.template_file_uploaded = True
+if template_file and not app_state.get_template_file_uploaded():
+    app_state.set_template_file_uploaded(True)
 
 # [OK] 修复：优先使用session_state中的模板文件路径，如果为空则使用file_uploader返回的文件
 current_temp_template = st.session_state.get('current_temp_template', None)
@@ -1277,16 +1279,16 @@ if template_file:
     # [OK] 修复：清除旧的样式缓存，强制重新解析
     # 防止用户上传新模板后仍使用旧模板的样式缓存
     if 'template_styles' in st.session_state:
-        del st.session_state.template_styles
+        app_state.delete_key('template_styles')
         logger.info(f"[REFRESH] 清除旧模板样式缓存，准备重新解析")
     
-    temp_template = f"temp_template_{st.session_state.user_id}.docx"
+    temp_template = f"temp_template_{app_state.get_user_id()}.docx"
     with open(temp_template, 'wb') as f:
         f.write(template_file.getbuffer())
     current_temp_template = temp_template
     last_template_name = template_file.name
-    st.session_state.current_temp_template = temp_template
-    st.session_state.last_template_name = last_template_name
+    app_state.set_current_temp_template(temp_template)
+    app_state.set_last_template_name(last_template_name)
 
 if current_temp_template:
     # [OK] 修复：不再重复保存文件，直接使用current_temp_template
@@ -1315,18 +1317,18 @@ if current_temp_template:
         template_progress_bar.progress(1.0)
         template_status_text.text(f"[OK] 已提取 {len(template_styles_list)} 种样式！")
         
-        st.session_state.template_styles = template_styles_list
-        st.session_state.last_template_name = last_template_name
+        app_state.set_template_styles(template_styles_list)
+        app_state.set_last_template_name(last_template_name)
     else:
         # 使用已缓存的样式，显示进度条（直接100%）
-        template_styles = st.session_state.template_styles
+        template_styles = app_state.get_template_styles()
         template_progress_bar.progress(1.0)
         template_status_text.text("[OK] 已分析完成（使用缓存）")
     
     # 将模板信息整合到一个expander中
-    with st.expander(f"📋 模板文档信息：{os.path.basename(current_temp_template)} | {len(st.session_state.template_styles)}种样式", expanded=True):
+    with st.expander(f"📋 模板文档信息：{os.path.basename(current_temp_template)} | {len(app_state.get_template_styles())}种样式", expanded=True):
         st.markdown(f"**✅ 已上传:** {os.path.basename(current_temp_template)}")
-        st.markdown(f"**📋 检测到样式:** {len(st.session_state.template_styles)} 种 - {', '.join(st.session_state.template_styles[:10])}{'...' if len(st.session_state.template_styles) > 10 else ''}")
+        st.markdown(f"**📋 检测到样式:** {len(app_state.get_template_styles())} 种 - {', '.join(app_state.get_template_styles()[:10])}{'...' if len(app_state.get_template_styles()) > 10 else ''}")
 
 # 转换配置
 st.markdown("---")
@@ -1334,17 +1336,17 @@ st.subheader("⚙️ 转换配置")
 
 # 使用 session_state 保存配置，避免每次页面刷新都重置
 if 'do_mood_config' not in st.session_state:
-    st.session_state.do_mood_config = True
+    app_state.set_do_mood_config(True)
 if 'do_answer_config' not in st.session_state:
     st.session_state.do_answer_config = True
 if 'list_bullet_config' not in st.session_state:
-    st.session_state.list_bullet_config = "•"
+    app_state.set_list_bullet_config("•")
 if 'answer_text_config' not in st.session_state:
-    st.session_state.answer_text_config = "应答：本投标人理解并满足要求。"
+    app_state.set_answer_text_config("应答：本投标人理解并满足要求。")
 if 'answer_style_config' not in st.session_state:
-    st.session_state.answer_style_config = "Normal"
+    app_state.set_answer_style_config("Normal")
 if 'answer_mode_config' not in st.session_state:
-    st.session_state.answer_mode_config = 'before_heading'
+    app_state.set_answer_mode_config('before_heading')
 
 # 第一行：四个选项横向等距分布（中线对齐）
 # 使用CSS实现控件垂直居中对齐
@@ -1396,24 +1398,24 @@ def render_conversion_config():
             show_style_mapping_dialog()
             # [FIX] 对话框显示后,返回默认值避免解包错误
             return (
-                st.session_state.do_mood_config,
+                app_state.get_do_mood_config(),
                 st.session_state.do_answer_config,
-                st.session_state.list_bullet_config,
-                st.session_state.answer_text_config,
-                st.session_state.answer_style_config,
-                st.session_state.answer_mode_config
+                app_state.get_list_bullet_config(),
+                app_state.get_answer_text_config(),
+                app_state.get_answer_style_config(),
+                app_state.get_answer_mode_config()
             )
 
     with col2:
         do_mood = st.checkbox(
             "祈使语气转换", 
-            value=st.session_state.do_mood_config, 
+            value=app_state.get_do_mood_config(), 
             help="将文档中的祈使语气转换为投标人语气",
             key="mood_checkbox"
         )
         # 仅在值改变时更新session_state，避免不必要的重渲染
         if do_mood != st.session_state.get('do_mood_config'):
-            st.session_state.do_mood_config = do_mood
+            app_state.set_do_mood_config(do_mood)
 
     with col3:
         do_answer = st.checkbox(
@@ -1429,13 +1431,13 @@ def render_conversion_config():
     with col4:
         list_bullet = st.text_input(
             "列表符号", 
-            value=st.session_state.list_bullet_config, 
+            value=app_state.get_list_bullet_config(), 
             help="列表段落的符号",
             key="bullet_input"
         )
         # 仅在值改变时更新session_state
         if list_bullet != st.session_state.get('list_bullet_config'):
-            st.session_state.list_bullet_config = list_bullet
+            app_state.set_list_bullet_config(list_bullet)
 
     # 第二行：应答句详细配置（仅当勾选"插入应答句"时显示）
     if do_answer:
@@ -1447,13 +1449,13 @@ def render_conversion_config():
         with col_a:
             answer_text = st.text_input(
                 "应答句文本",
-                value=st.session_state.answer_text_config,
+                value=app_state.get_answer_text_config(),
                 help="插入的应答句内容",
                 key="answer_text_input"
             )
             # 仅在值改变时更新
             if answer_text != st.session_state.get('answer_text_config'):
-                st.session_state.answer_text_config = answer_text
+                app_state.set_answer_text_config(answer_text)
         
         with col_b:
             # 获取模板样式列表（使用缓存的引用）
@@ -1461,9 +1463,9 @@ def render_conversion_config():
             
             # 预计算index，避免每次渲染都查找
             style_index = 0
-            if st.session_state.answer_style_config in template_styles:
+            if app_state.get_answer_style_config() in template_styles:
                 try:
-                    style_index = template_styles.index(st.session_state.answer_style_config)
+                    style_index = template_styles.index(app_state.get_answer_style_config())
                 except ValueError:
                     style_index = 0
             
@@ -1475,7 +1477,7 @@ def render_conversion_config():
                 key="answer_style_select"
             )
             # 实时更新 session_state
-            st.session_state.answer_style_config = answer_style
+            app_state.set_answer_style_config(answer_style)
         
         with col_c:
             # 使用缓存的options，保持引用稳定
@@ -1488,9 +1490,9 @@ def render_conversion_config():
             
             # 预计算index
             mode_index = 0
-            if st.session_state.answer_mode_config in answer_mode_options:
+            if app_state.get_answer_mode_config() in answer_mode_options:
                 try:
-                    mode_index = mode_keys.index(st.session_state.answer_mode_config)
+                    mode_index = mode_keys.index(app_state.get_answer_mode_config())
                 except ValueError:
                     mode_index = 0
             
@@ -1504,12 +1506,12 @@ def render_conversion_config():
             )
             # 仅在值改变时更新
             if answer_mode != st.session_state.get('answer_mode_config'):
-                st.session_state.answer_mode_config = answer_mode
+                app_state.set_answer_mode_config(answer_mode)
     else:
         # 未勾选时设置默认值
-        answer_text = st.session_state.answer_text_config
-        answer_style = st.session_state.answer_style_config
-        answer_mode = st.session_state.answer_mode_config
+        answer_text = app_state.get_answer_text_config()
+        answer_style = app_state.get_answer_style_config()
+        answer_mode = app_state.get_answer_mode_config()
     
     # 返回配置值供后续使用
     return do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode
@@ -1556,7 +1558,7 @@ else:
                 progress_bar.progress(0)
             else:
                 # 设置转换标志，禁用后续操作
-                st.session_state.is_converting = True
+                app_state.set_is_converting(True)
                 
                 # [HIGH_VOLTAGE] 性能优化：立即更新进度条，不要等验证完成
                 status_placeholder.text("⏳ 正在验证输入...")
@@ -1564,8 +1566,8 @@ else:
             
             # [HIGH_VOLTAGE] 性能优化：使用分析阶段已计算的段落数（file_paragraph_counts已在第886-899行计算）
             # 如果file_paragraph_counts不存在（异常情况），使用兜底逻辑
-            if 'file_paragraph_counts' in st.session_state and st.session_state.file_paragraph_counts:
-                file_paragraph_counts = st.session_state.file_paragraph_counts
+            if 'file_paragraph_counts' in st.session_state and app_state.get_file_paragraph_counts():
+                file_paragraph_counts = app_state.get_file_paragraph_counts()
                 file_info = [(sf.name, file_paragraph_counts[sf.name]) for sf in current_source_files]
                 total_paragraphs = sum(file_paragraph_counts.values())
             else:
@@ -1574,7 +1576,7 @@ else:
                 total_paragraphs = 0
                 file_info = []
                 for sf in current_source_files:
-                    temp_source = f"temp_source_{st.session_state.user_id}_{sf.name}"
+                    temp_source = f"temp_source_{app_state.get_user_id()}_{sf.name}"
                     paragraphs = count_paragraphs(temp_source)
                     total_paragraphs += paragraphs
                     file_info.append((sf.name, paragraphs))
@@ -1586,7 +1588,7 @@ else:
             # [HIGH_VOLTAGE] 性能优化：使用缓存的文件信息，避免重复读取
             source_files_info = []
             for fname, fpara in file_info:
-                temp_source = f"temp_source_{st.session_state.user_id}_{fname}"
+                temp_source = f"temp_source_{app_state.get_user_id()}_{fname}"
                 source_files_info.append((fname, temp_source, fpara))
             
             # 配置字典
@@ -1623,14 +1625,14 @@ else:
                 total_success_paragraphs = 0  # 成功转换的段落数
                 
                 # [OK] 初始化文件级结果列表（用于持久化保存）
-                st.session_state.conversion_file_results = []
+                app_state.set_conversion_file_results([])
                 
                 for idx, source_file_obj in enumerate(current_source_files):
                     # 输出文件路径 - 保存到conversion_results目录
                     base_name = os.path.splitext(source_file_obj.name)[0]
                     output_filename = f"result_{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
                     output_file = os.path.join("conversion_results", output_filename)
-                    temp_source = f"temp_source_{st.session_state.user_id}_{source_file_obj.name}"
+                    temp_source = f"temp_source_{app_state.get_user_id()}_{source_file_obj.name}"
                     
                     # [HIGH_VOLTAGE] 性能优化：从缓存中获取段落数，避免重复读取
                     file_paragraphs = 0
@@ -1643,8 +1645,8 @@ else:
                     
                     # [OK] 修复：使用每个文件各自的样式映射配置（与桌面版一致）
                     file_mapping = None
-                    if 'file_style_mappings' in st.session_state and source_file_obj.name in st.session_state.file_style_mappings:
-                        file_mapping = st.session_state.file_style_mappings[source_file_obj.name]
+                    if 'file_style_mappings' in st.session_state and source_file_obj.name in app_state.get_file_style_mappings():
+                        file_mapping = app_state.get_file_style_mappings()[source_file_obj.name]
                         if file_mapping:
                             st.info(f"📋 {source_file_obj.name}: 使用自定义样式映射 ({len(file_mapping)} 个样式)")
                     
@@ -1665,7 +1667,7 @@ else:
                         return callback
                     
                     # [HIGH_VOLTAGE] 性能优化：传递缓存的样式列表，避免重复分析
-                    source_styles_for_file = st.session_state.file_styles_map.get(source_file_obj.name, None)
+                    source_styles_for_file = app_state.get_file_styles_map().get(source_file_obj.name, None)
                     
                     # 执行转换
                     success, actual_file, msg = converter.full_convert(
@@ -1690,7 +1692,7 @@ else:
                         total_success_paragraphs += file_paragraphs
                         
                         # [OK] 保存文件级结果到 session_state（防止重渲染后丢失）
-                        st.session_state.conversion_file_results.append({
+                        app_state.get_conversion_file_results().append({
                             'name': source_file_obj.name,
                             'status': 'success',
                             'paragraphs': file_paragraphs,
@@ -1700,7 +1702,7 @@ else:
                         fail_count += 1
                         
                         # [OK] 保存文件级失败结果到 session_state
-                        st.session_state.conversion_file_results.append({
+                        app_state.get_conversion_file_results().append({
                             'name': source_file_obj.name,
                             'status': 'fail',
                             'msg': msg
@@ -1744,13 +1746,13 @@ else:
                         files_count=len(current_source_files),
                         success_count=success_count,
                         failed_count=fail_count,
-                        user_id=st.session_state.user_id,
+                        user_id=app_state.get_user_id(),
                         paragraphs=total_success_paragraphs  # [OK] 新增：传递段落数
                     )
                     
                     # 保存用户数据（使用统一数据接口）
                     from data_manager import save_user_data
-                    save_user_data(user_data, st.session_state.user_id)
+                    save_user_data(user_data, app_state.get_user_id())
                     
                     # [OK] 修复：将转换结果文件路径保存到 session_state，防止刷新后丢失
                     if 'recent_results' not in st.session_state:
@@ -1767,26 +1769,26 @@ else:
                             st.session_state.recent_results.append(file_info)
                     
                     # 重置转换标志
-                    st.session_state.is_converting = False
+                    app_state.set_is_converting(False)
                     
                     # [OK] 保存转换总结信息到session_state（在下载区域统一显示，防止重复）
-                    st.session_state.conversion_summary = {
+                    app_state.set_conversion_summary({
                         'success_count': success_count,
                         'fail_count': fail_count,
                         'total_paragraphs': total_success_paragraphs
-                    }
+                    })
                     
                     # [OK] 清理临时文件（源文件和模板文件）
                     try:
                         from file_manager import get_file_manager
                         fm = get_file_manager()
-                        cleanup_stats = fm.cleanup_temp_files(st.session_state.user_id)
+                        cleanup_stats = fm.cleanup_temp_files(app_state.get_user_id())
                         logger.info(f"临时文件清理完成: {cleanup_stats}")
                     except Exception as cleanup_error:
                         logger.warning(f"临时文件清理失败（不影响转换结果）: {cleanup_error}")
                     
                     # [OK] 标记显示下载按钮（用于页面刷新后保持状态）
-                    st.session_state.show_download_buttons = True
+                    app_state.set_show_download_buttons(True)
                     
                     # [OK] 强制重新渲染，避免在同一轮渲染中重复显示转换总结
                     st.rerun()
@@ -1794,23 +1796,23 @@ else:
                     # 所有文件都转换失败
                     status_placeholder.text("[ERROR] 转换失败！")
                     progress_bar.progress(100)
-                    st.session_state.is_converting = False
+                    app_state.set_is_converting(False)
                     st.error("❌ 所有文件转换失败，请检查错误信息")
                     st.info("💡 请查看上方的错误提示，修正后重试")
         
             except Exception as e:
                 # 重置转换标志
-                st.session_state.is_converting = False
+                app_state.set_is_converting(False)
                 
                 st.error(f"发生错误: {str(e)}")
                 import traceback
                 st.code(traceback.format_exc())
 
 # [OK] 转换完成后显示下载按钮和转换总结信息（在按钮之后，从session_state读取）
-if 'show_download_buttons' in st.session_state and st.session_state.show_download_buttons:
+if 'show_download_buttons' in st.session_state and app_state.get_show_download_buttons():
     # [OK] 显示转换总结信息（从session_state读取，防止刷新后丢失）
-    if 'conversion_summary' in st.session_state and st.session_state.conversion_summary:
-        summary = st.session_state.conversion_summary
+    if 'conversion_summary' in st.session_state and app_state.get_conversion_summary():
+        summary = app_state.get_conversion_summary()
         st.success(f"🎉 转换完成！成功: {summary['success_count']} 个，失败: {summary['fail_count']} 个")
         if summary['fail_count'] > 0:
             st.warning(f"⚠️ 有 {summary['fail_count']} 个文件转换失败")
@@ -1818,7 +1820,7 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
     
     # [OK] 恢复每个文件的转换结果（从 session_state 读取，防止重渲染后丢失）
     if 'conversion_file_results' in st.session_state:
-        for result in st.session_state.conversion_file_results:
+        for result in app_state.get_conversion_file_results():
             if result['status'] == 'success':
                 st.success(f"✅ {result['name']} 转换成功")
                 # 显示警告信息（如果有）
@@ -2003,11 +2005,11 @@ def show_style_mapping_dialog():
     # 初始化或加载样式映射（按文件分别存储）
     if 'file_style_mappings' not in st.session_state:
         # 从用户数据中加载样式映射
-        user_data = load_user_data(st.session_state.user_id)
+        user_data = load_user_data(app_state.get_user_id())
         if user_data is None:
             st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
             return
-        st.session_state.file_style_mappings = user_data.get('style_mappings', {})
+        app_state.set_file_style_mappings(user_data.get('style_mappings', {}))
     
     # 如果有多个文件，先选择要配置的文件
     selected_file = None
@@ -2026,10 +2028,10 @@ def show_style_mapping_dialog():
         return
     
     # 获取该文件的当前映射配置
-    if selected_file.name not in st.session_state.file_style_mappings:
-        st.session_state.file_style_mappings[selected_file.name] = {}
+    if selected_file.name not in app_state.get_file_style_mappings():
+        app_state.get_file_style_mappings()[selected_file.name] = {}
     
-    current_mapping = st.session_state.file_style_mappings[selected_file.name]
+    current_mapping = app_state.get_file_style_mappings()[selected_file.name]
     
     # 预计算默认值，避免在循环中重复计算
     default_values = {}
@@ -2076,7 +2078,7 @@ def show_style_mapping_dialog():
             st.markdown(f"<span style='color:{color};font-size:0.9em;'>{hint}</span>", unsafe_allow_html=True)
     
     # 保存更新后的映射
-    st.session_state.file_style_mappings[selected_file.name] = updated_mapping
+    app_state.get_file_style_mappings()[selected_file.name] = updated_mapping
     
     # 操作按钮
     st.markdown("---")
@@ -2085,25 +2087,25 @@ def show_style_mapping_dialog():
     with btn_col1:
         if st.button("✅ 确定", key="confirm_mapping_btn", type="primary", use_container_width=True):
             # 保存样式映射到用户数据
-            user_data = load_user_data(st.session_state.user_id)
+            user_data = load_user_data(app_state.get_user_id())
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")
                 return
-            user_data['style_mappings'] = st.session_state.file_style_mappings
-            save_user_data(user_data, st.session_state.user_id)
+            user_data['style_mappings'] = app_state.get_file_style_mappings()
+            save_user_data(user_data, app_state.get_user_id())
             st.success("✅ 样式映射已保存！")
             # [OK] 不再使用st.rerun()，让对话框自然关闭
     
     with btn_col2:
         if st.button(" 恢复默认", key="reset_mapping_btn", use_container_width=True):
-            st.session_state.file_style_mappings[selected_file.name] = {}
+            app_state.get_file_style_mappings()[selected_file.name] = {}
             # 保存样式映射到用户数据
-            user_data = load_user_data(st.session_state.user_id)
+            user_data = load_user_data(app_state.get_user_id())
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")
                 return
-            user_data['style_mappings'] = st.session_state.file_style_mappings
-            save_user_data(user_data, st.session_state.user_id)
+            user_data['style_mappings'] = app_state.get_file_style_mappings()
+            save_user_data(user_data, app_state.get_user_id())
             st.info("已恢复默认映射")
             # [OK] 不再使用st.rerun()
     
