@@ -812,7 +812,7 @@ try:
         
         # 获取当前脚本所在目录
         script_dir = Path(__file__).parent
-        logo_path = script_dir / "resource" / "wh.png"
+        logo_path = script_dir / "resource" / "wh.jpg"
         
         # 自定义CSS - 黑色背景，移除所有空白
         st.markdown("""
@@ -884,7 +884,7 @@ try:
                 
                 st.markdown(f'''
                 <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0;">
-                    <img src="data:image/png;base64,{encoded_image}" 
+                    <img src="data:image/jpeg;base64,{encoded_image}" 
                          style="width: 100%; height: 100%; object-fit: cover; display: block; margin: 0; padding: 0;">
                 </div>
                 ''', unsafe_allow_html=True)
