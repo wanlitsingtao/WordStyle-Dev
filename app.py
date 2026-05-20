@@ -1068,8 +1068,10 @@ else:
                 fail_count = 0
                 total_success_paragraphs = 0  # 成功转换的段落数
                 
-                # [OK] 初始化文件级结果列表（用于持久化保存（
-                st.session_state.conversion_file_results = []
+                # [OK] 初始化文件级结果列表（用于持久化保存）
+                # [FIX] 只在首次转换时初始化，避免rerun后清空已保存的结果
+                if 'conversion_file_results' not in st.session_state:
+                    st.session_state.conversion_file_results = []
                 
                 for idx, source_file_obj in enumerate(current_source_files):
                     # 输出文件路径 - 保存到conversion_results目录
@@ -1262,9 +1264,37 @@ else:
                 # 重置转换标志
                 st.session_state.is_converting = False
                 
-                st.error(f"发生错误: {str(e)}")
+                error_msg = f"发生错误: {str(e)}"
+                st.error(error_msg)
+                
+                # [FIX] 如果发生未预期的异常，也要保存错误信息
+                if 'conversion_file_results' not in st.session_state or not st.session_state.conversion_file_results:
+                    # 如果没有文件级结果，创建一个通用的错误记录
+                    st.session_state.conversion_file_results = []
+                    current_source_files = st.session_state.get('current_source_files', [])
+                    for source_file_obj in current_source_files:
+                        st.session_state.conversion_file_results.append({
+                            'name': source_file_obj.name,
+                            'status': 'fail',
+                            'msg': f"系统异常: {error_msg}"
+                        })
+                
+                # 保存转换总结信息
+                st.session_state.conversion_summary = {
+                    'success_count': 0,
+                    'fail_count': len(st.session_state.get('current_source_files', [])),
+                    'total_paragraphs': 0
+                }
+                
+                # 标记显示下载按钮
+                st.session_state.show_download_buttons = True
+                
                 import traceback
-                st.code(traceback.format_exc())
+                with st.expander("📋 查看详细错误堆栈"):
+                    st.code(traceback.format_exc())
+                
+                # 强制重新渲染，显示错误详情
+                st.rerun()
 
 # [OK] 转换完成后显示下载按钮和转换总结信息（在按钮之后，从session_state读取（
 if 'show_download_buttons' in st.session_state and st.session_state.show_download_buttons:
@@ -1276,12 +1306,12 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
             st.warning(f"⚠️ 有 {summary['fail_count']} 个文件转换失败")
         st.info(f"处理 {summary['total_paragraphs']:,} 个段落")
     
-    # [OK] 恢复每个文件的转换结果（什session_state 读取，防止重渲染后丢失）
+    # [OK] 恢复每个文件的转换结果（从session_state读取，防止重渲染后丢失）
     if 'conversion_file_results' in st.session_state:
         for result in st.session_state.conversion_file_results:
             if result['status'] == 'success':
                 st.success(f"✅ {result['name']} 转换成功")
-                # 显示警告信息（如果有（
+                # 显示警告信息（如果有）
                 if result.get('warnings'):
                     with st.expander(f"⚠️ {result['name']} 的警告信息:"):
                         for w in result['warnings']:
