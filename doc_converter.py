@@ -1172,17 +1172,17 @@ class DocumentConverter:
                                        answer_text=None, answer_style=None,
                                        mode='before_heading'):
         """
-        在标题前后插入应答句（改进版：使用大纲级别识别标题）
+        在章节或段落前后插入应答句（改进版：使用大纲级别识别标题）
         :param input_file: 输入文件
         :param output_file: 输出文件（如果为None则覆盖原文件）
         :param answer_text: 应答文本
         :param answer_style: 应答样式
         :param mode: 插入模式
-            - 'before_heading': 标题前插入（默认，原有逻辑）
-            - 'after_heading': 章节后插入（在章节正文最后一段后插入）
+            - 'before_heading': 章节前插入（默认，原有逻辑）
+            - 'after_heading': 章节末插入（在章节正文最后一段后插入）
             - 'copy_chapter': 复制章节内容（未来扩展）
-            - 'before_paragraph': 逐段前插入（未来扩展）
-            - 'after_paragraph': 逐段后插入（未来扩展）
+            - 'before_paragraph': 逐段前应答（未来扩展）
+            - 'after_paragraph': 逐段后应答（未来扩展）
         :return: 是否成功，消息
         """
         if output_file is None:
@@ -1257,7 +1257,7 @@ class DocumentConverter:
     
     def _insert_before_headings(self, children, new_children, answer_template, doc):
         """
-        在标题前插入应答句（原有逻辑）
+        在章节前插入应答句（原有逻辑）
         判断条件：如果标题后下一个元素不是标题，则在该标题前插入
         :return: (insert_count, total_heading_count)
         """
@@ -1296,7 +1296,7 @@ class DocumentConverter:
     
     def _insert_after_headings(self, children, new_children, answer_template, doc):
         """
-        在章节末尾插入应答句（需求2：章节后插入）
+        在章节末插入应答句（需求2：章节后插入）
         判断条件：如果标题前是正文段落（不是标题），就在这个正文后插入应答句
         特殊情况：
         - 全文档第一个标题前不插入（因为前面没有章节）

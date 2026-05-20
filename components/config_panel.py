@@ -9,10 +9,10 @@ import streamlit as st
 def get_answer_mode_options():
     """获取应答句插入模式选项"""
     return {
-        'before_heading': '在标题前',
-        'after_heading': '在标题后',
-        'before_paragraph': '在段落前',
-        'after_paragraph': '在段落后'
+        'before_heading': '章节前插入',
+        'after_heading': '章节末插入',
+        'before_paragraph': '逐段前应答',
+        'after_paragraph': '逐段后应答'
     }
 
 
@@ -52,7 +52,7 @@ def render_conversion_config():
         do_answer = st.checkbox(
             "插入应答句", 
             value=st.session_state.do_answer_config, 
-            help="在标题后插入应答句",
+            help="在章节前/后或段落前/后插入应答句",
             key="answer_checkbox"
         )
         # 仅在值改变时更新session_state
