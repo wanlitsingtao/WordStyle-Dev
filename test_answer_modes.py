@@ -66,14 +66,15 @@ def create_test_document():
 
 
 def test_all_modes(source_file):
-    """测试所有4种模式"""
+    """测试所有5种模式"""
     converter = DocumentConverter()
     
     modes = [
         ('before_heading', '章节前插入'),
         ('after_heading', '章节末插入'),
         ('before_paragraph', '逐段前应答'),
-        ('after_paragraph', '逐段后应答')
+        ('after_paragraph', '逐段后应答'),
+        ('copy_chapter', '章节招标原文+应答句+招标原文副本')
     ]
     
     results = []
@@ -180,6 +181,7 @@ if __name__ == "__main__":
     print("2. 章节末插入 (after_heading)")
     print("3. 逐段前应答 (before_paragraph)")
     print("4. 逐段后应答 (after_paragraph)")
+    print("5. 章节招标原文+应答句+招标原文副本 (copy_chapter)")
     print("="*60)
     
     # 创建测试文档
