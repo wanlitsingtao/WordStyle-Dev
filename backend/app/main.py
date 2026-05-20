@@ -76,9 +76,8 @@ def create_application() -> FastAPI:
     application.include_router(tasks.router, prefix="/api/conversion-tasks", tags=["转换任务"])  # [OK] 新增：转换任务API
     application.include_router(monitoring.router, prefix="/monitoring", tags=["监控"])
     
-    # 健康检查（同时支持 GET 和 POST，兼容 UptimeRobot 只能发送 POST 的限制）
-    @application.get("/health")
-    @application.post("/health")
+    # 健康检查（同时支持 GET 和 POST，兼容 UptimeRobot）
+    @application.api_route("/health", methods=["GET", "POST"])
     def health_check():
         return {"status": "healthy"}
     
