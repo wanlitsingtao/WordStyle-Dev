@@ -1080,6 +1080,17 @@ else:
                     output_file = os.path.join("conversion_results", output_filename)
                     temp_source = f"temp_source_{st.session_state.user_id}_{source_file_obj.name}"
                     
+                    # [FIX] 确保临时文件存在（防止Streamlit热重载或清理后丢失）
+                    if not os.path.exists(temp_source):
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"临时文件 {temp_source} 不存在，从 UploadedFile 重新创建")
+                        for sf in st.session_state.current_source_files:
+                            if sf.name == source_file_obj.name:
+                                with open(temp_source, 'wb') as f:
+                                    f.write(sf.getbuffer())
+                                break
+                    
                     # [HIGH_VOLTAGE] 性能优化：从缓存中获取段落数，避免重复读叀
                     file_paragraphs = 0
                     for fname, fpara in file_info:
