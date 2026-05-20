@@ -10,10 +10,8 @@ from app.core.database import get_db
 router = APIRouter(tags=["监控"])
 
 
-@router.get("/health")
-def health_check():
-    """健康检查端点"""
-    return {"status": "healthy"}
+# 注意：/health端点已在main.py中定义，此处不再重复定义
+# 避免路由冲突导致405错误
 
 
 @router.get("/metrics")
