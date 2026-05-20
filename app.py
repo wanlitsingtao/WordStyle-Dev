@@ -552,7 +552,7 @@ st.markdown("""
     /* 强制主要内容区域使用最大宽度 */
     .block-container {
         max-width: 100% !important;
-        padding-top: 2rem !important;
+        padding-top: 4rem !important;  /* 增加顶部间距，避免被Streamlit Cloud工具栏遮挡 */
         padding-bottom: 1rem !important;
     }
     
