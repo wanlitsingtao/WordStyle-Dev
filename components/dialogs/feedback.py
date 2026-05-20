@@ -76,7 +76,7 @@ def show_feedback_dialog():
                         feedback_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
                     
                     # [OK] 修复：使用 API 提交反馈（兼容多实例部署）
-                    from config import BACKEND_URL
+                    from config import BACKEND_URL, DATA_SOURCE
                     import requests
                     
                     if BACKEND_URL and DATA_SOURCE == 'api':
