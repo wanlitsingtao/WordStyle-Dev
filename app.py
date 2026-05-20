@@ -1238,11 +1238,25 @@ else:
                     st.rerun()
                 else:
                     # 所有文件都转换失败
-                    status_placeholder.text("[ERROR] 转换失败（")
+                    status_placeholder.text("[ERROR] 转换失败")
                     progress_bar.progress(100)
                     st.session_state.is_converting = False
+                    
+                    # [OK] 保存转换总结信息（即使全部失败也要保存，以便显示详细错误）
+                    st.session_state.conversion_summary = {
+                        'success_count': success_count,
+                        'fail_count': fail_count,
+                        'total_paragraphs': total_success_paragraphs
+                    }
+                    
+                    # [OK] 标记显示下载按钮（用于显示失败详情）
+                    st.session_state.show_download_buttons = True
+                    
                     st.error("❌ 所有文件转换失败，请检查错误信息")
-                    st.info("💡 请查看上方的错误提示，修正后重试")
+                    st.info("💡 请查看下方的具体错误提示，修正后重试")
+                    
+                    # [OK] 强制重新渲染，显示失败详情
+                    st.rerun()
         
             except Exception as e:
                 # 重置转换标志
