@@ -9,9 +9,9 @@ param(
     [string]$TargetDir = "E:\LingMa\WordStyle"
 )
 
-Write-Host "=" * 80 -ForegroundColor Cyan
+Write-Host ("=" * 80) -ForegroundColor Cyan
 Write-Host "WordStyle 代码同步工具" -ForegroundColor Cyan
-Write-Host "=" * 80 -ForegroundColor Cyan
+Write-Host ("=" * 80) -ForegroundColor Cyan
 Write-Host ""
 
 # 检查源目录和目标目录是否存在
@@ -38,8 +38,9 @@ Set-Location $TargetDir
 git restore . 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  ✅ 已撤销未提交的修改" -ForegroundColor Green
-} else {
-    Write-Host "  ⚠️  Git restore失败，继续执行" -ForegroundColor Yellow
+}
+else {
+    Write-Host "  ️  Git restore失败，继续执行" -ForegroundColor Yellow
 }
 
 # 删除临时文件

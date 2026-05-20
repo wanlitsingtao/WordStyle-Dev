@@ -6,6 +6,20 @@
 import streamlit as st
 
 # [WARN] set_page_config必须在所有Streamlit命令之前调用
+# [OK] 支持UptimeRobot健康检查：通过URL参数检测
+import sys
+from urllib.parse import urlparse, parse_qs
+try:
+    # 获取当前URL参数
+    query_params = st.query_params
+    if 'health' in query_params:
+        # 返回health检查响应
+        import json
+        st.json({"status": "healthy", "service": "user-page", "version": "1.0.0"})
+        st.stop()
+except Exception:
+    # 如果query_params不可用（旧版本Streamlit），忽略
+    pass
 st.set_page_config(
     page_title="标书抄写神器",
     page_icon="📄",

@@ -9,6 +9,20 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
+# [OK] 支持UptimeRobot健康检查：通过URL参数检测
+from urllib.parse import urlparse, parse_qs
+try:
+    # 获取当前URL参数
+    query_params = st.query_params
+    if 'health' in query_params:
+        # 返回health检查响应
+        import json
+        st.json({"status": "healthy", "service": "admin-panel", "version": "1.0.0"})
+        st.stop()
+except Exception:
+    # 如果query_params不可用（旧版本Streamlit），忽略
+    pass
+
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(__file__))
 
