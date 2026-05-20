@@ -285,7 +285,7 @@ def add_comment(username, content, rating=5):
             }
         except Exception as e:
             logger.error(f"[ERROR] API提交评论失败: {e}，降级到本地存储")
-            # 降级到本地存储
+            # 降级到本地存储，继续执行下面的本地存储逻辑
     
     # 本地/Supabase 模式：使用本地存储（兜底逻辑）
     comments = load_comments()
@@ -355,9 +355,14 @@ def show_comments_section():
                     st.error("❌ 请输入评论内容")
                 else:
                     new_comment = add_comment(None, content, rating)  # 匿名评论
-                    st.success("✅ 评论发表成功！")
-                    # 使用session_state标记，避免st.rerun()
-                    app_state.set_comment_refresh_needed(True)
+                    if new_comment:
+                        st.success("✅ 评论发表成功！")
+                        # 使用session_state标记，避免st.rerun()
+                        app_state.set_comment_refresh_needed(True)
+                        # 立即刷新页面以显示新评论
+                        st.rerun()
+                    else:
+                        st.error("❌ 评论发表失败，请稍后重试")
     
     st.markdown("---")
     
@@ -373,8 +378,9 @@ def show_comments_section():
                 col_header, col_like = st.columns([4, 1])
                 
                 with col_header:
-                    # 只显示评分和时间
-                    stars = "[STAR4]" * comment.get('rating', 5)
+                    # 显示评分（使用emoji星号）和时间
+                    rating = comment.get('rating', 5)
+                    stars = "⭐" * rating
                     st.markdown(f"{stars}")
                     st.caption(f"🕒 {comment.get('timestamp', '')}")
                 
