@@ -261,7 +261,7 @@ def add_comment(username, content, rating=5):
     if BACKEND_URL and DATA_SOURCE == 'api':
         # API 模式：通过后端 API 提交
         try:
-            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/submit"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/comments/submit"  # 修复：后端路由有双重 /comments
             response = requests.post(
                 api_url,
                 json={
@@ -336,7 +336,7 @@ def show_comments_section():
     
     # 发表评论表单
     with st.expander("✍️ 发表评论", expanded=False):
-        with st.form("comment_form"):
+        with st.form("comment_form", clear_on_submit=True):  # 修复：添加clear_on_submit清空表单
             rating = st.slider("评分", 1, 5, 5, help="请为工具打分")
             
             content = st.text_area(
