@@ -11,7 +11,7 @@ def get_answer_mode_options():
     return {
         'before_heading': '章节前插入',
         'after_heading': '章节后插入',
-        'copy_chapter': '章节招标原文+应答句+招标原文副本',
+        'copy_chapter': '章节后插入+章节原文副本',
         'before_paragraph': '逐段前应答',
         'after_paragraph': '逐段后应答'
     }
