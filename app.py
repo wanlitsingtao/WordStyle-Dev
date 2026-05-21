@@ -274,32 +274,48 @@ def add_comment(username, content, rating=5):
                 timeout=10
             )
             logger.info(f"[INFO] API响应状态码: {response.status_code}")
-            response.raise_for_status()
-            result = response.json()
-            logger.info(f"[INFO] API返回结果: {result}")
             
-            # [OK] 修复：API成功后同步写入本地文件，确保数据一致性
-            new_comment = {
-                'id': result.get('id'),
-                'username': result.get('username'),
-                'content': result.get('content'),
-                'rating': result.get('rating'),
-                'timestamp': result.get('timestamp'),
-                'likes': result.get('likes', 0),
-                'user_id': result.get('user_id')
-            }
-            
-            # 同步到本地文件（作为缓存和降级备份）
-            comments = load_comments()
-            comments.append(new_comment)
-            save_comments(comments)
-            
-            return new_comment
+            # [OK] 修复：检查HTTP状态码，确保数据库写入成功
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"[INFO] API返回结果: {result}")
+                
+                # [OK] 修复：API成功后同步写入本地文件，确保数据一致性
+                new_comment = {
+                    'id': result.get('id'),
+                    'username': result.get('username'),
+                    'content': result.get('content'),
+                    'rating': result.get('rating'),
+                    'timestamp': result.get('timestamp'),
+                    'likes': result.get('likes', 0),
+                    'user_id': result.get('user_id')
+                }
+                
+                # 同步到本地文件（作为缓存和降级备份）
+                comments = load_comments()
+                comments.append(new_comment)
+                save_comments(comments)
+                
+                logger.info(f"[SUCCESS] 评论已成功写入数据库并同步到本地")
+                return new_comment
+            else:
+                # HTTP状态码不是200，说明写入失败
+                error_detail = response.json().get('detail', '未知错误')
+                logger.error(f"[ERROR] API返回错误状态码 {response.status_code}: {error_detail}")
+                raise Exception(f"数据库写入失败: {error_detail}")
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"[ERROR] API请求超时（10秒）")
+            # 降级到本地存储
+        except requests.exceptions.ConnectionError:
+            logger.error(f"[ERROR] 无法连接到后端API服务器")
+            # 降级到本地存储
         except Exception as e:
             logger.error(f"[ERROR] API提交评论失败: {e}，降级到本地存储")
             # 降级到本地存储，继续执行下面的本地存储逻辑
     
     # 本地/Supabase 模式：使用本地存储（兜底逻辑）
+    logger.info(f"[INFO] 使用本地存储模式保存评论")
     comments = load_comments()
     
     new_comment = {
@@ -314,6 +330,7 @@ def add_comment(username, content, rating=5):
     
     comments.append(new_comment)
     save_comments(comments)
+    logger.info(f"[SUCCESS] 评论已保存到本地文件")
     return new_comment
 
 def like_comment(comment_id):
