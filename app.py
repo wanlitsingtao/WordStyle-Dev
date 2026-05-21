@@ -257,6 +257,7 @@ def add_comment(username, content, rating=5):
     """添加新评论（使用API提交到数据库）"""
     # [OK] 修复：使用 API 提交评论（兼容多实例部署）
     from config import BACKEND_URL  # 添加BACKEND_URL的局部导入
+    import requests  # [OK] 修复：在函数开头导入requests，确保except子句可用
     
     if BACKEND_URL and DATA_SOURCE == 'api':
         # API 模式：通过后端 API 提交
