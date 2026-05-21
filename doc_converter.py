@@ -2082,7 +2082,7 @@ class DocumentConverter:
                             para, new_doc, target_style,
                             page_width, available_width,
                             para_idx, source_file,
-                            warning_callback=None
+                            warning_callback  # [OK] 修复：传递warning_callback参数
                         )
                         para_idx += 1
                 elif child.tag == qn('w:tbl'):
@@ -2090,7 +2090,7 @@ class DocumentConverter:
                         table = source_doc.tables[table_idx]
                         self.copy_table_with_images(
                             table, new_doc, table_idx, available_width,
-                            source_file, warning_callback=None
+                            source_file, warning_callback  # [OK] 修复：传递warning_callback参数
                         )
                         table_idx += 1
             

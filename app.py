@@ -1051,6 +1051,11 @@ if is_converting:
 else:
     # 正常状态，显示开始转换按钀
     if st.button("🚀 开始转换", type="primary", use_container_width=True):
+            # [OK] 修复：清空之前的转换结果，避免新旧结果混合
+            st.session_state.conversion_file_results = []
+            st.session_state.recent_results = []
+            st.session_state.show_download_buttons = False
+            
             # [OK] 提前定义进度条和状态文本（必须在所有使用之前）
             progress_placeholder = st.empty()
             status_placeholder = st.empty()
