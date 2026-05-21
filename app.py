@@ -1396,11 +1396,25 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
         for result in st.session_state.conversion_file_results:
             if result['status'] == 'success':
                 st.success(f"✅ {result['name']} 转换成功")
-                # 显示警告信息（如果有）
+                # 显示警告汇总信息（如果有）
                 if result.get('warnings'):
-                    with st.expander(f"⚠️ {result['name']} 的警告信息:"):
-                        for w in result['warnings']:
-                            st.warning(w)
+                    # 统计合并单元格表格数
+                    merge_table_count = sum(1 for w in result['warnings'] if '合并单元格' in w)
+                    # 统计OLE/VML对象数
+                    ole_vml_count = sum(1 for w in result['warnings'] if 'OLE/VML 对象' in w or 'OLE' in w or 'VML' in w)
+                    
+                    # 显示汇总警告信息
+                    if merge_table_count > 0 or ole_vml_count > 0:
+                        warning_parts = []
+                        if merge_table_count > 0:
+                            warning_parts.append(f"{merge_table_count}个有合并单元格的表格")
+                        if ole_vml_count > 0:
+                            warning_parts.append(f"{ole_vml_count}个OLE对象图片")
+                        
+                        warning_summary = "，".join(warning_parts)
+                        st.warning(
+                            f"⚠️ **{result['name']}** 文件中包含{warning_summary}，请手动处理。"
+                        )
             else:
                 st.error(f"❌ {result['name']} 转换失败: {result.get('msg', '')}")
     
