@@ -396,6 +396,8 @@ def show_comments_section():
                     
                     if new_comment:
                         st.success("✅ 评论发表成功！")
+                        # [OK] 优化：设置标记，告诉侧边栏使用缓存数据
+                        st.session_state.comment_refresh_only = True
                         # 使用session_state标记，通知fragment刷新
                         app_state.set_comment_refresh_needed(True)
                         # [OK] 修复：立即触发fragment刷新，确保评论立即显示
@@ -682,7 +684,15 @@ with st.sidebar:
     
     # [OK] 只有初始化成功才从 API 加载数据
     if not st.session_state.get('user_init_failed', False):
-        user_data = load_user_data(app_state.get_user_id())
+        # [OK] 优化：缓存侧边栏用户数据，避免评论刷新时重复加载
+        if 'sidebar_user_data' not in st.session_state or not st.session_state.get('comment_refresh_only', False):
+            user_data = load_user_data(app_state.get_user_id())
+            st.session_state.sidebar_user_data = user_data
+        else:
+            # 使用缓存的用户数据
+            user_data = st.session_state.sidebar_user_data
+            # 清除标记，下次正常加载
+            st.session_state.comment_refresh_only = False
     else:
         # 初始化失败：使用本地默认数据（额度为0）
         user_data = {
