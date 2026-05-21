@@ -436,8 +436,10 @@ class DocumentConverter:
         else:
             return self.copy_special_element(source_elem, target_doc, target_style_name)
     
-    def copy_special_element(self, source_elem, target_doc, target_style_name):
-        """复制特殊元素（OLE对象、Visio图等）"""
+    def copy_special_element(self, source_elem, target_doc, target_style_name, warning_callback=None):
+        """复制特殊元素（OLE对象、Visio图等）
+        :param warning_callback: 警告回调函数 callback(message)
+        """
         try:
             # 创建一个新的段落来容纳特殊对象
             new_para = target_doc.add_paragraph()
@@ -451,6 +453,11 @@ class DocumentConverter:
             shapes = source_elem.findall('.//{urn:schemas-microsoft-com:vml}shape')
             
             if objects or shapes:
+                # 生成告警
+                if warning_callback:
+                    warning_msg = f"[WARNING] 检测到 {len(objects)} 个 OLE 对象和 {len(shapes)} 个 VML 形状，请手动检查转换结果"
+                    warning_callback(warning_msg)
+                
                 # 对于包含特殊对象的元素，我们尝试直接复制XML结构
                 from copy import deepcopy
                 new_elem = deepcopy(source_elem)
@@ -936,7 +943,7 @@ class DocumentConverter:
                     target_style = DEFAULT_TARGET
                 
                 # 复制特殊元素
-                special_para = self.copy_special_element(child, new_doc, target_style)
+                special_para = self.copy_special_element(child, new_doc, target_style, warning_callback)  # [FIX] 传递warning_callback参数
                 if special_para is not None:
                     self.stats["para"] += 1  # 计入统计
         
