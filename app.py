@@ -592,7 +592,7 @@ st.markdown("""
 # 说明信息
 st.markdown("""
 <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
- <strong>说明：</strong>本程序不处理表格的合并单元格和文档中OLE图片（例如Visio原生图），文档转换后系统会告诉你，文档中是否有这些内容，需要你手动处理。
+ <strong>说明：</strong>本程序不处理表格的合并单元格和文档中OLE图片（例如Visio原生图），文档转换后系统会告诉你，文档中是否有这些内容，需要你手动处理。文档转换完成后，请及时下载，文档在转换完成后会被清理。
 </div>
 """, unsafe_allow_html=True)
 
