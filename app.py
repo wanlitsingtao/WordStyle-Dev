@@ -357,8 +357,8 @@ def show_comments_section():
                     new_comment = add_comment(None, content, rating)  # 匿名评论
                     if new_comment:
                         st.success("✅ 评论发表成功！")
-                        # 立即刷新页面以显示新评论
-                        st.rerun()
+                        # 注意：不在form内使用st.rerun()，避免打断API请求
+                        # Streamlit会在form提交后自动重新运行脚本
                     else:
                         st.error("❌ 评论发表失败，请稍后重试")
     
@@ -387,8 +387,7 @@ def show_comments_section():
                     likes = comment.get('likes', 0)
                     if st.button(f"👍 {likes}", key=f"like_{comment['id']}"):
                         like_comment(comment['id'])
-                        # 立即刷新页面以更新点赞数
-                        st.rerun()
+                        # Streamlit会在按钮点击后自动重新运行脚本
                 
                 # 显示评论内容
                 st.markdown(f"<div style='padding: 10px; background-color: #f0f2f6; border-radius: 5px; margin: 5px 0;'>{sanitize_html(comment.get('content', ''))}</div>", unsafe_allow_html=True)
