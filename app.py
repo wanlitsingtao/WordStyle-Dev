@@ -589,6 +589,13 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# 说明信息
+st.markdown("""
+<div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
+ <strong>说明：</strong>本程序不处理表格的合并单元格和文档中OLE图片（例如Visio原生图），文档转换后系统会告诉你，文档中是否有这些内容，需要你手动处理。
+</div>
+""", unsafe_allow_html=True)
+
 # 自定义CSS，优化页面显示（简化版，让Streamlit自动处理布局）
 st.markdown("""
 <style>
@@ -792,6 +799,29 @@ if 'source_files_uploaded' not in st.session_state:
     app_state.set_source_files_uploaded(False)
 
 st.subheader("📄 上传源文档")
+
+# 重置按钮（右对齐）
+col_reset1, col_reset2 = st.columns([6, 1])
+with col_reset2:
+    if st.button(" 重置", key="reset_page_btn", use_container_width=True, help="清空所有上传的文件和配置，刷新页面"):
+        # 清除所有相关session_state
+        keys_to_clear = [
+            'source_files_uploaded',
+            'current_source_files',
+            'template_file_uploaded',
+            'current_template_file',
+            'file_styles_map',
+            'template_styles_map',
+            'conversion_file_results',
+            'conversion_output_files',
+            'user_custom_mapping',
+            'file_custom_mappings'
+        ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+
 source_files = st.file_uploader(
     "选择要转换的 Word 文档（可多选）",
     type=['docx'],
