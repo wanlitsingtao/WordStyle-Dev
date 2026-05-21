@@ -316,8 +316,14 @@ def like_comment(comment_id):
             break
     save_comments(comments)
 
+@st.fragment
 def show_comments_section():
     """显示评论区"""
+    # 检查是否需要刷新评论
+    if app_state.get_comment_refresh_needed():
+        app_state.set_comment_refresh_needed(False)  # 清除标记
+        st.rerun()  # 刷新fragment以加载最新评论
+    
     # 加载评论
     comments = load_comments()
     
@@ -363,8 +369,8 @@ def show_comments_section():
                     
                     if new_comment:
                         st.success("✅ 评论发表成功！")
-                        # 注意：不在form内使用st.rerun()，避免打断API请求
-                        # Streamlit会在form提交后自动重新运行脚本
+                        # 使用session_state标记，通知fragment刷新
+                        app_state.set_comment_refresh_needed(True)
                     else:
                         st.error("❌ 评论发表失败，请稍后重试")
     
