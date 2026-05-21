@@ -277,7 +277,9 @@ def add_comment(username, content, rating=5):
             response.raise_for_status()
             result = response.json()
             logger.info(f"[INFO] API返回结果: {result}")
-            return {
+            
+            # [OK] 修复：API成功后同步写入本地文件，确保数据一致性
+            new_comment = {
                 'id': result.get('id'),
                 'username': result.get('username'),
                 'content': result.get('content'),
@@ -286,6 +288,13 @@ def add_comment(username, content, rating=5):
                 'likes': result.get('likes', 0),
                 'user_id': result.get('user_id')
             }
+            
+            # 同步到本地文件（作为缓存和降级备份）
+            comments = load_comments()
+            comments.append(new_comment)
+            save_comments(comments)
+            
+            return new_comment
         except Exception as e:
             logger.error(f"[ERROR] API提交评论失败: {e}，降级到本地存储")
             # 降级到本地存储，继续执行下面的本地存储逻辑
@@ -371,6 +380,8 @@ def show_comments_section():
                         st.success("✅ 评论发表成功！")
                         # 使用session_state标记，通知fragment刷新
                         app_state.set_comment_refresh_needed(True)
+                        # [OK] 修复：立即触发fragment刷新，确保评论立即显示
+                        st.rerun()
                     else:
                         st.error("❌ 评论发表失败，请稍后重试")
     
