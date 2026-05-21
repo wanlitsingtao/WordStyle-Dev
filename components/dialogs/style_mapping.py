@@ -105,7 +105,7 @@ def show_style_mapping_dialog():
     
     # 操作按钮
     st.markdown("---")
-    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    btn_col1, btn_col2 = st.columns(2)
     
     with btn_col1:
         if st.button("✅ 确定", key="confirm_mapping_btn", type="primary", use_container_width=True):
@@ -131,8 +131,3 @@ def show_style_mapping_dialog():
             save_user_data(user_data, st.session_state.user_id)
             st.info(f"已恢复文件 '{selected_file.name}' 的默认映射，您可以继续配置其他文件。")
             # 注意：不要调用st.rerun()，让用户可以继续配置其他文件
-    
-    with btn_col3:
-        if st.button("❌ 关闭", key="cancel_mapping_btn", use_container_width=True):
-            # [OK] 直接返回，对话框会自然关闭
-            return

@@ -56,71 +56,66 @@ def show_feedback_dialog():
         key=f"{form_key_prefix}_contact"  # [OK] 新增：唯一key
     )
     
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("✅ 提交", type="primary", use_container_width=True):
-            if not feedback_description:
-                st.error("❌ 请填写详细描述")
-            else:
-                try:
-                    # 映射反馈类型
-                    type_map = {
-                        "功能建议": "feature",
-                        "Bug报告": "bug",
-                        "使用问题": "question",
-                        "其他": "other"
-                    }
-                    
-                    # 如果标题为空，使用默认标题
-                    if not feedback_title or feedback_title.strip() == "":
-                        feedback_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
-                    
-                    # [OK] 修复：使用 API 提交反馈（兼容多实例部署）
-                    from config import BACKEND_URL, DATA_SOURCE
-                    import requests
-                    
-                    if BACKEND_URL and DATA_SOURCE == 'api':
-                        # API 模式：通过后端 API 提交
-                        api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/submit"
-                        response = requests.post(
-                            api_url,
-                            json={
-                                'user_id': st.session_state.user_id,
-                                'feedback_type': type_map.get(feedback_type, 'other'),
-                                'title': feedback_title,
-                                'description': feedback_description,
-                                'contact': feedback_contact
-                            },
-                            timeout=10
-                        )
-                        response.raise_for_status()
-                        result = response.json()
-                        feedback_id = result.get('id', result.get('feedback_id', 'N/A'))  # [OK] 修复：兼容两种字段名
-                    else:
-                        # 本地/Supabase 模式：使用本地存储（兜底逻辑）
-                        feedback = add_feedback(
-                            user_id=st.session_state.user_id,
-                            feedback_type=type_map.get(feedback_type, 'other'),
-                            title=feedback_title,
-                            description=feedback_description,
-                            contact=feedback_contact
-                        )
-                        feedback_id = feedback['id']
-                    
-                    st.balloons()  # 🎈 彩带庆祝
-                    st.success(f"✅ 反馈提交成功！感谢您的宝贵意见")
-                    st.info(f"ℹ️ 反馈ID: {feedback_id}")
-                    
-                    # [OK] 修复：递增表单重置计数器，下次打开对话框时会使用新的key
-                    st.session_state.feedback_form_reset += 1
-                    
-                    # [OK] 直接返回，对话框自动关闭
-                    return
-                except Exception as e:
-                    st.error(f"❌ 提交失败：{str(e)}")
-                    logger.error(f"反馈提交失败: {e}")
-    
-    with col2:
-        if st.button("❌ 关闭", use_container_width=True):
-            return  # 直接返回，对话框自动关闭
+    # 提交按钮
+    if st.button("✅ 提交", type="primary", use_container_width=True):
+        if not feedback_description:
+            st.error("❌ 请填写详细描述")
+        else:
+            try:
+                # 映射反馈类型
+                type_map = {
+                    "功能建议": "feature",
+                    "Bug报告": "bug",
+                    "使用问题": "question",
+                    "其他": "other"
+                }
+                
+                # 如果标题为空，使用默认标题
+                if not feedback_title or feedback_title.strip() == "":
+                    feedback_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
+                
+                # [OK] 修复：使用 API 提交反馈（兼容多实例部署）
+                from config import BACKEND_URL, DATA_SOURCE
+                import requests
+                
+                if BACKEND_URL and DATA_SOURCE == 'api':
+                    # API 模式：通过后端 API 提交
+                    api_url = f"{BACKEND_URL.rstrip('/')}/api/feedback/submit"
+                    response = requests.post(
+                        api_url,
+                        json={
+                            'user_id': st.session_state.user_id,
+                            'feedback_type': type_map.get(feedback_type, 'other'),
+                            'title': feedback_title,
+                            'description': feedback_description,
+                            'contact': feedback_contact
+                        },
+                        timeout=10
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    feedback_id = result.get('id', result.get('feedback_id', 'N/A'))  # [OK] 修复：兼容两种字段名
+                else:
+                    # 本地/Supabase 模式：使用本地存储（兜底逻辑）
+                    feedback = add_feedback(
+                        user_id=st.session_state.user_id,
+                        feedback_type=type_map.get(feedback_type, 'other'),
+                        title=feedback_title,
+                        description=feedback_description,
+                        contact=feedback_contact
+                    )
+                    feedback_id = feedback['id']
+                
+                st.balloons()  # 🎈 彩带庆祝
+                st.success(f"✅ 反馈提交成功！感谢您的宝贵意见")
+                st.info(f"ℹ️ 反馈ID: {feedback_id}")
+                
+                # [OK] 修复：递增表单重置计数器，下次打开对话框时会使用新的key
+                st.session_state.feedback_form_reset += 1
+                
+                # [OK] 直接返回，对话框自动关闭
+                return
+            except Exception as e:
+                st.error(f"❌ 提交失败：{str(e)}")
+                logger.error(f"反馈提交失败: {e}")
 
