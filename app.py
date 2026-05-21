@@ -225,7 +225,7 @@ def load_comments():
         # API 模式：通过后端 API 获取
         try:
             import requests
-            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/list?limit=100"
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/comments/list?limit=100"  # 修复：后端路由有双重 /comments
             response = requests.get(api_url, timeout=10)
             response.raise_for_status()
             comments = response.json()
