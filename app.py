@@ -262,6 +262,7 @@ def add_comment(username, content, rating=5):
         # API 模式：通过后端 API 提交
         try:
             api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/comments/submit"  # 修复：后端路由有双重 /comments
+            logger.info(f"[INFO] 尝试调用API: {api_url}")
             response = requests.post(
                 api_url,
                 json={
@@ -272,8 +273,10 @@ def add_comment(username, content, rating=5):
                 },
                 timeout=10
             )
+            logger.info(f"[INFO] API响应状态码: {response.status_code}")
             response.raise_for_status()
             result = response.json()
+            logger.info(f"[INFO] API返回结果: {result}")
             return {
                 'id': result.get('id'),
                 'username': result.get('username'),
@@ -354,7 +357,10 @@ def show_comments_section():
                 if not content.strip():
                     st.error("❌ 请输入评论内容")
                 else:
-                    new_comment = add_comment(None, content, rating)  # 匿名评论
+                    # 显示加载状态
+                    with st.spinner('正在提交评论...'):
+                        new_comment = add_comment(None, content, rating)  # 匿名评论
+                    
                     if new_comment:
                         st.success("✅ 评论发表成功！")
                         # 注意：不在form内使用st.rerun()，避免打断API请求
