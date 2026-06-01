@@ -1510,7 +1510,7 @@ with st.expander("📖 使用说明", expanded=False):
 
 ---
 
-### [INFO] 如何使用：
+### ℹ️ 如何使用：
     
 1. **上传源文档**：选择需要转换样式的 Word 文档
 2. **上传模板**：选择定义了目标样式的模板文档
@@ -1523,7 +1523,7 @@ with st.expander("📖 使用说明", expanded=False):
     
 ---
 
-### [GIFT] 段落额度说明：
+### 🎁 段落额度说明：
 
 **每日免费额度**：每位用户每天可获得 **{free_paragraphs_display}** 段落的免费转换额度
 
@@ -1534,7 +1534,7 @@ with st.expander("📖 使用说明", expanded=False):
 
 ---
 
-### [STATS] 段落定义：
+### 📊 段落定义：
 
 **什么是段落？**
 - 段落是指 Word 文档中的**正文内容段落**
