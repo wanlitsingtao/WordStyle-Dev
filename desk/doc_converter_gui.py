@@ -15,9 +15,13 @@ from tkinter import (Tk, Frame, Label, LabelFrame, Button, Entry, Listbox, Scrol
                      TOP, BOTTOM, X, Y, BOTH, W, E, N, S, CENTER)
 from datetime import datetime
 import os
+import json
 import subprocess
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+
+# 默认配置文件路径（保存在desk目录下）
+DEFAULT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_config.json")
 
 from doc_converter import DocumentConverter
 
@@ -25,11 +29,14 @@ from doc_converter import DocumentConverter
 class StyleMappingDialog:
     """样式映射对话框"""
     
-    def __init__(self, parent, source_styles, template_styles, current_mapping=None):
+    def __init__(self, parent, source_styles, template_styles, current_mapping=None, 
+                 saved_default_mapping=None, save_default_callback=None):
         self.parent = parent
         self.source_styles = sorted(source_styles)
         self.template_styles = sorted(template_styles)
         self.current_mapping = current_mapping or {}
+        self.saved_default_mapping = saved_default_mapping or {}
+        self.save_default_callback = save_default_callback  # 保存默认映射的回调函数
         self.result = None
         
         self.dialog = None
@@ -109,18 +116,39 @@ class StyleMappingDialog:
             
             Label(row_frame, text="→", width=3, anchor=CENTER).pack(side=LEFT)
             
-            # 目标样式下拉框
-            default_value = self.current_mapping.get(source_style, 
-                        source_style if source_style in self.template_styles else "Normal")
+            # 确定默认值：优先级为 用户当前映射 > 保存的默认映射 > 通用映射
+            # 通用映射规则：同名样式映射到自身，否则映射到 Normal
+            if source_style in self.current_mapping:
+                default_value = self.current_mapping[source_style]
+            elif source_style in self.saved_default_mapping:
+                # 模板和默认设置不匹配时：检查默认值是否在当前模板样式中
+                saved_value = self.saved_default_mapping[source_style]
+                if saved_value in self.template_styles:
+                    default_value = saved_value
+                else:
+                    # 模板不匹配，回退到通用映射
+                    default_value = source_style if source_style in self.template_styles else "Normal"
+            else:
+                # 无任何配置，使用通用映射
+                default_value = source_style if source_style in self.template_styles else "Normal"
+            
             var = StringVar(value=default_value)
             combo = ttk.Combobox(row_frame, textvariable=var, width=25, state="readonly")
             combo['values'] = self.template_styles
             combo.pack(side=LEFT, padx=5)
             
-            # 说明
-            hint = "✓ 已配置" if source_style in self.current_mapping else "○ 使用默认"
+            # 说明标签：区分三种来源
+            if source_style in self.current_mapping:
+                hint = "✓ 已配置"
+                hint_color = "green"
+            elif source_style in self.saved_default_mapping and self.saved_default_mapping[source_style] in self.template_styles:
+                hint = "★ 默认映射"
+                hint_color = "#D2691E"
+            else:
+                hint = "○ 通用映射"
+                hint_color = "gray"
             Label(row_frame, text=hint, width=20, anchor=W,
-                  font=("微软雅黑", 8), fg="green" if source_style in self.current_mapping else "gray").pack(side=LEFT, padx=5)
+                  font=("微软雅黑", 8), fg=hint_color).pack(side=LEFT, padx=5)
             
             self.mapping_widgets.append((source_style, var))
         
@@ -131,20 +159,41 @@ class StyleMappingDialog:
         btn_frame = Frame(self.dialog)
         btn_frame.pack(fill=X, padx=10, pady=10)
         
-        Button(btn_frame, text="确定", command=self.on_ok, width=10,
+        Button(btn_frame, text="确定", command=self.on_ok, width=8,
                font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
-        Button(btn_frame, text="取消", command=self.on_cancel, width=10,
+        Button(btn_frame, text="取消", command=self.on_cancel, width=8,
                font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
-        Button(btn_frame, text="恢复默认", command=self.reset_to_default, width=10,
+        Button(btn_frame, text="设为默认", command=self.on_save_default, width=8,
+               font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+        Button(btn_frame, text="恢复默认", command=self.reset_to_default, width=8,
                font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
     
     def reset_to_default(self):
-        """恢复到默认映射"""
+        """恢复到保存的默认映射（如有），否则恢复到通用映射"""
         for source_style, var in self.mapping_widgets:
-            if source_style in self.template_styles:
-                var.set(source_style)
+            if source_style in self.saved_default_mapping:
+                saved_value = self.saved_default_mapping[source_style]
+                # 检查保存的值是否在当前模板中存在
+                if saved_value in self.template_styles:
+                    var.set(saved_value)
+                else:
+                    # 模板不匹配，回退到通用映射
+                    var.set(source_style if source_style in self.template_styles else "Normal")
             else:
-                var.set("Normal")
+                # 无保存的默认，回退到通用映射
+                var.set(source_style if source_style in self.template_styles else "Normal")
+    
+    def on_save_default(self):
+        """将当前映射配置保存为默认"""
+        current_map = {}
+        for source_style, var in self.mapping_widgets:
+            current_map[source_style] = var.get()
+        
+        # 通过回调函数保存到主界面
+        if self.save_default_callback:
+            self.save_default_callback(current_map)
+            # 更新内部引用
+            self.saved_default_mapping = current_map
     
     def on_ok(self):
         """确定按钮点击"""
@@ -186,20 +235,56 @@ class DocumentConverterGUI:
         
         self.converter = DocumentConverter()
         
+        # 加载默认配置
+        self.default_config = self._load_default_config()
+        
         # 变量
         self.source_files = []  # 源文件列表
         self.template_file = StringVar()  # 模板文件路径
         self.do_mood_conversion = IntVar(value=1)  # 是否进行语气转换
         self.use_word_com = IntVar(value=0)  # 是否使用 Word COM 转换（保留 Visio 图）
         self.do_answer_insertion = IntVar(value=1)  # 是否插入应答句
-        self.answer_text = StringVar(value="应答：本投标人理解并满足要求。")  # 应答文本
-        self.answer_style = StringVar(value="应答句")  # 应答样式
+        
+        # 应答句文本：优先使用用户保存的默认值
+        saved_answer_text = self.default_config.get("answer_text", "应答：本投标人理解并满足要求。")
+        self.answer_text = StringVar(value=saved_answer_text)
+        # 应答句样式：优先使用用户保存的默认值，后续会根据模板样式自动修正
+        saved_answer_style = self.default_config.get("answer_style", "应答句")
+        self.answer_style = StringVar(value=saved_answer_style)
         self.list_bullet = StringVar(value="● ")  # 列表段落符号
+
+        # 应答句插入模式（显示标签 -> 模式值映射）
+        self.answer_mode_options = {
+            "章节标题后插入": "before_heading",
+            "章节末尾插入": "after_heading",
+            "原文+应答句+应答原文": "copy_chapter",
+            "逐段前插入": "before_paragraph",
+            "逐段后插入": "after_paragraph"
+        }
+        self.answer_mode_labels = list(self.answer_mode_options.keys())
+        # 优先使用用户保存的插入模式标签，兼容旧名称
+        saved_answer_mode = self.default_config.get("answer_mode", self.answer_mode_labels[0])
+        if saved_answer_mode == "章节末插入后应答原文":
+            saved_answer_mode = "原文+应答句+应答原文"
+        if saved_answer_mode not in self.answer_mode_labels:
+            saved_answer_mode = self.answer_mode_labels[0]
+        self.answer_mode = StringVar(value=saved_answer_mode)
+        
+        # 章节提示语配置
+        saved_hint_text = self.default_config.get("hint_text", "招标文件原文")
+        saved_hint_image_path = self.default_config.get("hint_image_path", "")
+        saved_hint_style = self.default_config.get("hint_style", "Normal")
+        self.do_hint_insertion = IntVar(value=0)  # 是否插入章节提示语（默认关闭）
+        self.hint_type = StringVar(value="text")  # 提示语类型：text 或 image
+        self.hint_text = StringVar(value=saved_hint_text)  # 提示语文本
+        self.hint_image_path = StringVar(value=saved_hint_image_path)  # 提示语图片路径
+        self.hint_style = StringVar(value=saved_hint_style)  # 提示语样式
         
         # 样式信息
         self.source_styles = set()
         self.template_styles = set()
         self.custom_style_map = {}  # 用户自定义的样式映射（全局）
+        self.default_style_map = self.default_config.get("style_map", {})  # 用户保存的默认样式映射
         self.file_style_maps = {}  # 每个文件的独立映射配置 {file_path: {style_map}}
         self.selected_source_file = None  # 当前选中的源文件
         
@@ -408,33 +493,118 @@ class DocumentConverterGUI:
         # 应答句配置
         answer_frame = Frame(options_frame)
         answer_frame.pack(fill=X, pady=5)
-        
-        # 应答句文本（标签和输入框在同一行）
+
+        # 应答句文本、样式、插入模式和"设为默认"按钮全部在同一行
         text_row = Frame(answer_frame)
         text_row.pack(fill=X, pady=2)
-        
+
         Label(text_row, text="应答句文本:", width=10, anchor=W,
               font=("微软雅黑", 9)).pack(side=LEFT)
         self.answer_text_entry = Entry(text_row, textvariable=self.answer_text,
                                        font=("微软雅黑", 9))
         self.answer_text_entry.pack(side=LEFT, fill=X, expand=True, padx=5)
-        
-        # 应答句样式
-        style_row = Frame(answer_frame)
-        style_row.pack(fill=X, pady=2)
-        Label(style_row, text="应答句样式:", width=10, anchor=W,
-              font=("微软雅黑", 9)).pack(side=LEFT)
-        
+
+        Label(text_row, text="应答句样式:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
+
         # 使用下拉框选择应答样式，从模板样式中选择
-        self.answer_style_combo = ttk.Combobox(style_row, textvariable=self.answer_style,
-                                               width=28, state="readonly", font=("微软雅黑", 9))
+        self.answer_style_combo = ttk.Combobox(text_row, textvariable=self.answer_style,
+                                               width=14, state="readonly", font=("微软雅黑", 9))
         self.answer_style_combo.pack(side=LEFT, padx=5)
-        
+
         # 初始化下拉框为空列表，等待模板加载后填充
         self.answer_style_combo['values'] = []
-        
+
+        # 应答句插入模式（与样式同一行）
+        Label(text_row, text="插入模式:", width=8, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
+        self.answer_mode_combo = ttk.Combobox(text_row, textvariable=self.answer_mode,
+                                               width=20, state="readonly", font=("微软雅黑", 9))
+        self.answer_mode_combo['values'] = self.answer_mode_labels
+        # 根据已加载的默认值设置选中项
+        if self.answer_mode.get() in self.answer_mode_labels:
+            self.answer_mode_combo.current(self.answer_mode_labels.index(self.answer_mode.get()))
+        else:
+            self.answer_mode_combo.current(0)
+        self.answer_mode_combo.pack(side=LEFT, padx=5)
+
+        self.set_answer_default_btn = Button(text_row, text="设为默认", width=8,
+                                              font=("微软雅黑", 9),
+                                              command=self.save_default_answer_settings)
+        self.set_answer_default_btn.pack(side=LEFT, padx=(10, 5))
+
         # 初始化控件状态
         self.toggle_answer_controls()
+        
+        # ========== 章节提示语配置区域 ==========
+        hint_frame = LabelFrame(options_frame, text="章节提示语", font=("微软雅黑", 10),
+                                padx=10, pady=5)
+        hint_frame.pack(fill=X, pady=5)
+        
+        # 第一行：启用开关 + 提示语类型选择
+        hint_check_row = Frame(hint_frame)
+        hint_check_row.pack(fill=X, pady=2)
+        
+        self.hint_check = Checkbutton(hint_check_row, text="插入章节提示语",
+                                       variable=self.do_hint_insertion, font=("微软雅黑", 9),
+                                       command=self.toggle_hint_controls)
+        self.hint_check.pack(side=LEFT, padx=5)
+        
+        # 提示语类型单选按钮
+        self.hint_type_text_rb = tk.Radiobutton(hint_check_row, text="文本提示语",
+                                                 variable=self.hint_type, value="text",
+                                                 font=("微软雅黑", 9),
+                                                 command=self.toggle_hint_type_controls)
+        self.hint_type_text_rb.pack(side=LEFT, padx=5)
+        
+        self.hint_type_image_rb = tk.Radiobutton(hint_check_row, text="图片提示语",
+                                                  variable=self.hint_type, value="image",
+                                                  font=("微软雅黑", 9),
+                                                  command=self.toggle_hint_type_controls)
+        self.hint_type_image_rb.pack(side=LEFT, padx=5)
+        
+        # 第二行：提示语文本输入框（始终显示，图片模式灰显）
+        hint_text_row = Frame(hint_frame)
+        hint_text_row.pack(fill=X, pady=2)
+        
+        Label(hint_text_row, text="提示语文本:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT)
+        self.hint_text_entry = Entry(hint_text_row, textvariable=self.hint_text,
+                                     font=("微软雅黑", 9))
+        self.hint_text_entry.pack(side=LEFT, fill=X, expand=True, padx=5)
+        
+        # 第三行：图片文件选择（始终显示，文本模式灰显）
+        self.hint_image_row = Frame(hint_frame)
+        self.hint_image_row.pack(fill=X, pady=2)
+        
+        Label(self.hint_image_row, text="图片文件:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT)
+        self.hint_image_entry = Entry(self.hint_image_row, textvariable=self.hint_image_path,
+                                       font=("微软雅黑", 9), state='readonly')
+        self.hint_image_entry.pack(side=LEFT, fill=X, expand=True, padx=5)
+        self.hint_image_select_btn = Button(self.hint_image_row, text="选择图片", width=10,
+                                             font=("微软雅黑", 9),
+                                             command=self.select_hint_image)
+        self.hint_image_select_btn.pack(side=LEFT, padx=(0, 5))
+        
+        # 第四行：提示语样式下拉框 + 设为默认按钮（始终显示，在图片文件下面）
+        hint_style_row = Frame(hint_frame)
+        hint_style_row.pack(fill=X, pady=2)
+        
+        Label(hint_style_row, text="提示语样式:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT)
+        self.hint_style_combo = ttk.Combobox(hint_style_row, textvariable=self.hint_style,
+                                               width=20, state="readonly", font=("微软雅黑", 9))
+        self.hint_style_combo.pack(side=LEFT, padx=5)
+        self.hint_style_combo['values'] = []  # 等待模板加载后填充
+        
+        self.set_hint_default_btn = Button(hint_style_row, text="设为默认", width=8,
+                                            font=("微软雅黑", 9),
+                                            command=self.save_default_hint_settings)
+        self.set_hint_default_btn.pack(side=LEFT, padx=(5, 0))
+        
+        # 初始化提示语控件状态
+        self.toggle_hint_controls()
         
         # ========== 输出文件列表区域 ==========
         output_frame = LabelFrame(scrollable_main, text="输出文件列表", font=("微软雅黑", 10),
@@ -780,16 +950,124 @@ class DocumentConverterGUI:
         self.clear_source_data()
         self.clear_template_data()
     
+    def _load_default_config(self):
+        """从配置文件加载默认设置"""
+        try:
+            if os.path.exists(DEFAULT_CONFIG_FILE):
+                with open(DEFAULT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                return config
+        except Exception as e:
+            print(f"加载默认配置失败: {e}")
+        return {}
+    
+    def _save_default_config(self, config):
+        """将默认设置保存到配置文件"""
+        try:
+            with open(DEFAULT_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"保存默认配置失败: {e}")
+            return False
+    
+    def save_default_answer_settings(self):
+        """将当前应答句文本、样式和插入模式保存为默认"""
+        current_text = self.answer_text.get()
+        current_style = self.answer_style.get()
+        current_mode = self.answer_mode.get()
+        self.default_config["answer_text"] = current_text
+        self.default_config["answer_style"] = current_style
+        self.default_config["answer_mode"] = current_mode
+        if self._save_default_config(self.default_config):
+            self.log(f"✓ 已将应答句设置设为默认：样式={current_style}, 模式={current_mode}")
+            messagebox.showinfo("成功", f"已将以下设置设为默认：\n\n应答句文本: {current_text}\n应答句样式: {current_style}\n插入模式: {current_mode}\n\n下次启动将自动使用。")
+        else:
+            messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
+    
+    def save_default_style_map(self, style_map):
+        """将当前样式映射保存为默认"""
+        self.default_config["style_map"] = style_map
+        if self._save_default_config(self.default_config):
+            configured_count = sum(1 for v in style_map.values() if v)
+            self.log(f"✓ 已将样式映射设为默认，共 {configured_count} 个映射关系")
+            messagebox.showinfo("成功", f"已将样式映射设为默认！\n\n共 {configured_count} 个映射关系\n下次打开样式映射对话框时将自动恢复此配置。")
+        else:
+            messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
+    
     def toggle_answer_controls(self):
         """切换应答句控件的可用状态"""
         if self.do_answer_insertion.get():
             # 选中：启用控件
             self.answer_text_entry.config(state='normal')
             self.answer_style_combo.config(state='readonly')
+            self.answer_mode_combo.config(state='readonly')
+            self.set_answer_default_btn.config(state='normal')
         else:
             # 未选中：灰化控件
             self.answer_text_entry.config(state='disabled')
             self.answer_style_combo.config(state='disabled')
+            self.answer_mode_combo.config(state='disabled')
+            self.set_answer_default_btn.config(state='disabled')
+    
+    def toggle_hint_controls(self):
+        """切换章节提示语控件的可用状态（灰显/可用，不隐藏）"""
+        if self.do_hint_insertion.get():
+            # 选中：启用控件
+            self.hint_type_text_rb.config(state='normal')
+            self.hint_type_image_rb.config(state='normal')
+            self.hint_style_combo.config(state='readonly')
+            self.set_hint_default_btn.config(state='normal')
+            self.toggle_hint_type_controls()  # 根据类型切换文本/图片控件灰显
+        else:
+            # 未选中：灰化所有控件
+            self.hint_type_text_rb.config(state='disabled')
+            self.hint_type_image_rb.config(state='disabled')
+            self.hint_text_entry.config(state='disabled')
+            self.set_hint_default_btn.config(state='disabled')
+            self.hint_style_combo.config(state='disabled')
+            self.hint_image_entry.config(state='disabled')
+            self.hint_image_select_btn.config(state='disabled')
+    
+    def toggle_hint_type_controls(self):
+        """根据提示语类型切换文本/图片控件的灰显状态（所有控件始终可见）"""
+        if not self.do_hint_insertion.get():
+            return  # 未启用时不操作
+        
+        if self.hint_type.get() == "text":
+            # 文本模式：文本输入可用，图片选择灰显
+            self.hint_text_entry.config(state='normal')
+            self.hint_image_entry.config(state='disabled')
+            self.hint_image_select_btn.config(state='disabled')
+        else:
+            # 图片模式：文本输入灰显，图片选择可用
+            self.hint_text_entry.config(state='disabled')
+            self.hint_image_entry.config(state='readonly')
+            self.hint_image_select_btn.config(state='normal')
+        # 设为默认按钮始终可用（保存全部提示语配置）
+    
+    def select_hint_image(self):
+        """选择提示语图片文件"""
+        file_path = filedialog.askopenfilename(
+            title="选择提示语图片",
+            filetypes=[
+                ("图片文件", "*.png *.jpg *.jpeg *.bmp *.gif *.tiff *.tif"),
+                ("所有文件", "*.*")
+            ]
+        )
+        if file_path:
+            self.hint_image_path.set(file_path)
+    
+    def save_default_hint_settings(self):
+        """保存当前提示语全部配置为默认（文本、图片路径、样式）"""
+        self.default_config["hint_text"] = self.hint_text.get()
+        self.default_config["hint_image_path"] = self.hint_image_path.get()
+        self.default_config["hint_style"] = self.hint_style.get()
+        if self._save_default_config(self.default_config):
+            messagebox.showinfo("提示", "已将当前提示语配置设为默认")
+        else:
+            messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
+
     
     def stop_conversion(self):
         """停止转换"""
@@ -883,11 +1161,17 @@ class DocumentConverterGUI:
         # 更新应答句样式的下拉框选项
         template_style_list = sorted(self.template_styles)
         self.answer_style_combo['values'] = template_style_list
+        self.hint_style_combo['values'] = template_style_list
         
         # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
         current_answer_style = self.answer_style.get()
         if current_answer_style not in template_style_list and template_style_list:
             self.answer_style.set(template_style_list[0])
+        
+        # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
+        current_hint_style = self.hint_style.get()
+        if current_hint_style not in template_style_list and template_style_list:
+            self.hint_style.set(template_style_list[0])
         
         self.log(f"✓ 模板文档样式分析完成，共 {len(self.template_styles)} 种样式")
         self.root.after(500, lambda: self._stop_loading_progress())
@@ -904,6 +1188,7 @@ class DocumentConverterGUI:
         # 更新应答句样式的下拉框选项
         template_style_list = sorted(styles)
         self.answer_style_combo['values'] = template_style_list
+        self.hint_style_combo['values'] = template_style_list
         self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
         
         # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
@@ -911,6 +1196,11 @@ class DocumentConverterGUI:
         if current_answer_style not in template_style_list and template_style_list:
             self.answer_style.set(template_style_list[0])
             self.log(f"应答样式已自动设置为: {template_style_list[0]}")
+        
+        # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
+        current_hint_style = self.hint_style.get()
+        if current_hint_style not in template_style_list and template_style_list:
+            self.hint_style.set(template_style_list[0])
     
     def analyze_source_styles(self, files):
         """分析源文档样式"""
@@ -948,6 +1238,7 @@ class DocumentConverterGUI:
             # 更新应答句样式的下拉框选项
             template_style_list = sorted(self.template_styles)
             self.answer_style_combo['values'] = template_style_list
+            self.hint_style_combo['values'] = template_style_list
             self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
             
             # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
@@ -955,6 +1246,11 @@ class DocumentConverterGUI:
             if current_answer_style not in template_style_list and template_style_list:
                 self.answer_style.set(template_style_list[0])
                 self.log(f"应答样式已自动设置为: {template_style_list[0]}")
+            
+            # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
+            current_hint_style = self.hint_style.get()
+            if current_hint_style not in template_style_list and template_style_list:
+                self.hint_style.set(template_style_list[0])
             
             self.log(f"模板文档样式分析完成，共 {len(self.template_styles)} 种样式")
         except Exception as e:
@@ -992,8 +1288,10 @@ class DocumentConverterGUI:
             messagebox.showwarning("警告", "所选文件没有样式信息")
             return
         
-        # 打开对话框
-        dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping)
+        # 打开对话框（传入保存的默认映射和保存回调）
+        dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping,
+                                     saved_default_mapping=self.default_style_map,
+                                     save_default_callback=self.save_default_style_map)
         result = dialog.show()
         
         if result is not None:
@@ -1216,6 +1514,12 @@ class DocumentConverterGUI:
                     answer_style=self.answer_style.get(),
                     list_bullet=self.list_bullet.get(),
                     do_answer_insertion=self.do_answer_insertion.get(),
+                    answer_mode=self.answer_mode_options.get(self.answer_mode.get(), "before_heading"),
+                    do_hint_insertion=self.do_hint_insertion.get(),
+                    hint_type=self.hint_type.get(),
+                    hint_text=self.hint_text.get(),
+                    hint_image_path=self.hint_image_path.get(),
+                    hint_style=self.hint_style.get(),
                     progress_callback=progress_callback,
                     warning_callback=warning_callback
                 )
@@ -1292,6 +1596,12 @@ class DocumentConverterGUI:
                         answer_style=self.answer_style.get(),
                         list_bullet=self.list_bullet.get(),
                         do_answer_insertion=self.do_answer_insertion.get(),
+                        answer_mode=self.answer_mode_options.get(self.answer_mode.get(), "before_heading"),
+                        do_hint_insertion=self.do_hint_insertion.get(),
+                        hint_type=self.hint_type.get(),
+                        hint_text=self.hint_text.get(),
+                        hint_image_path=self.hint_image_path.get(),
+                        hint_style=self.hint_style.get(),
                         progress_callback=progress_callback,
                         warning_callback=warning_callback
                     )

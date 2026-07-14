@@ -947,9 +947,9 @@ class DocumentConverter:
         # 使用重试机制保存文档
         success, actual_file, msg = self.save_with_retry(new_doc, output_file)
         if success:
-            return True, f"转换完成！段落: {self.stats['para']}, 表格: {self.stats['table']}, 标题: {self.stats['heading']}。{msg}"
+            return True, actual_file, f"转换完成！段落: {self.stats['para']}, 表格: {self.stats['table']}, 标题: {self.stats['heading']}。{msg}"
         else:
-            return False, msg
+            return False, output_file, msg
     
     def is_part_of_exception(self, full_text, match_start, match_end, word):
         """判断单字词是否属于例外词"""
@@ -1048,7 +1048,7 @@ class DocumentConverter:
         祈使语气转换
         :param input_file: 输入文件
         :param output_file: 输出文件（如果为None则覆盖原文件）
-        :return: 是否成功，消息
+        :return: (success, actual_output_file, message)
         """
         if output_file is None:
             output_file = input_file
@@ -1056,13 +1056,16 @@ class DocumentConverter:
         try:
             doc = Document(input_file)
         except Exception as e:
-            return False, f"加载文档失败: {e}"
+            return False, output_file, f"加载文档失败: {e}"
         
         modified_count = 0
         para_count = 0
         
         for para in doc.paragraphs:
             para_count += 1
+            # 跳过标记为 keepOriginal 的段落（copy_chapter 模式的第一份副本）
+            if self._is_keep_original_paragraph(para._element):
+                continue
             if self.process_paragraph_mood(para):
                 modified_count += 1
         
@@ -1071,15 +1074,85 @@ class DocumentConverter:
                 for cell in row.cells:
                     for para in cell.paragraphs:
                         para_count += 1
+                        if self._is_keep_original_paragraph(para._element):
+                            continue
                         if self.process_paragraph_mood(para):
                             modified_count += 1
+        
+        # 清除所有 _keepOriginal_ 书签标记
+        self._remove_keep_original_markers(doc)
         
         # 使用重试机制保存文档
         success, actual_file, msg = self.save_with_retry(doc, output_file)
         if success:
-            return True, f"语气转换完成！处理段落: {para_count}, 修改: {modified_count}。{msg}"
+            return True, actual_file, f"语气转换完成！处理段落: {para_count}, 修改: {modified_count}。{msg}"
         else:
-            return False, msg
+            return False, output_file, msg
+    
+    def _is_keep_original_paragraph(self, elem):
+        """检查段落是否标记为 keepOriginal（不做语气转换）"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        # 查找 bookmarkStart 元素，检查是否有 _keepOriginal_ 书签
+        for child in elem:
+            if child.tag == qn('w:bookmarkStart'):
+                if child.get(qn('w:name')) == '_keepOriginal_':
+                    return True
+        return False
+    
+    def _remove_keep_original_markers(self, doc):
+        """清除文档中所有 _keepOriginal_ 书签标记"""
+        body = doc.element.body
+        # 遍历所有段落元素
+        for elem in body.iter(qn('w:p')):
+            # 移除 bookmarkStart 和对应的 bookmarkEnd
+            bookmark_ids_to_remove = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_keepOriginal_':
+                        bookmark_ids_to_remove.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids_to_remove:
+                        ends_to_remove.append(child)
+            
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
+
+    def _is_hint_paragraph(self, elem):
+        """检查段落是否标记为提示语（hint）"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        for child in elem:
+            if child.tag == qn('w:bookmarkStart'):
+                if child.get(qn('w:name')) == '_hint_':
+                    return True
+        return False
+
+    def _remove_hint_markers(self, doc):
+        """清除文档中所有 _hint_ 书签标记"""
+        body = doc.element.body
+        for elem in body.iter(qn('w:p')):
+            bookmark_ids_to_remove = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_hint_':
+                        bookmark_ids_to_remove.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids_to_remove:
+                        ends_to_remove.append(child)
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
     
     def ensure_style_exists(self, doc, style_name):
         """确保文档中存在指定样式"""
@@ -1147,15 +1220,142 @@ class DocumentConverter:
         """判断段落是否为标题（通过大纲级别）"""
         return self.get_outline_level(elem, doc) > 0
     
-    def insert_response_after_headings(self, input_file, output_file=None, 
-                                       answer_text=None, answer_style=None):
+    def insert_hint_paragraph(self, input_file, output_file=None,
+                              hint_type='text', hint_text='招标文件原文',
+                              hint_image_path=None, hint_style='Normal'):
         """
-        在标题后插入应答句（改进版：使用大纲级别识别标题）
+        在每个章节标题后（正文开始前）插入提示语
+        :param input_file: 输入文件
+        :param output_file: 输出文件（如果为None则覆盖原文件）
+        :param hint_type: 提示语类型 'text' 或 'image'
+        :param hint_text: 提示语文本内容（hint_type='text' 时使用）
+        :param hint_image_path: 提示语图片文件路径（hint_type='image' 时使用）
+        :param hint_style: 提示语段落样式名称
+        :return: (success, actual_output_file, message)
+        """
+        if output_file is None:
+            output_file = input_file
+
+        try:
+            doc = Document(input_file)
+        except Exception as e:
+            return False, output_file, f"加载文档失败: {e}"
+
+        # 确保提示语样式存在
+        self.ensure_style_exists(doc, hint_style)
+
+        # 计算可用页面宽度（用于图片提示语）
+        section = doc.sections[0]
+        available_width = section.page_width - section.left_margin - section.right_margin
+
+        body = doc.element.body
+        children = list(body)
+        new_children = []
+        insert_count = 0
+        total_heading_count = 0
+        hint_bookmark_id = 0
+
+        i = 0
+        while i < len(children):
+            child = children[i]
+
+            if not hasattr(child, 'tag'):
+                i += 1
+                continue
+
+            new_children.append(child)
+
+            # 检查是否为标题
+            if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
+                total_heading_count += 1
+
+                # 检查下一个元素：如果不是标题，则在标题后插入提示语
+                if i + 1 < len(children):
+                    next_elem = children[i + 1]
+                    if hasattr(next_elem, 'tag') and not self.is_heading_paragraph(next_elem, doc):
+                        if hint_type == 'text':
+                            # 文本提示语：创建段落并应用样式
+                            hint_para = doc.add_paragraph(hint_text)
+                            hint_para.style = hint_style
+                            hint_elem = deepcopy(hint_para._element)
+                            hint_para._element.getparent().remove(hint_para._element)
+                            # 标记为提示语，避免 copy_chapter 模式重复复制
+                            self._add_hint_marker(hint_elem, hint_bookmark_id)
+                            hint_bookmark_id += 1
+                            new_children.append(hint_elem)
+                            insert_count += 1
+                        elif hint_type == 'image' and hint_image_path:
+                            # 图片提示语：创建空段落，应用样式，插入嵌入式图片
+                            hint_para = doc.add_paragraph()
+                            hint_para.style = hint_style
+                            # 图片宽度设为版心宽度（页面宽度减去左右边距），高度按比例缩放
+                            try:
+                                picture = hint_para.add_run().add_picture(hint_image_path)
+                                picture.width = available_width
+                                # 使用 PIL 按原始宽高比显式计算高度，避免比例异常
+                                try:
+                                    from PIL import Image
+                                    with Image.open(hint_image_path) as img:
+                                        img_w, img_h = img.size
+                                    if img_w and img_w > 0:
+                                        picture.height = int(int(picture.width) * img_h / img_w)
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                print(f"插入提示语图片失败: {e}")
+                                # 回退为文本提示语
+                                hint_para.text = hint_text
+                            hint_elem = deepcopy(hint_para._element)
+                            hint_para._element.getparent().remove(hint_para._element)
+                            # 标记为提示语，避免 copy_chapter 模式重复复制
+                            self._add_hint_marker(hint_elem, hint_bookmark_id)
+                            hint_bookmark_id += 1
+                            new_children.append(hint_elem)
+                            insert_count += 1
+
+            i += 1
+
+        # 清空并重组body
+        for child in list(body):
+            body.remove(child)
+        for elem in new_children:
+            body.append(elem)
+
+        # 使用重试机制保存文档
+        success, actual_file, msg = self.save_with_retry(doc, output_file)
+        if success:
+            return True, actual_file, f"已插入 {insert_count} 个章节提示语，共发现标题 {total_heading_count} 个。{msg}"
+        else:
+            return False, output_file, msg
+
+    def _add_hint_marker(self, elem, bookmark_id):
+        """为提示语段落添加 _hint_ 书签标记"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return
+        bookmark_start = OxmlElement('w:bookmarkStart')
+        bookmark_start.set(qn('w:id'), str(bookmark_id))
+        bookmark_start.set(qn('w:name'), '_hint_')
+        elem.insert(0, bookmark_start)
+        bookmark_end = OxmlElement('w:bookmarkEnd')
+        bookmark_end.set(qn('w:id'), str(bookmark_id))
+        elem.append(bookmark_end)
+    
+    def insert_response_after_headings(self, input_file, output_file=None, 
+                                       answer_text=None, answer_style=None,
+                                       answer_mode='before_heading'):
+        """
+        插入应答句（支持5种模式）
         :param input_file: 输入文件
         :param output_file: 输出文件（如果为None则覆盖原文件）
         :param answer_text: 应答文本
         :param answer_style: 应答样式
-        :return: 是否成功，消息
+        :param answer_mode: 插入模式
+            - 'before_heading': 章节标题后插入（默认）
+            - 'after_heading': 章节末尾插入
+            - 'copy_chapter': 原文+应答句+应答原文
+            - 'before_paragraph': 逐段前插入
+            - 'after_paragraph': 逐段后插入
+        :return: (success, actual_output_file, message)
         """
         if output_file is None:
             output_file = input_file
@@ -1167,7 +1367,7 @@ class DocumentConverter:
         try:
             doc = Document(input_file)
         except Exception as e:
-            return False, f"加载文档失败: {e}"
+            return False, output_file, f"加载文档失败: {e}"
         
         self.ensure_style_exists(doc, answer_style)
         
@@ -1180,55 +1380,33 @@ class DocumentConverter:
         body = doc.element.body
         children = list(body)
         new_children = []
-        insert_count = 0
-        total_heading_count = 0
-        para_index = 0
-        i = 0
         
-        while i < len(children):
-            child = children[i]
-            
-            # 安全检查：确保child是XML元素
-            if not hasattr(child, 'tag'):
-                print(f"警告：跳过非XML元素 {type(child)}")
-                i += 1
-                continue
-            
-            new_children.append(child)
-            
-            # 检查是否为标题（通过大纲级别）
-            if child.tag == qn('w:p'):
-                if self.is_heading_paragraph(child, doc):
-                    total_heading_count += 1
-                    level = self.get_outline_level(child, doc)
-                    
-                    # 检查下一个元素
-                    if i + 1 < len(children):
-                        next_elem = children[i + 1]
-                        
-                        # 安全检查：确保next_elem是XML元素
-                        if hasattr(next_elem, 'tag'):
-                            # 如果下一个不是标题，则插入应答句
-                            if not self.is_heading_paragraph(next_elem, doc):
-                                # 判断下一个元素类型
-                                if next_elem.tag == qn('w:tbl'):
-                                    elem_type = "表格"
-                                elif next_elem.tag == qn('w:p') and len(next_elem.findall('.//' + qn('a:blip'))) > 0:
-                                    elem_type = "图片段落"
-                                else:
-                                    elem_type = "正文段落"
-                                
-                                # 插入应答句
-                                answer_elem = deepcopy(answer_template)
-                                new_children.append(answer_elem)
-                                insert_count += 1
-                            else:
-                                # 连续标题，跳过
-                                pass
-                        else:
-                            print(f"警告：next_elem不是XML元素 {type(next_elem)}")
-                para_index += 1
-            i += 1
+        # 根据模式选择不同的处理逻辑
+        if answer_mode == 'before_heading':
+            insert_count, total_heading_count = self._insert_before_headings(
+                children, new_children, answer_template, doc
+            )
+        elif answer_mode == 'after_heading':
+            insert_count, total_heading_count = self._insert_after_headings(
+                children, new_children, answer_template, doc
+            )
+        elif answer_mode == 'copy_chapter':
+            insert_count, total_heading_count = self._insert_with_copy_chapter(
+                children, new_children, answer_template, doc
+            )
+        elif answer_mode == 'before_paragraph':
+            insert_count, total_heading_count = self._insert_before_paragraphs(
+                children, new_children, answer_template, doc
+            )
+        elif answer_mode == 'after_paragraph':
+            insert_count, total_heading_count = self._insert_after_paragraphs(
+                children, new_children, answer_template, doc
+            )
+        else:
+            # 默认使用章节标题后插入
+            insert_count, total_heading_count = self._insert_before_headings(
+                children, new_children, answer_template, doc
+            )
         
         # 清空并重组body
         for child in list(body):
@@ -1236,21 +1414,586 @@ class DocumentConverter:
         for elem in new_children:
             body.append(elem)
         
+        # 清除提示语标记（避免残留到最终文档）
+        self._remove_hint_markers(doc)
+        
         # 使用重试机制保存文档
         success, actual_file, msg = self.save_with_retry(doc, output_file)
         if success:
             return True, actual_file, f"已插入 {insert_count} 个应答句，共发现标题 {total_heading_count} 个。{msg}"
         else:
             return False, output_file, msg
+
+    def _insert_before_headings(self, children, new_children, answer_template, doc):
+        """
+        章节标题后插入应答句（模式1：before_heading）
+        判断条件：如果标题后下一个元素不是标题，则在该标题后插入应答句
+        :return: (insert_count, total_heading_count)
+        """
+        insert_count = 0
+        total_heading_count = 0
+        i = 0
+        
+        while i < len(children):
+            child = children[i]
+            
+            # 安全检查
+            if not hasattr(child, 'tag'):
+                i += 1
+                continue
+            
+            new_children.append(child)
+            
+            # 检查是否为标题
+            if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
+                total_heading_count += 1
+                
+                # 检查下一个元素
+                if i + 1 < len(children):
+                    next_elem = children[i + 1]
+                    
+                    if hasattr(next_elem, 'tag'):
+                        # 如果下一个不是标题，则插入应答句
+                        if not self.is_heading_paragraph(next_elem, doc):
+                            answer_elem = deepcopy(answer_template)
+                            new_children.append(answer_elem)
+                            insert_count += 1
+            
+            i += 1
+        
+        return insert_count, total_heading_count
+    
+    def _insert_after_headings(self, children, new_children, answer_template, doc):
+        """
+        章节末尾插入应答句（模式2：after_heading）
+        判断条件：如果当前不是标题 + 下一个元素是标题，则在当前元素后插入应答句
+        特殊情况：
+        - 全文档第一个标题前不插入（因为前面没有章节）
+        - 两个标题之间不插入
+        - 文章最后一段如果是正文，在其后插入
+        :return: (insert_count, total_heading_count)
+        """
+        insert_count = 0
+        total_heading_count = 0
+        
+        # 第一步：遍历所有元素，添加元素并统计标题
+        for i, child in enumerate(children):
+            # 安全检查
+            if not hasattr(child, 'tag'):
+                new_children.append(child)
+                continue
+            
+            # 统计标题数量
+            if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
+                total_heading_count += 1
+            
+            # 添加当前元素
+            new_children.append(child)
+            
+            # 第二步：判断是否需要在当前元素后插入应答句
+            # 条件：当前不是标题 + 下一个元素是标题
+            if i + 1 < len(children):
+                next_elem = children[i + 1]
+                
+                # 检查下一个元素是否为标题
+                if hasattr(next_elem, 'tag') and next_elem.tag == qn('w:p'):
+                    if self.is_heading_paragraph(next_elem, doc):
+                        # 下一个是标题，检查当前元素是否不是标题
+                        is_not_heading = True
+                        
+                        # 检查当前是否为标题
+                        if hasattr(child, 'tag') and child.tag == qn('w:p'):
+                            if self.is_heading_paragraph(child, doc):
+                                is_not_heading = False
+                        
+                        # 如果当前不是标题（可以是正文、表格、图片等），则在其后插入应答句
+                        if is_not_heading:
+                            answer_elem = deepcopy(answer_template)
+                            new_children.append(answer_elem)
+                            insert_count += 1
+            else:
+                # 当前是最后一个元素
+                # 如果当前不是标题，在其后插入应答句
+                is_not_heading = True
+                if hasattr(child, 'tag') and child.tag == qn('w:p'):
+                    if self.is_heading_paragraph(child, doc):
+                        is_not_heading = False
+                
+                if is_not_heading:
+                    answer_elem = deepcopy(answer_template)
+                    new_children.append(answer_elem)
+                    insert_count += 1
+        
+        return insert_count, total_heading_count
+    
+    def _insert_with_copy_chapter(self, children, new_children, answer_template, doc):
+        """
+        原文+应答句+应答原文（模式3：copy_chapter）
+        最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 原文（语气转换后）
+        注意：此模式在 full_convert 中会调换流水线顺序（先插入应答句，后语气转换），
+              因此原始正文在插入应答句时仍是未转换状态，加上 keepOriginal 标记后会被跳过。
+        :return: (insert_count, total_heading_count)
+        """
+        insert_count = 0
+        total_heading_count = 0
+        bookmark_id = 0  # 书签 ID 计数器
+        
+        def is_heading(elem):
+            """判断元素是否为标题段落"""
+            if not hasattr(elem, 'tag'):
+                return False
+            if elem.tag != qn('w:p'):
+                return False
+            return self.is_heading_paragraph(elem, doc)
+        
+        def remove_keep_original_from_element(elem):
+            """移除元素中的 keepOriginal 书签标记"""
+            if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+                return
+            bookmark_ids = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_keepOriginal_':
+                        bookmark_ids.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids:
+                        ends_to_remove.append(child)
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
+        
+        # 当前章节标题索引，None 表示尚未进入任何章节
+        current_chapter_heading = None
+        # 章节内容缓冲区：保存当前章节内的非提示语元素，用于生成第二份副本
+        chapter_buffer = []
+        
+        i = 0
+        while i < len(children):
+            child = children[i]
+            
+            # 安全检查：非 XML 元素直接输出
+            if not hasattr(child, 'tag'):
+                new_children.append(child)
+                i += 1
+                continue
+            
+            # 遇到标题：先刷新前一个章节，再输出当前标题
+            if is_heading(child):
+                # 刷新前一个章节的内容
+                if current_chapter_heading is not None and chapter_buffer:
+                    # 检查是否有非提示语内容
+                    has_real_content = any(not self._is_hint_paragraph(elem) for elem in chapter_buffer)
+                    if has_real_content:
+                        # 插入应答句
+                        answer_elem = deepcopy(answer_template)
+                        new_children.append(answer_elem)
+                        insert_count += 1
+                        
+                        # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                        for elem in chapter_buffer:
+                            if self._is_hint_paragraph(elem):
+                                continue
+                            copied_elem = deepcopy(elem)
+                            remove_keep_original_from_element(copied_elem)
+                            new_children.append(copied_elem)
+                
+                chapter_buffer.clear()
+                new_children.append(child)
+                current_chapter_heading = i
+                total_heading_count += 1
+                i += 1
+                continue
+            
+            # 非标题元素
+            if current_chapter_heading is not None:
+                # 在章节内：提示语直接输出，其他内容标记为 keepOriginal 后输出，并加入缓冲区
+                if self._is_hint_paragraph(child):
+                    new_children.append(child)
+                else:
+                    # 给原始正文段落添加 keepOriginal 标记，使其在语气转换时保留未转换状态
+                    if child.tag == qn('w:p'):
+                        bookmark_start = OxmlElement('w:bookmarkStart')
+                        bookmark_start.set(qn('w:id'), str(bookmark_id))
+                        bookmark_start.set(qn('w:name'), '_keepOriginal_')
+                        child.insert(0, bookmark_start)
+                        bookmark_end = OxmlElement('w:bookmarkEnd')
+                        bookmark_end.set(qn('w:id'), str(bookmark_id))
+                        child.append(bookmark_end)
+                        bookmark_id += 1
+                    
+                    new_children.append(child)
+                    chapter_buffer.append(child)
+            else:
+                # 不在任何章节内（文档开头无标题），直接输出
+                new_children.append(child)
+            
+            i += 1
+        
+        # 处理最后一个章节
+        if current_chapter_heading is not None and chapter_buffer:
+            has_real_content = any(not self._is_hint_paragraph(elem) for elem in chapter_buffer)
+            if has_real_content:
+                # 插入应答句
+                answer_elem = deepcopy(answer_template)
+                new_children.append(answer_elem)
+                insert_count += 1
+                
+                # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                for elem in chapter_buffer:
+                    if self._is_hint_paragraph(elem):
+                        continue
+                    copied_elem = deepcopy(elem)
+                    remove_keep_original_from_element(copied_elem)
+                    new_children.append(copied_elem)
+        
+        return insert_count, total_heading_count
+    
+    def _insert_before_paragraphs(self, children, new_children, answer_template, doc):
+        """
+        逐段前插入应答句（模式4：before_paragraph）- 支持语义段落分组
+        逻辑：
+        1. 将连续的语义相关段落分组（短句、引号上下文、列表）
+        2. 在每个语义单元前插入一个应答句
+        :return: (insert_count, total_heading_count)
+        """
+        insert_count = 0
+        total_heading_count = 0
+        
+        # 第一步：将元素分组为语义单元
+        semantic_groups = self._group_semantic_units(children, doc)
+        
+        # 第二步：遍历每个语义单元，在单元前插入应答句
+        for group in semantic_groups:
+            if not group:
+                continue
+            
+            first_elem = group[0]
+            
+            # 统计标题数量
+            if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
+                if self.is_heading_paragraph(first_elem, doc):
+                    total_heading_count += len([e for e in group if hasattr(e, 'tag') and e.tag == qn('w:p') and self.is_heading_paragraph(e, doc)])
+            
+            # 判断是否为需要插入应答句的语义单元
+            should_insert = self._should_insert_answer_for_group(group, doc)
+            
+            if should_insert:
+                # 在语义单元前插入应答句
+                answer_elem = deepcopy(answer_template)
+                new_children.append(answer_elem)
+                insert_count += 1
+            
+            # 添加语义单元中的所有元素
+            for elem in group:
+                new_children.append(elem)
+        
+        return insert_count, total_heading_count
+
+    def _insert_after_paragraphs(self, children, new_children, answer_template, doc):
+        """
+        逐段后插入应答句（模式5：after_paragraph）- 支持语义段落分组
+        逻辑：
+        1. 将连续的语义相关段落分组（短句、引号上下文、列表）
+        2. 在每个语义单元后插入一个应答句
+        :return: (insert_count, total_heading_count)
+        """
+        insert_count = 0
+        total_heading_count = 0
+        
+        # 第一步：将元素分组为语义单元
+        semantic_groups = self._group_semantic_units(children, doc)
+        
+        # 第二步：遍历每个语义单元，在单元后插入应答句
+        for group in semantic_groups:
+            if not group:
+                continue
+            
+            first_elem = group[0]
+            
+            # 统计标题数量
+            if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
+                if self.is_heading_paragraph(first_elem, doc):
+                    total_heading_count += len([e for e in group if hasattr(e, 'tag') and e.tag == qn('w:p') and self.is_heading_paragraph(e, doc)])
+            
+            # 先添加语义单元中的所有元素
+            for elem in group:
+                new_children.append(elem)
+            
+            # 判断是否为需要插入应答句的语义单元
+            should_insert = self._should_insert_answer_for_group(group, doc)
+            
+            if should_insert:
+                # 在语义单元后插入应答句
+                answer_elem = deepcopy(answer_template)
+                new_children.append(answer_elem)
+                insert_count += 1
+        
+        return insert_count, total_heading_count
+    
+    # ==================== 语义分组辅助方法 ====================
+    
+    def _is_list_paragraph(self, elem):
+        """判断段落是否是列表（有编号或项目符号）"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        
+        pPr = elem.find(qn('w:pPr'))
+        if pPr is not None:
+            numPr = pPr.find(qn('w:numPr'))
+            if numPr is not None:
+                return True
+        
+        return False
+    
+    def _get_paragraph_text(self, elem):
+        """获取段落的文本内容"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return ""
+        
+        text_elems = elem.findall('.//' + qn('w:t'))
+        return ''.join([t.text for t in text_elems if t.text])
+    
+    def _ends_with_colon_or_quote(self, text):
+        """判断文本是否以冒号或引号结尾（需要与下一段合并）"""
+        if not text:
+            return False
+        
+        text = text.rstrip()
+        
+        if text.endswith('\uff1a') or text.endswith(':'):
+            return True
+        if text.endswith('\u201d') or text.endswith('"'):
+            if len(text) > 1 and (text[-2] == '\uff1a' or text[-2] == ':'):
+                return True
+        
+        return False
+    
+    def _is_short_paragraph(self, text, threshold=20):
+        """判断是否为短段落"""
+        if not text:
+            return True
+        return len(text.strip()) < threshold
+    
+    def _is_manual_numbered_paragraph(self, text):
+        """判断段落是否是手动编号（如1.、2）、a.等）"""
+        if not text:
+            return False
+        
+        text = text.strip()
+        
+        patterns = [
+            r'^\d+[、\.．]',
+            r'^\d+）',
+            r'^\d+\)',
+            r'^[（(]\d+[）)]',
+            r'^[一二三四五六七八九十]+[、\.．]',
+            r'^[a-zA-Z][、\.．]',
+            r'^[a-zA-Z]）',
+            r'^[a-zA-Z]\)',
+        ]
+        
+        for pattern in patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _is_bullet_point_paragraph(self, text):
+        """判断段落是否是项目符号列表（如●、■、◆等）"""
+        if not text:
+            return False
+        
+        text = text.strip()
+        
+        bullet_symbols = ['\u25cf', '\u25cb', '\u25a0', '\u25a1', '\u25c6', '\u25c7',
+                          '\u25b2', '\u25b3', '\u25ba', '\u25b6', '\u2022', '-', '*']
+        
+        for symbol in bullet_symbols:
+            if text.startswith(symbol):
+                return True
+        
+        return False
+    
+    def _is_empty_paragraph(self, text):
+        """判断段落是否为空行"""
+        if not text:
+            return True
+        return len(text.strip()) == 0
+    
+    def _group_semantic_units(self, children, doc):
+        """
+        将元素分组为语义单元
+        规则：
+        1. 标题单独成组
+        2. 连续的列表项合并为一个组
+        3. 以冒号/引号结尾的段落与下一段合并
+        4. 连续的短段落合并为一个组
+        :return: 分组后的列表 [[elem1, elem2], [elem3], ...]
+        """
+        groups = []
+        current_group = []
+        
+        for i, child in enumerate(children):
+            if not hasattr(child, 'tag'):
+                if current_group:
+                    groups.append(current_group)
+                    current_group = []
+                groups.append([child])
+                continue
+            
+            is_heading = False
+            if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
+                is_heading = True
+            
+            text = self._get_paragraph_text(child) if child.tag == qn('w:p') else ""
+            
+            is_empty = False
+            if child.tag == qn('w:p'):
+                is_empty = self._is_empty_paragraph(text)
+            
+            if is_empty:
+                continue
+            
+            is_list = False
+            if child.tag == qn('w:p'):
+                is_list = self._is_list_paragraph(child)
+            
+            is_manual_numbered = False
+            if child.tag == qn('w:p'):
+                is_manual_numbered = self._is_manual_numbered_paragraph(text)
+            
+            is_bullet_point = False
+            if child.tag == qn('w:p'):
+                is_bullet_point = self._is_bullet_point_paragraph(text)
+            
+            if is_heading:
+                if current_group:
+                    groups.append(current_group)
+                    current_group = []
+                groups.append([child])
+            elif is_list or is_manual_numbered or is_bullet_point:
+                should_merge = False
+                
+                if current_group:
+                    if (self._is_last_group_list(current_group, doc) or 
+                        self._is_last_group_manual_numbered(current_group) or
+                        self._is_last_group_bullet_point(current_group)):
+                        should_merge = True
+                    else:
+                        prev_text = self._get_last_paragraph_text(current_group)
+                        if self._ends_with_colon_or_quote(prev_text):
+                            should_merge = True
+                
+                if should_merge:
+                    current_group.append(child)
+                else:
+                    if current_group:
+                        groups.append(current_group)
+                    current_group = [child]
+            elif self._ends_with_colon_or_quote(text):
+                current_group.append(child)
+            elif self._is_short_paragraph(text) and current_group:
+                prev_text = self._get_last_paragraph_text(current_group)
+                if self._is_short_paragraph(prev_text) or self._ends_with_colon_or_quote(prev_text):
+                    current_group.append(child)
+                else:
+                    groups.append(current_group)
+                    current_group = [child]
+            else:
+                if current_group:
+                    prev_text = self._get_last_paragraph_text(current_group)
+                    prev_is_numbered_or_bullet = self._is_last_group_manual_numbered(current_group) or self._is_last_group_bullet_point(current_group)
+                    
+                    if self._ends_with_colon_or_quote(prev_text):
+                        current_group.append(child)
+                    elif prev_is_numbered_or_bullet:
+                        current_group.append(child)
+                    else:
+                        groups.append(current_group)
+                        current_group = [child]
+                else:
+                    current_group = [child]
+        
+        if current_group:
+            groups.append(current_group)
+        
+        return groups
+    
+    def _is_last_group_list(self, group, doc):
+        """检查组中最后一个元素是否是列表"""
+        if not group:
+            return False
+        last_elem = group[-1]
+        if hasattr(last_elem, 'tag') and last_elem.tag == qn('w:p'):
+            return self._is_list_paragraph(last_elem)
+        return False
+    
+    def _is_last_group_manual_numbered(self, group):
+        """检查组中最后一个元素是否是手动编号段落"""
+        if not group:
+            return False
+        last_elem = group[-1]
+        if hasattr(last_elem, 'tag') and last_elem.tag == qn('w:p'):
+            text = self._get_paragraph_text(last_elem)
+            return self._is_manual_numbered_paragraph(text)
+        return False
+    
+    def _is_last_group_bullet_point(self, group):
+        """检查组中最后一个元素是否是项目符号段落"""
+        if not group:
+            return False
+        last_elem = group[-1]
+        if hasattr(last_elem, 'tag') and last_elem.tag == qn('w:p'):
+            text = self._get_paragraph_text(last_elem)
+            return self._is_bullet_point_paragraph(text)
+        return False
+    
+    def _get_last_paragraph_text(self, group):
+        """获取组中最后一个段落的文本"""
+        for elem in reversed(group):
+            if hasattr(elem, 'tag') and elem.tag == qn('w:p'):
+                return self._get_paragraph_text(elem)
+        return ""
+    
+    def _should_insert_answer_for_group(self, group, doc):
+        """判断是否应该为该语义单元插入应答句"""
+        if not group:
+            return False
+        
+        first_elem = group[0]
+        
+        # 排除标题
+        if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
+            if self.is_heading_paragraph(first_elem, doc):
+                return False
+        
+        # 排除图片
+        if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
+            if len(first_elem.findall('.//' + qn('a:blip'))) > 0:
+                return False
+        
+        return True
     
     def full_convert(self, source_file, template_file, output_file, 
                      custom_style_map=None, do_mood=True, 
                      answer_text=None, answer_style=None,
                      list_bullet=None, do_answer_insertion=True,
+                     answer_mode='before_heading',
+                     do_hint_insertion=False, hint_type='text',
+                     hint_text='招标文件原文', hint_image_path=None,
+                     hint_style='Normal',
                      progress_callback=None, warning_callback=None):
         """
-        完整转换流程：样式转换 -> 语气转换 -> 插入应答句
+        完整转换流程：样式转换 -> 提示语插入 -> 语气转换 -> 插入应答句
         固定为7个步骤，跳过的步骤也会计入进度
+        
+        特殊处理：copy_chapter 模式时，调换语气转换和应答句插入的顺序，
+        使第一份副本保留原文（祈使语气），第二份副本完成语气转换。
+        
         :param source_file: 源文件
         :param template_file: 模板文件
         :param output_file: 最终输出文件
@@ -1260,6 +2003,17 @@ class DocumentConverter:
         :param answer_style: 应答样式
         :param list_bullet: 列表段落符号
         :param do_answer_insertion: 是否插入应答句
+        :param answer_mode: 应答句插入模式
+            - 'before_heading': 章节标题后插入（默认）
+            - 'after_heading': 章节末尾插入
+            - 'copy_chapter': 原文+应答句+应答原文
+            - 'before_paragraph': 逐段前插入
+            - 'after_paragraph': 逐段后插入
+        :param do_hint_insertion: 是否插入章节提示语
+        :param hint_type: 提示语类型 'text' 或 'image'
+        :param hint_text: 提示语文本内容
+        :param hint_image_path: 提示语图片文件路径
+        :param hint_style: 提示语段落样式
         :param progress_callback: 进度回调函数 callback(step, message)
         :param warning_callback: 警告回调函数 callback(message)
         :return: (success, actual_output_file, message)
@@ -1270,59 +2024,129 @@ class DocumentConverter:
         
         # 步骤1：样式转换
         temp_file_1 = output_file.rsplit('.', 1)[0] + "_temp1.docx"
-        success, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
+        success, actual_file, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
                                            warning_callback)
         if not success:
             return False, output_file, f"样式转换失败: {msg}"
         
+        # 若因重名保存到了备用文件，后续步骤需使用实际文件路径
+        temp_file_1 = actual_file
+        
         if progress_callback:
             progress_callback(2, f"样式转换完成: {msg}")
         
-        # 步骤2-3：语气转换（占用2个步骤槽位）
-        if do_mood:
+        # ========== 章节提示语插入（在语气转换之前） ==========
+        # 提示语插入在章节标题后、正文开始前，不受语气转换影响
+        if do_hint_insertion:
             if progress_callback:
-                progress_callback(3, "开始语气转换...")
-            temp_file_2 = output_file.rsplit('.', 1)[0] + "_temp2.docx"
-            success, msg = self.convert_mood(temp_file_1, temp_file_2)
+                progress_callback(2.5, "开始插入章节提示语...")
+            temp_hint = output_file.rsplit('.', 1)[0] + "_temp_hint.docx"
+            success, actual_file, msg = self.insert_hint_paragraph(
+                temp_file_1, temp_hint, hint_type, hint_text, hint_image_path, hint_style
+            )
             if not success:
-                return False, f"语气转换失败: {msg}"
-            if progress_callback:
-                progress_callback(4, f"语气转换完成: {msg}")
-            os.remove(temp_file_1)  # 清理临时文件
-            temp_file_1 = temp_file_2
-        else:
-            # 跳过语气转换，但仍然占用步骤3和4
-            if progress_callback:
-                progress_callback(3, "跳过语气转换")
-                progress_callback(4, "已跳过语气转换")
+                return False, output_file, f"插入提示语失败: {msg}"
+            os.remove(temp_file_1)
+            temp_file_1 = actual_file  # 若因重名保存到备用文件，需使用实际路径
+            print(f"章节提示语插入完成: {msg}")
         
-        # 步骤5-6：插入应答句（占用2个步骤槽位）
+        # ========== 根据 answer_mode 决定流水线顺序 ==========
+        # copy_chapter 模式：先插入应答句 → 后语气转换（第一份副本不做语气转换）
+        # 其他模式：先语气转换 → 后插入应答句（标准流水线）
+        
         actual_output_file = output_file  # 默认使用原始输出文件名
-        if do_answer_insertion:
+        
+        if answer_mode == 'copy_chapter' and do_answer_insertion and do_mood:
+            # ===== copy_chapter 模式专用流水线 =====
+            # 步骤2-3：插入应答句（在语气转换之前，此时原文未转换）
             if progress_callback:
-                progress_callback(5, "开始插入应答句...")
+                progress_callback(3, "开始插入应答句（保留原文模式）...")
+            temp_file_2 = output_file.rsplit('.', 1)[0] + "_temp2.docx"
             success, actual_file, msg = self.insert_response_after_headings(
-                temp_file_1, output_file, answer_text, answer_style
+                temp_file_1, temp_file_2, answer_text, answer_style, answer_mode
             )
             if not success:
                 return False, output_file, f"插入应答句失败: {msg}"
+            actual_output_file = actual_file
             
-            actual_output_file = actual_file  # 更新为实际文件名
+            # 更新 temp_file_1 为应答句插入后的文件
+            os.remove(temp_file_1)
+            temp_file_1 = actual_file  # 若因重名保存到备用文件，需使用实际路径
             
             if progress_callback:
-                progress_callback(6, f"插入应答句完成: {msg}")
-        else:
-            # 不插入应答句，直接复制文件，但仍然占用步骤5和6
+                progress_callback(4, f"插入应答句完成: {msg}")
+            
+            # 步骤4-5：语气转换（跳过标记为 keepOriginal 的第一份副本段落）
+            # 直接输出到最终文件，由 save_with_retry 处理重名，避免后续清理误删中间文件
             if progress_callback:
-                progress_callback(5, "跳过应答句插入")
-            import shutil
-            shutil.copy2(temp_file_1, output_file)
+                progress_callback(5, "开始语气转换（跳过原文副本）...")
+            success, actual_file, msg = self.convert_mood(temp_file_1, output_file)
+            if not success:
+                return False, output_file, f"语气转换失败: {msg}"
+            
+            # 语气转换后的实际输出文件才是最终结果
+            actual_output_file = actual_file
+            
+            # 删除插入应答句后的中间临时文件
+            try:
+                if os.path.exists(temp_file_1):
+                    os.remove(temp_file_1)
+            except:
+                pass
+            temp_file_1 = actual_file
+            
             if progress_callback:
-                progress_callback(6, "已跳过应答句插入")
+                progress_callback(6, f"语气转换完成: {msg}")
         
-        # 清理临时文件
+        else:
+            # ===== 标准流水线（其他模式或无语气转换） =====
+            # 步骤2-3：语气转换（占用2个步骤槽位）
+            if do_mood:
+                if progress_callback:
+                    progress_callback(3, "开始语气转换...")
+                temp_file_2 = output_file.rsplit('.', 1)[0] + "_temp2.docx"
+                success, actual_file, msg = self.convert_mood(temp_file_1, temp_file_2)
+                if not success:
+                    return False, output_file, f"语气转换失败: {msg}"
+                if progress_callback:
+                    progress_callback(4, f"语气转换完成: {msg}")
+                os.remove(temp_file_1)  # 清理临时文件
+                temp_file_1 = actual_file  # 若因重名保存到备用文件，需使用实际路径
+            else:
+                # 跳过语气转换，但仍然占用步骤3和4
+                if progress_callback:
+                    progress_callback(3, "跳过语气转换")
+                    progress_callback(4, "已跳过语气转换")
+            
+            # 步骤5-6：插入应答句（占用2个步骤槽位）
+            if do_answer_insertion:
+                if progress_callback:
+                    progress_callback(5, "开始插入应答句...")
+                success, actual_file, msg = self.insert_response_after_headings(
+                    temp_file_1, output_file, answer_text, answer_style, answer_mode
+                )
+                if not success:
+                    return False, output_file, f"插入应答句失败: {msg}"
+                
+                actual_output_file = actual_file  # 更新为实际文件名
+                
+                if progress_callback:
+                    progress_callback(6, f"插入应答句完成: {msg}")
+            else:
+                # 不插入应答句，直接复制文件，但仍然占用步骤5和6
+                if progress_callback:
+                    progress_callback(5, "跳过应答句插入")
+                import shutil
+                actual_output_file = self._generate_unique_filename(output_file)
+                if actual_output_file != output_file:
+                    print(f"  检测到重名文件，使用备用文件名: {actual_output_file}")
+                shutil.copy2(temp_file_1, actual_output_file)
+                if progress_callback:
+                    progress_callback(6, "已跳过应答句插入")
+        
+        # 清理临时文件（只删除文件名包含 _temp 的中间文件，避免误删最终输出文件）
         try:
-            if os.path.exists(temp_file_1):
+            if os.path.exists(temp_file_1) and "_temp" in os.path.basename(temp_file_1):
                 os.remove(temp_file_1)
         except:
             pass
@@ -1333,9 +2157,38 @@ class DocumentConverter:
         
         return True, actual_output_file, "转换成功完成！"
     
+    def _generate_unique_filename(self, output_file):
+        """
+        生成不重复的文件名：若原始文件名已存在，则追加 _HHMMSS 时间戳；
+        若同一秒内仍有冲突，再追加三位序号（_001）。
+        :param output_file: 原始输出文件路径
+        :return: 可用的文件路径
+        """
+        import os
+
+        if not os.path.exists(output_file):
+            return output_file
+
+        base, ext = os.path.splitext(output_file)
+        time_suffix = datetime.now().strftime("_%H%M%S")
+        candidate = f"{base}{time_suffix}{ext}"
+
+        if not os.path.exists(candidate):
+            return candidate
+
+        # 极端情况：同一秒内仍有冲突，追加序号
+        for i in range(1, 1000):
+            candidate = f"{base}{time_suffix}_{i:03d}{ext}"
+            if not os.path.exists(candidate):
+                return candidate
+
+        # 兜底，理论上不会走到这里
+        return output_file
+
     def save_with_retry(self, doc, output_file, max_retries=10):
         """
-        智能保存文档：先检查文件是否被占用，如果是则直接使用备用文件名。
+        智能保存文档：若目标文件已存在（重名），自动追加 _HHMMSS 时间戳；
+        保存过程中如遇占用，也会自动生成新的备用文件名并重试。
         :param doc: Document对象
         :param output_file: 原始输出文件路径
         :param max_retries: 最大重试次数
@@ -1343,53 +2196,43 @@ class DocumentConverter:
         """
         import os
         import time
-        
-        # 首先检查文件是否存在且被占用
-        if os.path.exists(output_file):
-            try:
-                # 尝试以独占模式打开文件，检查是否被占用
-                with open(output_file, 'r+b') as f:
-                    pass  # 如果能打开，说明没被占用
-            except (PermissionError, IOError):
-                # 文件被占用，直接使用备用文件名
-                base, ext = os.path.splitext(output_file)
-                time_suffix = datetime.now().strftime("_%H%M%S")
-                backup_file = f"{base}{time_suffix}{ext}"
-                print(f"  检测到文件被占用，直接使用备用文件名: {backup_file}")
-                
-                # 尝试保存备用文件名
-                try:
-                    doc.save(backup_file)
-                    return True, backup_file, f"原文件被占用，文档已保存到: {backup_file}"
-                except Exception as e:
-                    return False, output_file, f"保存备用文件失败: {e}"
-        
-        # 文件未被占用或不存在，直接保存
-        current_file = output_file
+
+        # 首次保存：若存在重名文件则生成带时间戳的备用文件名
+        current_file = self._generate_unique_filename(output_file)
+        if current_file != output_file:
+            print(f"  检测到重名文件，使用备用文件名: {current_file}")
+
         for attempt in range(max_retries):
             try:
                 doc.save(current_file)
-                if attempt == 0:
+                if current_file == output_file:
                     return True, current_file, f"文档已保存到 {current_file}"
                 else:
-                    return True, current_file, f"文档已保存到备用文件名: {current_file}"
+                    return True, current_file, f"检测到重名，文档已保存到: {current_file}"
             except (PermissionError, OSError, IOError) as e:
                 # 文件在保存过程中被占用（罕见情况）
                 if attempt == 0:
                     print(f"  警告：保存文档失败（文件可能被占用）: {e}")
-                
+
                 # 生成新的文件名
                 base, ext = os.path.splitext(output_file)
                 time_suffix = datetime.now().strftime("_%H%M%S")
                 current_file = f"{base}{time_suffix}{ext}"
+
+                # 如果新文件名仍冲突，追加序号避免覆盖
+                idx = 1
+                while os.path.exists(current_file) and idx < 1000:
+                    current_file = f"{base}{time_suffix}_{idx:03d}{ext}"
+                    idx += 1
+
                 print(f"  尝试备用文件名: {current_file}")
-                
+
                 # 稍等片刻再重试
                 time.sleep(0.3)
             except Exception as e:
                 # 其他异常直接返回失败
                 return False, output_file, f"保存文档失败: {e}"
-        
+
         # 重试次数用尽
         return False, output_file, f"无法保存文档，已尝试 {max_retries} 次"
 
