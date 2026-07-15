@@ -870,6 +870,22 @@ if current_source_files:
             for para_idx, para in enumerate(doc.paragraphs):
                 if para.style and para.style.name:
                     styles.add(para.style.name)
+                    # 检测大纲级别（outlineLvl）并生成虚拟样式名
+                    para_style_lower = para.style.name.lower()
+                    if not (para_style_lower.startswith('heading') or para_style_lower.startswith('head')):
+                        elem = para._element
+                        pPr = elem.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr')
+                        if pPr is not None:
+                            outline = pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}outlineLvl')
+                            if outline is not None:
+                                val = outline.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')
+                                if val is not None:
+                                    try:
+                                        level = int(val) + 1
+                                        if 1 <= level <= 9:
+                                            styles.add(f'[大纲级别 {level}]')
+                                    except ValueError:
+                                        pass
                 
                 # 每处理10个段落或最后一个段落时更新进度
                 if (para_idx + 1) % 10 == 0 or para_idx == len(doc.paragraphs) - 1:

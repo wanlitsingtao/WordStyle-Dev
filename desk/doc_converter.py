@@ -138,12 +138,51 @@ class DocumentConverter:
         return logger
     
     def get_all_styles_from_doc(self, doc):
-        """获取文档中使用的所有样式"""
+        """获取文档中使用的所有样式（包括虚拟大纲级别样式）"""
         styles = set()
         for para in doc.paragraphs:
             if para.style and para.style.name:
                 styles.add(para.style.name)
+        # 额外收集具有 outlineLvl 但样式为 Normal 的段落，生成虚拟大纲样式名
+        outline_styles = self.get_outline_virtual_styles(doc)
+        styles.update(outline_styles)
         return styles
+    
+    def get_outline_virtual_styles(self, doc):
+        """检测文档中通过大纲级别（outlineLvl）标记但无独立样式的段落，
+        返回虚拟样式名称集合（如 '[大纲级别 1]'、'[大纲级别 2]'）。
+        仅统计那些段落应用的样式名称为 'Normal' 或其他无大纲级别的普通样式，
+        且段落自身有 outlineLvl 属性（直接设置）的段落。"""
+        virtual_styles = set()
+        # 收集所有已确认为标题的样式名（如 Heading 1, 2 等，这些不需要虚拟化）
+        actual_heading_style_names = set()
+        for style_name in HEADING_STYLES:
+            actual_heading_style_names.add(style_name)
+        # 加上常见的内置标题样式
+        for i in range(1, 10):
+            actual_heading_style_names.add(f'heading {i}')
+            actual_heading_style_names.add(f'Heading{i}')
+        
+        for para in doc.paragraphs:
+            para_style_name = para.style.name if para.style and para.style.name else 'Normal'
+            # 如果段落已经有已知的标题样式名，跳过
+            if para_style_name in actual_heading_style_names:
+                continue
+            
+            elem = para._element
+            pPr = elem.find(qn('w:pPr'))
+            if pPr is not None:
+                outline = pPr.find(qn('w:outlineLvl'))
+                if outline is not None:
+                    val = outline.get(qn('w:val'))
+                    if val is not None:
+                        try:
+                            level = int(val) + 1  # 转为 1-9 级别
+                            if 1 <= level <= 9:
+                                virtual_styles.add(f'[大纲级别 {level}]')
+                        except ValueError:
+                            pass
+        return virtual_styles
     
     def get_template_styles(self, template_doc):
         """获取模板文档中的所有可用样式"""
@@ -549,7 +588,12 @@ class DocumentConverter:
         if outline_level > 0:
             # 优先使用用户自定义样式映射
             style_map = getattr(self, 'current_style_map', STYLE_MAP)
-            mapped_style = style_map.get(src_style_name)
+            # 生成虚拟大纲样式名，用于查找用户映射
+            virtual_style_name = f'[大纲级别 {outline_level}]'
+            mapped_style = style_map.get(virtual_style_name)
+            if mapped_style is None:
+                # 回退：用原始样式名查找
+                mapped_style = style_map.get(src_style_name)
             if mapped_style is not None:
                 final_style = mapped_style
             else:
