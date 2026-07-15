@@ -206,6 +206,100 @@ class AppState:
         """设置应答句样式配置"""
         st.session_state.answer_style_config = style
     
+    # ========== 章节提示语配置 ==========
+    
+    @staticmethod
+    def get_do_hint_config() -> bool:
+        """获取是否插入章节提示语"""
+        return st.session_state.get('do_hint_config', False)
+    
+    @staticmethod
+    def set_do_hint_config(enabled: bool):
+        """设置是否插入章节提示语"""
+        st.session_state.do_hint_config = enabled
+    
+    @staticmethod
+    def get_hint_type_config() -> str:
+        """获取提示语类型"""
+        return st.session_state.get('hint_type_config', 'text')
+    
+    @staticmethod
+    def set_hint_type_config(type_: str):
+        """设置提示语类型"""
+        st.session_state.hint_type_config = type_
+    
+    @staticmethod
+    def get_hint_text_config() -> str:
+        """获取提示语文本"""
+        return st.session_state.get('hint_text_config', '招标文件原文')
+    
+    @staticmethod
+    def set_hint_text_config(text: str):
+        """设置提示语文本"""
+        st.session_state.hint_text_config = text
+    
+    @staticmethod
+    def get_hint_image_config() -> str:
+        """获取提示语图片路径"""
+        return st.session_state.get('hint_image_config', None)
+    
+    @staticmethod
+    def set_hint_image_config(path: str):
+        """设置提示语图片路径"""
+        st.session_state.hint_image_config = path
+    
+    @staticmethod
+    def get_hint_style_config() -> str:
+        """获取提示语样式"""
+        return st.session_state.get('hint_style_config', 'Normal')
+    
+    @staticmethod
+    def set_hint_style_config(style: str):
+        """设置提示语样式"""
+        st.session_state.hint_style_config = style
+    
+    # ==================== 表格/图片样式配置 ====================
+    
+    @staticmethod
+    def get_enable_table_style_config() -> bool:
+        """获取是否启用表格样式覆盖"""
+        return st.session_state.get('enable_table_style_config', False)
+    
+    @staticmethod
+    def set_enable_table_style_config(enabled: bool):
+        """设置是否启用表格样式覆盖"""
+        st.session_state.enable_table_style_config = enabled
+    
+    @staticmethod
+    def get_table_style_config() -> str:
+        """获取表格样式配置"""
+        return st.session_state.get('table_style_config', 'Body Text')
+    
+    @staticmethod
+    def set_table_style_config(style: str):
+        """设置表格样式配置"""
+        st.session_state.table_style_config = style
+    
+    @staticmethod
+    def get_enable_image_style_config() -> bool:
+        """获取是否启用图片样式覆盖"""
+        return st.session_state.get('enable_image_style_config', False)
+    
+    @staticmethod
+    def set_enable_image_style_config(enabled: bool):
+        """设置是否启用图片样式覆盖"""
+        st.session_state.enable_image_style_config = enabled
+    
+    @staticmethod
+    def get_image_style_config() -> str:
+        """获取图片样式配置"""
+        return st.session_state.get('image_style_config', 'Body Text')
+    
+    @staticmethod
+    def set_image_style_config(style: str):
+        """设置图片样式配置"""
+        st.session_state.image_style_config = style
+    
     @staticmethod
     def get_answer_mode_keys_cache() -> List[str]:
         """获取应答模式缓存键"""
@@ -393,6 +487,15 @@ class AppState:
             'answer_style_config': '正文',
             'answer_mode_keys_cache': [],
             'list_bullet_config': '•',
+            'do_hint_config': False,
+            'hint_type_config': 'text',
+            'hint_text_config': '招标文件原文',
+            'hint_image_config': None,
+            'hint_style_config': 'Normal',
+            'enable_table_style_config': False,
+            'table_style_config': 'Body Text',
+            'enable_image_style_config': False,
+            'image_style_config': 'Body Text',
             'is_converting': False,
             'switch_to_background': False,
             'conversion_summary': None,

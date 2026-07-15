@@ -5,10 +5,38 @@ echo   WordStyle Pro Backend - 快速启动
 echo ========================================
 echo.
 
+REM 检查Python环境（优先使用 py 启动器）
+py --version >nul 2>&1
+if not errorlevel 1 (
+    set PYTHON_CMD=py
+    set PIP_CMD=py -m pip
+    goto :python_found
+)
+
+python --version >nul 2>&1
+if not errorlevel 1 (
+    set PYTHON_CMD=python
+    set PIP_CMD=python -m pip
+    goto :python_found
+)
+
+echo [ERROR] Python未安装或不在PATH中
+echo.
+echo 注意：安装时务必勾选 "Add Python to PATH" 选项
+echo 如果已安装但仍报此错误，请在 Windows 设置中：
+echo   应用 ^> 应用执行别名 ^> 关闭 python.exe 和 python3.exe 的别名
+pause
+exit /b 1
+
+:python_found
+echo [OK] 检测到Python: %PYTHON_CMD%
+%PYTHON_CMD% --version
+
 REM 检查虚拟环境
 if not exist "venv" (
+    echo.
     echo [1/4] 创建虚拟环境...
-    python -m venv venv
+    %PYTHON_CMD% -m venv venv
     if errorlevel 1 (
         echo ❌ 创建虚拟环境失败
         pause

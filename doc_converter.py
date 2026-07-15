@@ -33,8 +33,8 @@ except ImportError:
 
 # ==================== 配置常量 ====================
 DEFAULT_TARGET = "Normal"
-TARGET_STYLE_FOR_TABLES = "Body Text"
-TARGET_STYLE_FOR_IMAGES = "Body Text"
+DEFAULT_TABLE_STYLE = "Body Text"
+DEFAULT_IMAGE_STYLE = "Body Text"
 IMAGE_SCALE_RATIO = 2 / 3
 LIST_BULLET_SYMBOL = "● "
 TABLE_BORDER_SIZE = '4'
@@ -497,9 +497,11 @@ class DocumentConverter:
     
     def copy_paragraph_with_images(self, source_para, target_doc, target_style_name,
                                    page_width_emu, available_width_emu, para_idx, source_file="",
-                                   warning_callback=None):
+                                   warning_callback=None, image_style_override=None, enable_image_style=False):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
         """
         # 调试：检查大纲级别
         outline_level = self.get_outline_level(source_para)
@@ -568,9 +570,20 @@ class DocumentConverter:
         src_style_name = source_para.style.name
         
         if outline_level > 0:
-            final_style = OUTLINE_STYLE_MAP.get(outline_level)
-            if final_style is None:
-                final_style = f"Heading {outline_level}"
+            # [BUG修复] 优先使用用户自定义样式映射（如果源样式在current_style_map中有定义）
+            # 原因：原代码直接使用OUTLINE_STYLE_MAP（Heading 1/2/3...），完全忽略了用户配置的样式映射，
+            #      导致标题无法转换为模板中的"BN_标题1"等样式，全部 fallback 到 Normal。
+            style_map = getattr(self, 'current_style_map', STYLE_MAP)
+            mapped_style = style_map.get(src_style_name)
+            
+            if mapped_style is not None:
+                # 级别1：使用用户配置的映射样式
+                final_style = mapped_style
+            else:
+                # 级别2：未配置映射，使用大纲级别对应的默认样式
+                final_style = OUTLINE_STYLE_MAP.get(outline_level)
+                if final_style is None:
+                    final_style = f"Heading {outline_level}"
             
             # 检查目标文档中是否存在该样式
             try:
@@ -609,11 +622,23 @@ class DocumentConverter:
                         final_style = DEFAULT_TARGET
         else:
             if has_image:
-                final_style = TARGET_STYLE_FOR_IMAGES
-                try:
-                    target_doc.styles[final_style]
-                except KeyError:
-                    final_style = DEFAULT_TARGET
+                # 图片段落样式：不受样式映射影响，只按单独的图片样式定义处理
+                # 1. enable_image_style=True → 使用image_style_override指定的样式
+                # 2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
+                if enable_image_style and image_style_override:
+                    # 级别1：复选框选中，使用覆盖样式
+                    final_style = image_style_override
+                    try:
+                        target_doc.styles[final_style]
+                    except KeyError:
+                        final_style = DEFAULT_TARGET
+                else:
+                    # 级别2：保留源样式名
+                    try:
+                        target_doc.styles[src_style_name]
+                        final_style = src_style_name
+                    except KeyError:
+                        final_style = DEFAULT_TARGET
             else:
                 final_style = target_style_name
         
@@ -696,7 +721,7 @@ class DocumentConverter:
         }
     
     def copy_table_with_images(self, source_table, target_doc, table_idx, available_width_emu, source_file="",
-                               warning_callback=None):
+                               warning_callback=None, table_style_override=None, enable_table_style=False):
         """
         复制表格（包含图片、边框）
         注意：不支持合并单元格，会输出警告信息
@@ -706,6 +731,8 @@ class DocumentConverter:
         :param available_width_emu: 可用宽度
         :param source_file: 源文件名
         :param warning_callback: 警告回调函数
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
         """
         # 检测合并单元格
         merge_info = self.detect_merged_cells(source_table)
@@ -725,11 +752,30 @@ class DocumentConverter:
         # 创建新表格
         new_table = target_doc.add_table(rows=rows, cols=cols)
         new_table.style = source_table.style
-        table_style = TARGET_STYLE_FOR_TABLES
-        try:
-            target_doc.styles[table_style]
-        except KeyError:
-            table_style = DEFAULT_TARGET
+        
+        # 表格单元格样式：两级决策辅助函数
+        def _get_table_para_style(src_style_name):
+            """决定表格内段落的目标样式
+            表格不受样式映射影响，只按单独的表格样式定义处理：
+            1. enable_table_style=True → 使用table_style_override指定的样式
+            2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
+            """
+            if enable_table_style and table_style_override:
+                # 级别1：复选框选中，使用覆盖样式
+                try:
+                    target_doc.styles[table_style_override]
+                    return table_style_override
+                except KeyError:
+                    return DEFAULT_TARGET
+            else:
+                # 级别2：保留源样式名
+                try:
+                    target_doc.styles[src_style_name]
+                    return src_style_name
+                except KeyError:
+                    return DEFAULT_TARGET
+                except KeyError:
+                    return DEFAULT_TARGET
         
         self.set_table_width(new_table, available_width_emu)
         self.set_table_borders(new_table)
@@ -748,7 +794,8 @@ class DocumentConverter:
                 # 复制段落内容
                 for para_idx, para in enumerate(cell.paragraphs):
                     new_para = new_cell.add_paragraph()
-                    new_para.style = table_style
+                    src_para_style = para.style.name
+                    new_para.style = _get_table_para_style(src_para_style)
                     
                     if self.has_numbering(para):
                         new_para.add_run(self.list_bullet)
@@ -812,7 +859,9 @@ class DocumentConverter:
         return new_table
     
     def convert_styles(self, source_file, template_file, output_file, custom_style_map=None, list_bullet=None,
-                       warning_callback=None, source_styles_cache=None):
+                       warning_callback=None, source_styles_cache=None,
+                       table_style_override=None, enable_table_style=False,
+                       image_style_override=None, enable_image_style=False):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -822,7 +871,11 @@ class DocumentConverter:
         :param list_bullet: 列表段落符号（可选，默认为配置常量）
         :param warning_callback: 警告回调函数 callback(message)
         :param source_styles_cache: 缓存的源文件样式列表（可选，避免重复分析）
-        :return: 是否成功
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
+        :return: (success, actual_file, message)
         """
         # 使用局部样式映射副本，避免修改全局变量
         style_map = STYLE_MAP.copy()
@@ -851,14 +904,6 @@ class DocumentConverter:
         except Exception as e:
             return False, f"加载源文档失败: {e}"
         
-        # 调试：检查加载的源文档中的大纲级别
-        for i, para in enumerate(source_doc.paragraphs):
-            pPr_check = para._element.find(qn('w:pPr'))
-            if pPr_check is not None:
-                outline_check = pPr_check.find(qn('w:outlineLvl'))
-                if outline_check is not None:
-                    val_check = outline_check.get(qn('w:val'))
-        
         # [HIGH_VOLTAGE] 性能优化：使用缓存的样式列表，避免重复分析
         if source_styles_cache:
             self.source_styles = source_styles_cache
@@ -886,18 +931,15 @@ class DocumentConverter:
                     para = source_doc.paragraphs[para_idx]
                     src_style = para.style.name
                     
-                    # 调试：检查传入的段落
-                    pPr_debug = para._element.find(qn('w:pPr'))
-                    outline_debug = pPr_debug.find(qn('w:outlineLvl')) if pPr_debug is not None else None
-                    outline_val_debug = outline_debug.get(qn('w:val')) if outline_debug is not None else None
-                    
                     target_style = self.get_target_style(src_style, new_doc, source_file)
                     
                     new_para = self.copy_paragraph_with_images(
                         para, new_doc, target_style,
                         page_width, available_width,
                         para_idx, source_file,
-                        warning_callback
+                        warning_callback,
+                        image_style_override=image_style_override,
+                        enable_image_style=enable_image_style
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
@@ -909,7 +951,9 @@ class DocumentConverter:
                 if table_idx < len(source_doc.tables):
                     table = source_doc.tables[table_idx]
                     self.copy_table_with_images(table, new_doc, table_idx, available_width, source_file,
-                                               warning_callback)
+                                               warning_callback,
+                                               table_style_override=table_style_override,
+                                               enable_table_style=enable_table_style)
                     self.stats["table"] += 1
                     table_idx += 1
             
@@ -1366,123 +1410,129 @@ class DocumentConverter:
     
     def _insert_with_copy_chapter(self, children, new_children, answer_template, doc):
         """
-        复制章节插入（需求3）
-        逻辑：
-        1. 找到章节末尾（和章节后插入一样的判断条件）
-        2. 在该位置插入应答句
-        3. 复制从上一个标题后到当前位置的所有内容，插入到应答句之后
+        原文+应答句+应答原文（需求3：copy_chapter）
+        最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 原文（语气转换后）
+        注意：此模式在 full_convert 中会调换流水线顺序（先插入应答句，后语气转换），
+              因此原始正文在插入应答句时仍是未转换状态，加上 keepOriginal 标记后会被跳过。
         :return: (insert_count, total_heading_count)
         """
         from copy import deepcopy as deep_copy
         
         insert_count = 0
         total_heading_count = 0
+        bookmark_id = 0  # 书签 ID 计数器
         
-        # 第一步：遍历所有元素，记录每个标题的位置
-        heading_positions = []  # 存储标题的索引
-        for i, child in enumerate(children):
-            if hasattr(child, 'tag') and child.tag == qn('w:p'):
-                if self.is_heading_paragraph(child, doc):
-                    heading_positions.append(i)
-                    total_heading_count += 1
+        def is_heading(elem):
+            """判断元素是否为标题段落"""
+            if not hasattr(elem, 'tag'):
+                return False
+            if elem.tag != qn('w:p'):
+                return False
+            return self.is_heading_paragraph(elem, doc)
         
-        # 第二步：处理每个元素，在章节末尾插入应答句并复制章节内容
+        def remove_keep_original_from_element(elem):
+            """移除元素中的 keepOriginal 书签标记"""
+            if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+                return
+            bookmark_ids = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_keepOriginal_':
+                        bookmark_ids.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids:
+                        ends_to_remove.append(child)
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
+        
+        # 当前章节标题索引，None 表示尚未进入任何章节
+        current_chapter_heading = None
+        # 章节内容缓冲区：保存当前章节内的非提示语元素，用于生成第二份副本
+        chapter_buffer = []
+        
         i = 0
         while i < len(children):
             child = children[i]
             
-            # 安全检查
+            # 安全检查：非 XML 元素直接输出
             if not hasattr(child, 'tag'):
                 new_children.append(child)
                 i += 1
                 continue
             
-            # 添加当前元素
-            new_children.append(child)
-            
-            # 判断是否需要在当前元素后插入应答句并复制章节
-            # 条件：当前不是标题 + 下一个元素是标题
-            if i + 1 < len(children):
-                next_elem = children[i + 1]
+            # 遇到标题：先刷新前一个章节，再输出当前标题
+            if is_heading(child):
+                # 刷新前一个章节的内容
+                if current_chapter_heading is not None and chapter_buffer:
+                    # 检查是否有非提示语内容
+                    has_real_content = any(not self._is_hint_paragraph(elem) for elem in chapter_buffer)
+                    if has_real_content:
+                        # 插入应答句
+                        answer_elem = deep_copy(answer_template)
+                        new_children.append(answer_elem)
+                        insert_count += 1
+                        
+                        # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                        for elem in chapter_buffer:
+                            if self._is_hint_paragraph(elem):
+                                continue
+                            copied_elem = deep_copy(elem)
+                            remove_keep_original_from_element(copied_elem)
+                            new_children.append(copied_elem)
                 
-                # 检查下一个元素是否为标题
-                if hasattr(next_elem, 'tag') and next_elem.tag == qn('w:p'):
-                    if self.is_heading_paragraph(next_elem, doc):
-                        # 下一个是标题，检查当前元素是否不是标题
-                        is_not_heading = True
-                        
-                        # 检查当前是否为标题
-                        if hasattr(child, 'tag') and child.tag == qn('w:p'):
-                            if self.is_heading_paragraph(child, doc):
-                                is_not_heading = False
-                        
-                        # 如果当前不是标题（可以是正文、表格、图片等），则在其后插入应答句并复制章节
-                        if is_not_heading:
-                            # 1. 插入应答句
-                            answer_elem = deep_copy(answer_template)
-                            new_children.append(answer_elem)
-                            insert_count += 1
-                            
-                            # 2. 找到上一个标题的位置
-                            last_heading_idx = -1
-                            for h_idx in heading_positions:
-                                if h_idx < i:
-                                    last_heading_idx = h_idx
-                                else:
-                                    break
-                            
-                            # 3. 复制从上一个标题后到当前位置的所有内容
-                            if last_heading_idx >= 0:
-                                # 从 last_heading_idx + 1 到 i（包含i）
-                                for j in range(last_heading_idx + 1, i + 1):
-                                    copied_elem = deep_copy(children[j])
-                                    new_children.append(copied_elem)
+                chapter_buffer.clear()
+                new_children.append(child)
+                current_chapter_heading = i
+                total_heading_count += 1
+                i += 1
+                continue
+            
+            # 非标题元素
+            if current_chapter_heading is not None:
+                # 在章节内：提示语直接输出，其他内容标记为 keepOriginal 后输出，并加入缓冲区
+                if self._is_hint_paragraph(child):
+                    new_children.append(child)
+                else:
+                    # 给原始正文段落添加 keepOriginal 标记，使其在语气转换时保留未转换状态
+                    if child.tag == qn('w:p'):
+                        bookmark_start = OxmlElement('w:bookmarkStart')
+                        bookmark_start.set(qn('w:id'), str(bookmark_id))
+                        bookmark_start.set(qn('w:name'), '_keepOriginal_')
+                        child.insert(0, bookmark_start)
+                        bookmark_end = OxmlElement('w:bookmarkEnd')
+                        bookmark_end.set(qn('w:id'), str(bookmark_id))
+                        child.append(bookmark_end)
+                        bookmark_id += 1
+                    
+                    new_children.append(child)
+                    chapter_buffer.append(child)
+            else:
+                # 不在任何章节内（文档开头无标题），直接输出
+                new_children.append(child)
             
             i += 1
         
-        # 第三步：处理文章最后一段
-        # 从后往前找第一个非标题元素，在其后插入应答句并复制章节内容
-        if children:
-            # 从后往前遍历，找到第一个非标题元素
-            last_content_idx = -1
-            for i in range(len(children) - 1, -1, -1):
-                elem = children[i]
-                
-                if not hasattr(elem, 'tag'):
-                    continue
-                
-                # 检查是否为标题段落
-                is_heading = False
-                if elem.tag == qn('w:p'):
-                    if self.is_heading_paragraph(elem, doc):
-                        is_heading = True
-                
-                # 如果不是标题，则作为最后一个内容元素
-                if not is_heading:
-                    last_content_idx = i
-                    break
-            
-            # 如果找到非标题元素，在其后插入应答句并复制章节内容
-            if last_content_idx >= 0:
-                # 1. 插入应答句
+        # 处理最后一个章节
+        if current_chapter_heading is not None and chapter_buffer:
+            has_real_content = any(not self._is_hint_paragraph(elem) for elem in chapter_buffer)
+            if has_real_content:
+                # 插入应答句
                 answer_elem = deep_copy(answer_template)
                 new_children.append(answer_elem)
                 insert_count += 1
                 
-                # 2. 找到上一个标题的位置
-                last_heading_idx = -1
-                for h_idx in heading_positions:
-                    if h_idx < last_content_idx:
-                        last_heading_idx = h_idx
-                    else:
-                        break
-                
-                # 3. 复制从上一个标题后到当前位置的所有内容
-                if last_heading_idx >= 0:
-                    # 从 last_heading_idx + 1 到 last_content_idx（包含）
-                    for j in range(last_heading_idx + 1, last_content_idx + 1):
-                        copied_elem = deep_copy(children[j])
-                        new_children.append(copied_elem)
+                # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                for elem in chapter_buffer:
+                    if self._is_hint_paragraph(elem):
+                        continue
+                    copied_elem = deep_copy(elem)
+                    remove_keep_original_from_element(copied_elem)
+                    new_children.append(copied_elem)
         
         return insert_count, total_heading_count
     
@@ -1885,8 +1935,13 @@ class DocumentConverter:
                      answer_text=None, answer_style=None,
                      list_bullet=None, do_answer_insertion=True,
                      answer_mode='before_heading',
+                     do_hint_insertion=False, hint_type='text',
+                     hint_text='招标文件原文', hint_image_path=None,
+                     hint_style='Normal',
                      progress_callback=None, warning_callback=None,
-                     source_styles_cache=None):
+                     source_styles_cache=None,
+                     table_style_override=None, enable_table_style=False,
+                     image_style_override=None, enable_image_style=False):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
         [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
@@ -1905,6 +1960,10 @@ class DocumentConverter:
         :param progress_callback: 进度回调函数 callback(step, message)
         :param warning_callback: 警告回调函数 callback(message)
         :param source_styles_cache: 缓存的源文件样式列表（可选，避免重复分析）
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
         :return: (success, actual_output_file, message)
         """
         import time
@@ -1918,9 +1977,14 @@ class DocumentConverter:
         # 原来：Load → StyleConv → Save → Load → MoodConv → Save → Load → AnswerInsert → Save
         # 现在：  Load → StyleConv → MoodConv → AnswerInsert → Save（一次加载，一次保存）
         
+        # 特殊处理：copy_chapter 模式时，调换语气转换和应答句插入的顺序，
+        # 使第一份副本保留原文（祈使语气），第二份副本完成语气转换。
+        
         # 步骤1：样式转换（返回Document对象，不保存）
         doc = self._convert_styles_in_memory(source_file, template_file, custom_style_map, list_bullet,
-                                              warning_callback, source_styles_cache)
+                                              warning_callback, source_styles_cache,
+                                              table_style_override, enable_table_style,
+                                              image_style_override, enable_image_style)
         if doc is None:
             elapsed = time.time() - start_time
             return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
@@ -1928,27 +1992,23 @@ class DocumentConverter:
         if progress_callback:
             progress_callback(2, "正在进行转换...")
         
-        # 步骤2-3：语气转换（直接在内存中的Document对象上操作）
-        if do_mood:
-            if progress_callback:
-                progress_callback(3, "正在进行转换...")
-            mood_result = self._convert_mood_in_memory(doc)
-            if not mood_result:
+        # ========== 章节提示语插入（在语气转换之前） ==========
+        if do_hint_insertion:
+            hint_result = self._insert_hint_in_memory(
+                doc, hint_type, hint_text, hint_image_path, hint_style
+            )
+            if not hint_result:
                 elapsed = time.time() - start_time
-                return False, output_file, f"语气转换失败（耗时{elapsed:.1f}秒）"
-            if progress_callback:
-                progress_callback(4, "正在进行转换...")
-        else:
-            # 跳过语气转换，但仍然占用步骤3和4
-            if progress_callback:
-                progress_callback(3, "正在进行转换...")
-                progress_callback(4, "正在进行转换...")
+                return False, output_file, f"插入提示语失败（耗时{elapsed:.1f}秒）"
         
-        # 步骤5-6：插入应答句（直接在内存中的Document对象上操作）
-        actual_output_file = output_file  # 默认使用原始输出文件名
-        if do_answer_insertion:
+        actual_output_file = output_file
+        
+        # ========== 根据 answer_mode 决定流水线顺序 ==========
+        if answer_mode == 'copy_chapter' and do_answer_insertion and do_mood:
+            # ===== copy_chapter 模式专用流水线 =====
+            # 步骤2-3：插入应答句（在语气转换之前，此时原文未转换）
             if progress_callback:
-                progress_callback(5, "正在进行转换...")
+                progress_callback(3, "正在插入应答句（保留原文模式）...")
             insert_result = self._insert_response_in_memory(
                 doc, answer_text, answer_style, mode=answer_mode
             )
@@ -1957,12 +2017,55 @@ class DocumentConverter:
                 return False, output_file, f"插入应答句失败（耗时{elapsed:.1f}秒）"
             
             if progress_callback:
-                progress_callback(6, "正在进行转换...")
-        else:
-            # 不插入应答句，但仍然占用步骤5和6
+                progress_callback(4, "正在插入应答句...")
+            
+            # 步骤4-5：语气转换（跳过标记为 keepOriginal 的第一份副本段落）
             if progress_callback:
-                progress_callback(5, "正在进行转换...")
-                progress_callback(6, "正在进行转换...")
+                progress_callback(5, "正在语气转换（跳过原文副本）...")
+            mood_result = self._convert_mood_in_memory(doc)
+            if not mood_result:
+                elapsed = time.time() - start_time
+                return False, output_file, f"语气转换失败（耗时{elapsed:.1f}秒）"
+            
+            if progress_callback:
+                progress_callback(6, "正在转换...")
+        
+        else:
+            # ===== 标准流水线（其他模式） =====
+            # 步骤2-3：语气转换（直接在内存中的Document对象上操作）
+            if do_mood:
+                if progress_callback:
+                    progress_callback(3, "正在进行转换...")
+                mood_result = self._convert_mood_in_memory(doc)
+                if not mood_result:
+                    elapsed = time.time() - start_time
+                    return False, output_file, f"语气转换失败（耗时{elapsed:.1f}秒）"
+                if progress_callback:
+                    progress_callback(4, "正在进行转换...")
+            else:
+                # 跳过语气转换，但仍然占用步骤3和4
+                if progress_callback:
+                    progress_callback(3, "正在进行转换...")
+                    progress_callback(4, "正在进行转换...")
+            
+            # 步骤5-6：插入应答句（直接在内存中的Document对象上操作）
+            if do_answer_insertion:
+                if progress_callback:
+                    progress_callback(5, "正在进行转换...")
+                insert_result = self._insert_response_in_memory(
+                    doc, answer_text, answer_style, mode=answer_mode
+                )
+                if not insert_result:
+                    elapsed = time.time() - start_time
+                    return False, output_file, f"插入应答句失败（耗时{elapsed:.1f}秒）"
+                
+                if progress_callback:
+                    progress_callback(6, "正在进行转换...")
+            else:
+                # 不插入应答句，但仍然占用步骤5和6
+                if progress_callback:
+                    progress_callback(5, "正在进行转换...")
+                    progress_callback(6, "正在进行转换...")
         
         # 步骤7：保存文档（只保存一次！）
         if progress_callback:
@@ -1976,9 +2079,38 @@ class DocumentConverter:
         else:
             return False, output_file, f"保存失败: {msg}（耗时{elapsed:.1f}秒）"
     
+    def _generate_unique_filename(self, output_file):
+        """
+        生成不重复的文件名：若原始文件名已存在，则追加 _HHMMSS 时间戳；
+        若同一秒内仍有冲突，再追加三位序号（_001）。
+        :param output_file: 原始输出文件路径
+        :return: 可用的文件路径
+        """
+        import os
+
+        if not os.path.exists(output_file):
+            return output_file
+
+        base, ext = os.path.splitext(output_file)
+        time_suffix = datetime.now().strftime("_%H%M%S")
+        candidate = f"{base}{time_suffix}{ext}"
+
+        if not os.path.exists(candidate):
+            return candidate
+
+        # 极端情况：同一秒内仍有冲突，追加序号
+        for i in range(1, 1000):
+            candidate = f"{base}{time_suffix}_{i:03d}{ext}"
+            if not os.path.exists(candidate):
+                return candidate
+
+        # 兜底，理论上不会走到这里
+        return output_file
+
     def save_with_retry(self, doc, output_file, max_retries=10):
         """
-        智能保存文档：先检查文件是否被占用，如果是则直接使用备用文件名。
+        智能保存文档：若目标文件已存在（重名），自动追加 _HHMMSS 时间戳；
+        保存过程中如遇占用，也会自动生成新的备用文件名并重试。
         :param doc: Document对象
         :param output_file: 原始输出文件路径
         :param max_retries: 最大重试次数
@@ -1986,60 +2118,56 @@ class DocumentConverter:
         """
         import os
         import time
-        
-        # 首先检查文件是否存在且被占用
-        if os.path.exists(output_file):
-            try:
-                # 尝试以独占模式打开文件，检查是否被占用
-                with open(output_file, 'r+b') as f:
-                    pass  # 如果能打开，说明没被占用
-            except (PermissionError, IOError):
-                # 文件被占用，直接使用备用文件名
-                base, ext = os.path.splitext(output_file)
-                time_suffix = datetime.now().strftime("_%H%M")
-                backup_file = f"{base}{time_suffix}{ext}"
-                print(f"  检测到文件被占用，直接使用备用文件名: {backup_file}")
-                
-                # 尝试保存备用文件名
-                try:
-                    doc.save(backup_file)
-                    return True, backup_file, f"原文件被占用，文档已保存到: {backup_file}"
-                except Exception as e:
-                    return False, output_file, f"保存备用文件失败: {e}"
-        
-        # 文件未被占用或不存在，直接保存
-        current_file = output_file
+
+        # 首次保存：若存在重名文件则生成带时间戳的备用文件名
+        current_file = self._generate_unique_filename(output_file)
+        if current_file != output_file:
+            print(f"  检测到重名文件，使用备用文件名: {current_file}")
+
         for attempt in range(max_retries):
             try:
                 doc.save(current_file)
-                if attempt == 0:
+                if current_file == output_file:
                     return True, current_file, f"文档已保存到 {current_file}"
                 else:
-                    return True, current_file, f"文档已保存到备用文件名: {current_file}"
+                    return True, current_file, f"检测到重名，文档已保存到: {current_file}"
             except (PermissionError, OSError, IOError) as e:
                 # 文件在保存过程中被占用（罕见情况）
                 if attempt == 0:
                     print(f"  警告：保存文档失败（文件可能被占用）: {e}")
-                
+
                 # 生成新的文件名
                 base, ext = os.path.splitext(output_file)
                 time_suffix = datetime.now().strftime("_%H%M%S")
                 current_file = f"{base}{time_suffix}{ext}"
+
+                # 如果新文件名仍冲突，追加序号避免覆盖
+                idx = 1
+                while os.path.exists(current_file) and idx < 1000:
+                    current_file = f"{base}{time_suffix}_{idx:03d}{ext}"
+                    idx += 1
+
                 print(f"  尝试备用文件名: {current_file}")
-                
+
                 # 稍等片刻再重试
                 time.sleep(0.3)
             except Exception as e:
                 # 其他异常直接返回失败
                 return False, output_file, f"保存文档失败: {e}"
-        
+
         # 重试次数用尽
         return False, output_file, f"无法保存文档，已尝试 {max_retries} 次"
     
     def _convert_styles_in_memory(self, source_file, template_file, custom_style_map=None, list_bullet=None,
-                                   warning_callback=None, source_styles_cache=None):
+                                   warning_callback=None, source_styles_cache=None,
+                                   table_style_override=None, enable_table_style=False,
+                                   image_style_override=None, enable_image_style=False):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
         :return: Document对象或None（失败时）
         """
         try:
@@ -2089,7 +2217,9 @@ class DocumentConverter:
                             para, new_doc, target_style,
                             page_width, available_width,
                             para_idx, source_file,
-                            warning_callback  # [OK] 修复：传递warning_callback参数
+                            warning_callback,
+                            image_style_override=image_style_override,
+                            enable_image_style=enable_image_style
                         )
                         para_idx += 1
                 elif child.tag == qn('w:tbl'):
@@ -2097,7 +2227,9 @@ class DocumentConverter:
                         table = source_doc.tables[table_idx]
                         self.copy_table_with_images(
                             table, new_doc, table_idx, available_width,
-                            source_file, warning_callback  # [OK] 修复：传递warning_callback参数
+                            source_file, warning_callback,
+                            table_style_override=table_style_override,
+                            enable_table_style=enable_table_style
                         )
                         table_idx += 1
             
@@ -2111,6 +2243,7 @@ class DocumentConverter:
     def _convert_mood_in_memory(self, doc):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行语气转换，不保存中间文件
+        跳过标记为 _keepOriginal_ 的段落（copy_chapter 模式的第一份副本），转换完成后清除标记
         :param doc: Document对象
         :return: True/False
         """
@@ -2120,6 +2253,9 @@ class DocumentConverter:
             
             for para in doc.paragraphs:
                 para_count += 1
+                # 跳过标记为 keepOriginal 的段落
+                if self._is_keep_original_paragraph(para._element):
+                    continue
                 if self.process_paragraph_mood(para):
                     modified_count += 1
             
@@ -2128,8 +2264,13 @@ class DocumentConverter:
                     for cell in row.cells:
                         for para in cell.paragraphs:
                             para_count += 1
+                            if self._is_keep_original_paragraph(para._element):
+                                continue
                             if self.process_paragraph_mood(para):
                                 modified_count += 1
+            
+            # 清除所有 _keepOriginal_ 书签标记
+            self._remove_keep_original_markers(doc)
             
             print(f"语气转换完成！处理段落: {para_count}, 修改: {modified_count}")
             return True
@@ -2138,6 +2279,180 @@ class DocumentConverter:
             import traceback
             traceback.print_exc()
             return False
+    
+    def _is_keep_original_paragraph(self, elem):
+        """检查段落是否标记为 keepOriginal（不做语气转换）"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        for child in elem:
+            if child.tag == qn('w:bookmarkStart'):
+                if child.get(qn('w:name')) == '_keepOriginal_':
+                    return True
+        return False
+    
+    def _remove_keep_original_markers(self, doc):
+        """清除文档中所有 _keepOriginal_ 书签标记"""
+        body = doc.element.body
+        for elem in body.iter(qn('w:p')):
+            bookmark_ids_to_remove = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_keepOriginal_':
+                        bookmark_ids_to_remove.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids_to_remove:
+                        ends_to_remove.append(child)
+            
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
+
+    def _is_hint_paragraph(self, elem):
+        """检查段落是否标记为提示语（hint）"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        for child in elem:
+            if child.tag == qn('w:bookmarkStart'):
+                if child.get(qn('w:name')) == '_hint_':
+                    return True
+        return False
+
+    def _remove_hint_markers(self, doc):
+        """清除文档中所有 _hint_ 书签标记"""
+        body = doc.element.body
+        for elem in body.iter(qn('w:p')):
+            bookmark_ids_to_remove = set()
+            starts_to_remove = []
+            ends_to_remove = []
+            for child in elem:
+                if child.tag == qn('w:bookmarkStart'):
+                    if child.get(qn('w:name')) == '_hint_':
+                        bookmark_ids_to_remove.add(child.get(qn('w:id')))
+                        starts_to_remove.append(child)
+                elif child.tag == qn('w:bookmarkEnd'):
+                    if child.get(qn('w:id')) in bookmark_ids_to_remove:
+                        ends_to_remove.append(child)
+            for start in starts_to_remove:
+                elem.remove(start)
+            for end in ends_to_remove:
+                elem.remove(end)
+    
+    def _insert_hint_in_memory(self, doc, hint_type='text', hint_text='招标文件原文',
+                               hint_image_path=None, hint_style='Normal'):
+        """
+        在内存中插入章节提示语（在每个章节标题后、正文开始前插入提示语）
+        :param doc: Document对象
+        :param hint_type: 提示语类型 'text' 或 'image'
+        :param hint_text: 提示语文本内容
+        :param hint_image_path: 提示语图片文件路径
+        :param hint_style: 提示语段落样式
+        :return: True/False
+        """
+        try:
+            from copy import deepcopy
+            
+            self.ensure_style_exists(doc, hint_style)
+
+            # 计算可用页面宽度（用于图片提示语）
+            section = doc.sections[0]
+            available_width = section.page_width - section.left_margin - section.right_margin
+            
+            body = doc.element.body
+            children = list(body)
+            new_children = []
+            insert_count = 0
+            total_heading_count = 0
+            hint_bookmark_id = 0
+            
+            i = 0
+            while i < len(children):
+                child = children[i]
+                
+                if not hasattr(child, 'tag'):
+                    new_children.append(child)
+                    i += 1
+                    continue
+                
+                new_children.append(child)
+                
+                # 检查是否为标题
+                if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
+                    total_heading_count += 1
+                    
+                    # 检查下一个元素：如果不是标题，在标题后插入提示语
+                    if i + 1 < len(children):
+                        next_elem = children[i + 1]
+                        if hasattr(next_elem, 'tag') and not self.is_heading_paragraph(next_elem, doc):
+                            if hint_type == 'text':
+                                # 文本提示语
+                                hint_para = doc.add_paragraph(hint_text)
+                                hint_para.style = hint_style
+                                hint_elem = deepcopy(hint_para._element)
+                                hint_para._element.getparent().remove(hint_para._element)
+                                # 标记为提示语，避免 copy_chapter 模式重复复制
+                                self._add_hint_marker(hint_elem, hint_bookmark_id)
+                                hint_bookmark_id += 1
+                                new_children.append(hint_elem)
+                                insert_count += 1
+                            elif hint_type == 'image' and hint_image_path:
+                                # 图片提示语：宽度设为版心宽度，高度按比例缩放
+                                hint_para = doc.add_paragraph()
+                                hint_para.style = hint_style
+                                try:
+                                    picture = hint_para.add_run().add_picture(hint_image_path)
+                                    picture.width = available_width
+                                    # 使用 PIL 按原始宽高比显式计算高度，避免比例异常
+                                    try:
+                                        from PIL import Image
+                                        with Image.open(hint_image_path) as img:
+                                            img_w, img_h = img.size
+                                        if img_w and img_w > 0:
+                                            picture.height = int(int(picture.width) * img_h / img_w)
+                                    except Exception:
+                                        pass
+                                except Exception as e:
+                                    print(f"插入提示语图片失败: {e}")
+                                    hint_para.text = hint_text  # 回退为文本
+                                hint_elem = deepcopy(hint_para._element)
+                                hint_para._element.getparent().remove(hint_para._element)
+                                # 标记为提示语，避免 copy_chapter 模式重复复制
+                                self._add_hint_marker(hint_elem, hint_bookmark_id)
+                                hint_bookmark_id += 1
+                                new_children.append(hint_elem)
+                                insert_count += 1
+                
+                i += 1
+            
+            # 清空并重组body
+            for child in list(body):
+                body.remove(child)
+            for elem in new_children:
+                body.append(elem)
+            
+            print(f"章节提示语插入完成！插入: {insert_count}个，标题: {total_heading_count}个")
+            return True
+        except Exception as e:
+            print(f"插入提示语失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _add_hint_marker(self, elem, bookmark_id):
+        """为提示语段落添加 _hint_ 书签标记"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return
+        bookmark_start = OxmlElement('w:bookmarkStart')
+        bookmark_start.set(qn('w:id'), str(bookmark_id))
+        bookmark_start.set(qn('w:name'), '_hint_')
+        elem.insert(0, bookmark_start)
+        bookmark_end = OxmlElement('w:bookmarkEnd')
+        bookmark_end.set(qn('w:id'), str(bookmark_id))
+        elem.append(bookmark_end)
     
     def _insert_response_in_memory(self, doc, answer_text=None, answer_style=None, mode='before_heading'):
         """
@@ -2201,6 +2516,9 @@ class DocumentConverter:
                 body.remove(child)
             for elem in new_children:
                 body.append(elem)
+            
+            # 清除提示语标记（避免残留到最终文档）
+            self._remove_hint_markers(doc)
             
             print(f"插入应答句完成！插入: {insert_count}个，标题: {total_heading_count}个")
             return True

@@ -33,8 +33,8 @@ except ImportError:
 
 # ==================== 配置常量 ====================
 DEFAULT_TARGET = "Normal"
-TARGET_STYLE_FOR_TABLES = "Body Text"
-TARGET_STYLE_FOR_IMAGES = "Body Text"
+DEFAULT_TABLE_STYLE = "Body Text"
+DEFAULT_IMAGE_STYLE = "Body Text"
 IMAGE_SCALE_RATIO = 2 / 3
 LIST_BULLET_SYMBOL = "● "
 TABLE_BORDER_SIZE = '4'
@@ -289,7 +289,9 @@ class DocumentConverter:
     
     def get_target_style(self, original_style_name, template_doc, source_file=""):
         """获取目标样式名称"""
-        target = STYLE_MAP.get(original_style_name)
+        # 使用实例变量中的样式映射，避免使用全局变量
+        style_map = getattr(self, 'current_style_map', STYLE_MAP)
+        target = style_map.get(original_style_name)
         if target is not None:
             try:
                 template_doc.styles[target]
@@ -472,9 +474,11 @@ class DocumentConverter:
     
     def copy_paragraph_with_images(self, source_para, target_doc, target_style_name,
                                    page_width_emu, available_width_emu, para_idx, source_file="",
-                                   warning_callback=None):
+                                   warning_callback=None, image_style_override=None, enable_image_style=False):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
         """
         # 调试：检查大纲级别
         outline_level = self.get_outline_level(source_para)
@@ -543,9 +547,15 @@ class DocumentConverter:
         src_style_name = source_para.style.name
         
         if outline_level > 0:
-            final_style = OUTLINE_STYLE_MAP.get(outline_level)
-            if final_style is None:
-                final_style = f"Heading {outline_level}"
+            # 优先使用用户自定义样式映射
+            style_map = getattr(self, 'current_style_map', STYLE_MAP)
+            mapped_style = style_map.get(src_style_name)
+            if mapped_style is not None:
+                final_style = mapped_style
+            else:
+                final_style = OUTLINE_STYLE_MAP.get(outline_level)
+                if final_style is None:
+                    final_style = f"Heading {outline_level}"
             
             # 检查目标文档中是否存在该样式
             try:
@@ -584,11 +594,23 @@ class DocumentConverter:
                         final_style = DEFAULT_TARGET
         else:
             if has_image:
-                final_style = TARGET_STYLE_FOR_IMAGES
-                try:
-                    target_doc.styles[final_style]
-                except KeyError:
-                    final_style = DEFAULT_TARGET
+                # 图片段落样式：不受样式映射影响，只按单独的图片样式定义处理
+                # 1. enable_image_style=True → 使用image_style_override指定的样式
+                # 2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
+                if enable_image_style and image_style_override:
+                    # 级别1：复选框选中，使用覆盖样式
+                    final_style = image_style_override
+                    try:
+                        target_doc.styles[final_style]
+                    except KeyError:
+                        final_style = DEFAULT_TARGET
+                else:
+                    # 级别2：保留源样式名
+                    try:
+                        target_doc.styles[src_style_name]
+                        final_style = src_style_name
+                    except KeyError:
+                        final_style = DEFAULT_TARGET
             else:
                 final_style = target_style_name
         
@@ -703,7 +725,7 @@ class DocumentConverter:
         }
     
     def copy_table_with_images(self, source_table, target_doc, table_idx, available_width_emu, source_file="",
-                               warning_callback=None):
+                               warning_callback=None, table_style_override=None, enable_table_style=False):
         """
         复制表格（包含图片、边框）
         注意：不支持合并单元格，会输出警告信息
@@ -713,6 +735,8 @@ class DocumentConverter:
         :param available_width_emu: 可用宽度
         :param source_file: 源文件名
         :param warning_callback: 警告回调函数
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
         """
         # 检测合并单元格
         merge_info = self.detect_merged_cells(source_table)
@@ -732,11 +756,28 @@ class DocumentConverter:
         # 创建新表格
         new_table = target_doc.add_table(rows=rows, cols=cols)
         new_table.style = source_table.style
-        table_style = TARGET_STYLE_FOR_TABLES
-        try:
-            target_doc.styles[table_style]
-        except KeyError:
-            table_style = DEFAULT_TARGET
+        
+        # 表格单元格样式：两级决策辅助函数
+        def _get_table_para_style(src_style_name):
+            """决定表格内段落的目标样式
+            表格不受样式映射影响，只按单独的表格样式定义处理：
+            1. enable_table_style=True → 使用table_style_override指定的样式
+            2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
+            """
+            if enable_table_style and table_style_override:
+                # 级别1：复选框选中，使用覆盖样式
+                try:
+                    target_doc.styles[table_style_override]
+                    return table_style_override
+                except KeyError:
+                    return DEFAULT_TARGET
+            else:
+                # 级别2：保留源样式名
+                try:
+                    target_doc.styles[src_style_name]
+                    return src_style_name
+                except KeyError:
+                    return DEFAULT_TARGET
         
         self.set_table_width(new_table, available_width_emu)
         self.set_table_borders(new_table)
@@ -755,7 +796,8 @@ class DocumentConverter:
                 # 复制段落内容
                 for para_idx, para in enumerate(cell.paragraphs):
                     new_para = new_cell.add_paragraph()
-                    new_para.style = table_style
+                    src_para_style = para.style.name
+                    new_para.style = _get_table_para_style(src_para_style)
                     
                     if self.has_numbering(para):
                         new_para.add_run(self.list_bullet)
@@ -819,7 +861,9 @@ class DocumentConverter:
         return new_table
     
     def convert_styles(self, source_file, template_file, output_file, custom_style_map=None, list_bullet=None,
-                       warning_callback=None):
+                       warning_callback=None,
+                       table_style_override=None, enable_table_style=False,
+                       image_style_override=None, enable_image_style=False):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -828,11 +872,19 @@ class DocumentConverter:
         :param custom_style_map: 自定义样式映射表（可选）
         :param list_bullet: 列表段落符号（可选，默认为配置常量）
         :param warning_callback: 警告回调函数 callback(message)
-        :return: 是否成功
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
+        :return: (success, actual_file, message)
         """
-        global STYLE_MAP
+        # 使用局部样式映射副本，避免修改全局变量
+        style_map = STYLE_MAP.copy()
         if custom_style_map:
-            STYLE_MAP.update(custom_style_map)
+            style_map.update(custom_style_map)
+        
+        # 将样式映射存储为实例变量，供子方法使用
+        self.current_style_map = style_map
         
         # 设置列表符号
         if list_bullet is not None:
@@ -852,14 +904,6 @@ class DocumentConverter:
             source_doc = Document(source_file)
         except Exception as e:
             return False, f"加载源文档失败: {e}"
-        
-        # 调试：检查加载的源文档中的大纲级别
-        for i, para in enumerate(source_doc.paragraphs):
-            pPr_check = para._element.find(qn('w:pPr'))
-            if pPr_check is not None:
-                outline_check = pPr_check.find(qn('w:outlineLvl'))
-                if outline_check is not None:
-                    val_check = outline_check.get(qn('w:val'))
         
         self.source_styles = self.get_all_styles_from_doc(source_doc)
         
@@ -883,18 +927,15 @@ class DocumentConverter:
                     para = source_doc.paragraphs[para_idx]
                     src_style = para.style.name
                     
-                    # 调试：检查传入的段落
-                    pPr_debug = para._element.find(qn('w:pPr'))
-                    outline_debug = pPr_debug.find(qn('w:outlineLvl')) if pPr_debug is not None else None
-                    outline_val_debug = outline_debug.get(qn('w:val')) if outline_debug is not None else None
-                    
                     target_style = self.get_target_style(src_style, new_doc, source_file)
                     
                     new_para = self.copy_paragraph_with_images(
                         para, new_doc, target_style,
                         page_width, available_width,
                         para_idx, source_file,
-                        warning_callback
+                        warning_callback,
+                        image_style_override=image_style_override,
+                        enable_image_style=enable_image_style
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
@@ -906,7 +947,9 @@ class DocumentConverter:
                 if table_idx < len(source_doc.tables):
                     table = source_doc.tables[table_idx]
                     self.copy_table_with_images(table, new_doc, table_idx, available_width, source_file,
-                                               warning_callback)
+                                               warning_callback,
+                                               table_style_override=table_style_override,
+                                               enable_table_style=enable_table_style)
                     self.stats["table"] += 1
                     table_idx += 1
             
@@ -1986,7 +2029,9 @@ class DocumentConverter:
                      do_hint_insertion=False, hint_type='text',
                      hint_text='招标文件原文', hint_image_path=None,
                      hint_style='Normal',
-                     progress_callback=None, warning_callback=None):
+                     progress_callback=None, warning_callback=None,
+                     table_style_override=None, enable_table_style=False,
+                     image_style_override=None, enable_image_style=False):
         """
         完整转换流程：样式转换 -> 提示语插入 -> 语气转换 -> 插入应答句
         固定为7个步骤，跳过的步骤也会计入进度
@@ -2016,6 +2061,10 @@ class DocumentConverter:
         :param hint_style: 提示语段落样式
         :param progress_callback: 进度回调函数 callback(step, message)
         :param warning_callback: 警告回调函数 callback(message)
+        :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
+        :param enable_table_style: 是否启用表格样式覆盖
+        :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
+        :param enable_image_style: 是否启用图片样式覆盖
         :return: (success, actual_output_file, message)
         """
         # 固定7个步骤，确保进度条能正确填满
@@ -2025,7 +2074,9 @@ class DocumentConverter:
         # 步骤1：样式转换
         temp_file_1 = output_file.rsplit('.', 1)[0] + "_temp1.docx"
         success, actual_file, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
-                                           warning_callback)
+                                           warning_callback,
+                                           table_style_override, enable_table_style,
+                                           image_style_override, enable_image_style)
         if not success:
             return False, output_file, f"样式转换失败: {msg}"
         

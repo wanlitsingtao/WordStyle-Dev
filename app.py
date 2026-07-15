@@ -1031,13 +1031,21 @@ if 'answer_style_config' not in st.session_state:
     app_state.set_answer_style_config("Normal")
 if 'answer_mode_config' not in st.session_state:
     app_state.set_answer_mode_config('before_heading')
+if 'do_hint_config' not in st.session_state:
+    app_state.set_do_hint_config(False)
+if 'hint_type_config' not in st.session_state:
+    app_state.set_hint_type_config('text')
+if 'hint_text_config' not in st.session_state:
+    app_state.set_hint_text_config('招标文件原文')
+if 'hint_style_config' not in st.session_state:
+    app_state.set_hint_style_config('Normal')
 
 
 # ==================== [FIX] 调用配置区组件渲染实际的UI控件 ====================
 # render_conversion_config() 来自 components/config_panel.py
 # 包含：样式映射按钮、祈使语气转换checkbox、插入应答句checkbox、
 #       列表符号text_input、应答句文本、应答句样式selectbox、插入模式selectbox
-do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode = render_conversion_config()
+do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode, do_hint, hint_type, hint_text, hint_image_path, hint_style = render_conversion_config()
 
 # 不插入应答句时使用默认值（确保变量存在）
 if not do_answer:
@@ -1184,8 +1192,13 @@ else:
                     
                     # [OK] 修复：使用每个文件各自的样式映射配置（与桌面版一致）
                     file_mapping = None
+                    file_tbl_img_config = {}
                     if 'file_style_mappings' in st.session_state and source_file_obj.name in st.session_state.file_style_mappings:
-                        file_mapping = st.session_state.file_style_mappings[source_file_obj.name]
+                        file_mapping_data = st.session_state.file_style_mappings[source_file_obj.name]
+                        # 样式映射部分（排除特殊键）
+                        file_mapping = {k: v for k, v in file_mapping_data.items() if not k.startswith('_')}
+                        # 表格/图片样式配置（从映射数据中的特殊键取出）
+                        file_tbl_img_config = file_mapping_data.get('_table_image_style', {})
                         if file_mapping:
                             st.info(f"📋 {source_file_obj.name}: 使用自定义样式映射 ({len(file_mapping)} 个样式)")
                     
@@ -1220,9 +1233,18 @@ else:
                         list_bullet=list_bullet if list_bullet else "—",
                         do_answer_insertion=do_answer,
                         answer_mode=answer_mode,
+                        do_hint_insertion=do_hint,
+                        hint_type=hint_type,
+                        hint_text=hint_text,
+                        hint_image_path=hint_image_path,
+                        hint_style=hint_style,
                         progress_callback=make_progress_callback(idx, len(current_source_files)),
                         warning_callback=warning_callback,
-                        source_styles_cache=source_styles_for_file  # [HIGH_VOLTAGE] 传递缓存的样式列表
+                        source_styles_cache=source_styles_for_file,  # [HIGH_VOLTAGE] 传递缓存的样式列表
+                        table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
+                        enable_table_style=file_tbl_img_config.get('enable_table_style', False),
+                        image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', False)
                     )
                     
                     if success:

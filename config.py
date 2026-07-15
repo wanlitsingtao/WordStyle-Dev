@@ -184,10 +184,14 @@ DEFAULT_ANSWER_MODE = 'before_heading'
 ANSWER_MODE_OPTIONS = {
     'before_heading': '章节前插入',
     'after_heading': '章节后插入',
-    'copy_chapter': '章节招标原文+应答句+招标原文副本',
+    'copy_chapter': '原文+应答句+应答原文',
     'before_paragraph': '逐段前应答',
     'after_paragraph': '逐段后应答'
 }
+
+# ==================== 表格/图片样式配置 ====================
+DEFAULT_TABLE_STYLE = "Body Text"
+DEFAULT_IMAGE_STYLE = "Body Text"
 
 # ==================== 列表符号配置 ====================
 DEFAULT_LIST_BULLET = "•"

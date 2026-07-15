@@ -30,12 +30,14 @@ class StyleMappingDialog:
     """样式映射对话框"""
     
     def __init__(self, parent, source_styles, template_styles, current_mapping=None, 
-                 saved_default_mapping=None, save_default_callback=None):
+                 saved_default_mapping=None, save_default_callback=None,
+                 current_tbl_img_config=None):
         self.parent = parent
         self.source_styles = sorted(source_styles)
         self.template_styles = sorted(template_styles)
         self.current_mapping = current_mapping or {}
         self.saved_default_mapping = saved_default_mapping or {}
+        self.current_tbl_img_config = current_tbl_img_config or {}
         self.save_default_callback = save_default_callback  # 保存默认映射的回调函数
         self.result = None
         
@@ -53,7 +55,15 @@ class StyleMappingDialog:
         screen_width = self.dialog.winfo_screenwidth()
         screen_height = self.dialog.winfo_screenheight()
         dialog_width = min(800, int(screen_width * 0.7))
-        dialog_height = min(600, int(screen_height * 0.7))
+        # 增加默认高度以容纳表格/图片样式区域和按钮区域
+        dialog_height = min(750, int(screen_height * 0.7))
+        # 确保最小高度能容纳全部控件，不被底部按钮挤出可视区
+        dialog_height = max(dialog_height, 550)
+        # 不超出屏幕可用高度（预留标题栏/任务栏空间）
+        dialog_height = min(dialog_height, screen_height - 50)
+        
+        # 设置最小窗口尺寸，防止用户缩放过小导致按钮被截断
+        self.dialog.minsize(600, 550)
         
         # 居中显示
         x = (screen_width - dialog_width) // 2
@@ -155,6 +165,55 @@ class StyleMappingDialog:
         canvas.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill=Y)
         
+        # ========== 表格/图片样式配置区域 ==========
+        tbl_img_frame = LabelFrame(self.dialog, text="表格与图片样式", font=("微软雅黑", 10),
+                                   padx=10, pady=10)
+        tbl_img_frame.pack(fill=X, padx=10, pady=5)
+        
+        # 表格样式行
+        tbl_row = Frame(tbl_img_frame)
+        tbl_row.pack(fill=X, pady=3)
+        
+        self.enable_table_style_var = IntVar(value=self.current_tbl_img_config.get('enable_table_style', 0))
+        self.table_style_check = Checkbutton(tbl_row, text="表格样式",
+                                              variable=self.enable_table_style_var,
+                                              font=("微软雅黑", 9),
+                                              command=self.toggle_table_style_in_dialog)
+        self.table_style_check.pack(side=LEFT, padx=(0, 5))
+        
+        Label(tbl_row, text="目标样式:", font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 2))
+        
+        table_style_default = self.current_tbl_img_config.get('table_style', 'Body Text')
+        self.table_style_var = StringVar(value=table_style_default)
+        self.table_style_combo = ttk.Combobox(tbl_row, textvariable=self.table_style_var,
+                                                width=20, state="readonly")
+        self.table_style_combo['values'] = self.template_styles
+        self.table_style_combo.pack(side=LEFT, padx=2)
+        
+        # 图片样式行
+        img_row = Frame(tbl_img_frame)
+        img_row.pack(fill=X, pady=3)
+        
+        self.enable_image_style_var = IntVar(value=self.current_tbl_img_config.get('enable_image_style', 0))
+        self.image_style_check = Checkbutton(img_row, text="图片样式",
+                                              variable=self.enable_image_style_var,
+                                              font=("微软雅黑", 9),
+                                              command=self.toggle_image_style_in_dialog)
+        self.image_style_check.pack(side=LEFT, padx=(0, 5))
+        
+        Label(img_row, text="目标样式:", font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 2))
+        
+        image_style_default = self.current_tbl_img_config.get('image_style', 'Body Text')
+        self.image_style_var = StringVar(value=image_style_default)
+        self.image_style_combo = ttk.Combobox(img_row, textvariable=self.image_style_var,
+                                                width=20, state="readonly")
+        self.image_style_combo['values'] = self.template_styles
+        self.image_style_combo.pack(side=LEFT, padx=2)
+        
+        # 初始化控件状态
+        self.toggle_table_style_in_dialog()
+        self.toggle_image_style_in_dialog()
+        
         # 按钮区域
         btn_frame = Frame(self.dialog)
         btn_frame.pack(fill=X, padx=10, pady=10)
@@ -184,14 +243,22 @@ class StyleMappingDialog:
                 var.set(source_style if source_style in self.template_styles else "Normal")
     
     def on_save_default(self):
-        """将当前映射配置保存为默认"""
+        """将当前映射配置保存为默认（包含样式映射和表格/图片样式定义）"""
         current_map = {}
         for source_style, var in self.mapping_widgets:
             current_map[source_style] = var.get()
         
-        # 通过回调函数保存到主界面
+        # 同时收集表格/图片样式配置
+        tbl_img_config = {
+            'enable_table_style': self.enable_table_style_var.get(),
+            'table_style': self.table_style_var.get(),
+            'enable_image_style': self.enable_image_style_var.get(),
+            'image_style': self.image_style_var.get()
+        }
+        
+        # 通过回调函数保存到主界面（同时传递映射和表格/图片配置）
         if self.save_default_callback:
-            self.save_default_callback(current_map)
+            self.save_default_callback(current_map, tbl_img_config)
             # 更新内部引用
             self.saved_default_mapping = current_map
     
@@ -200,17 +267,39 @@ class StyleMappingDialog:
         self.result = {}
         for source_style, var in self.mapping_widgets:
             self.result[source_style] = var.get()
+        # 同时收集表格/图片样式配置
+        self.tbl_img_config = {
+            'enable_table_style': self.enable_table_style_var.get(),
+            'table_style': self.table_style_var.get(),
+            'enable_image_style': self.enable_image_style_var.get(),
+            'image_style': self.image_style_var.get()
+        }
         self.dialog.destroy()
     
     def on_cancel(self):
         """取消按钮点击"""
         self.result = None
+        self.tbl_img_config = None
         self.dialog.destroy()
     
+    def toggle_table_style_in_dialog(self):
+        """对话框内切换表格样式控件的可用状态"""
+        if self.enable_table_style_var.get():
+            self.table_style_combo.config(state='readonly')
+        else:
+            self.table_style_combo.config(state='disabled')
+    
+    def toggle_image_style_in_dialog(self):
+        """对话框内切换图片样式控件的可用状态"""
+        if self.enable_image_style_var.get():
+            self.image_style_combo.config(state='readonly')
+        else:
+            self.image_style_combo.config(state='disabled')
+    
     def show(self):
-        """显示对话框并返回结果"""
+        """显示对话框并返回结果（映射+表格/图片样式配置）"""
         self.parent.wait_window(self.dialog)
-        return self.result
+        return self.result, self.tbl_img_config
 
 
 class DocumentConverterGUI:
@@ -270,12 +359,14 @@ class DocumentConverterGUI:
             saved_answer_mode = self.answer_mode_labels[0]
         self.answer_mode = StringVar(value=saved_answer_mode)
         
-        # 章节提示语配置
+        # 章节提示语配置（从 default_config.json 加载完整配置）
+        saved_do_hint = self.default_config.get("do_hint_insertion", 0)
+        saved_hint_type = self.default_config.get("hint_type", "text")
         saved_hint_text = self.default_config.get("hint_text", "招标文件原文")
         saved_hint_image_path = self.default_config.get("hint_image_path", "")
         saved_hint_style = self.default_config.get("hint_style", "Normal")
-        self.do_hint_insertion = IntVar(value=0)  # 是否插入章节提示语（默认关闭）
-        self.hint_type = StringVar(value="text")  # 提示语类型：text 或 image
+        self.do_hint_insertion = IntVar(value=saved_do_hint)  # 是否插入章节提示语
+        self.hint_type = StringVar(value=saved_hint_type)  # 提示语类型：text 或 image
         self.hint_text = StringVar(value=saved_hint_text)  # 提示语文本
         self.hint_image_path = StringVar(value=saved_hint_image_path)  # 提示语图片路径
         self.hint_style = StringVar(value=saved_hint_style)  # 提示语样式
@@ -985,13 +1076,25 @@ class DocumentConverterGUI:
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
     
-    def save_default_style_map(self, style_map):
-        """将当前样式映射保存为默认"""
+    def save_default_style_map(self, style_map, tbl_img_config=None):
+        """将当前样式映射保存为默认（包含样式映射和表格/图片样式定义）"""
         self.default_config["style_map"] = style_map
+        # 同时保存表格/图片样式定义
+        if tbl_img_config:
+            self.default_config["enable_table_style"] = tbl_img_config.get('enable_table_style', 0)
+            self.default_config["table_style"] = tbl_img_config.get('table_style', 'Body Text')
+            self.default_config["enable_image_style"] = tbl_img_config.get('enable_image_style', 0)
+            self.default_config["image_style"] = tbl_img_config.get('image_style', 'Body Text')
         if self._save_default_config(self.default_config):
             configured_count = sum(1 for v in style_map.values() if v)
+            tbl_info = ""
+            if tbl_img_config:
+                tbl_on = tbl_img_config.get('enable_table_style', 0)
+                img_on = tbl_img_config.get('enable_image_style', 0)
+                tbl_info = f"\n表格样式覆盖: {'启用 (' + tbl_img_config.get('table_style', '') + ')' if tbl_on else '未启用'}"
+                tbl_info += f"\n图片样式覆盖: {'启用 (' + tbl_img_config.get('image_style', '') + ')' if img_on else '未启用'}"
             self.log(f"✓ 已将样式映射设为默认，共 {configured_count} 个映射关系")
-            messagebox.showinfo("成功", f"已将样式映射设为默认！\n\n共 {configured_count} 个映射关系\n下次打开样式映射对话框时将自动恢复此配置。")
+            messagebox.showinfo("成功", f"已将样式映射设为默认！\n\n共 {configured_count} 个样式映射关系{tbl_info}\n下次打开样式映射对话框时将自动恢复此配置。")
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
     
@@ -1059,16 +1162,19 @@ class DocumentConverterGUI:
             self.hint_image_path.set(file_path)
     
     def save_default_hint_settings(self):
-        """保存当前提示语全部配置为默认（文本、图片路径、样式）"""
+        """保存当前提示语全部配置为默认（是否启用、类型、文本、图片路径、样式）"""
+        self.default_config["do_hint_insertion"] = self.do_hint_insertion.get()
+        self.default_config["hint_type"] = self.hint_type.get()
         self.default_config["hint_text"] = self.hint_text.get()
         self.default_config["hint_image_path"] = self.hint_image_path.get()
         self.default_config["hint_style"] = self.hint_style.get()
         if self._save_default_config(self.default_config):
-            messagebox.showinfo("提示", "已将当前提示语配置设为默认")
+            hint_enabled = "启用" if self.do_hint_insertion.get() else "未启用"
+            hint_type_str = "文本" if self.hint_type.get() == "text" else "图片"
+            messagebox.showinfo("提示", f"已将当前提示语配置设为默认！\n\n状态: {hint_enabled}\n类型: {hint_type_str}")
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
 
-    
     def stop_conversion(self):
         """停止转换"""
         if self.conversion_thread and self.conversion_thread.is_alive():
@@ -1288,16 +1394,32 @@ class DocumentConverterGUI:
             messagebox.showwarning("警告", "所选文件没有样式信息")
             return
         
-        # 打开对话框（传入保存的默认映射和保存回调）
+        # 获取该文件的当前表格/图片样式配置
+        # 优先使用文件级配置，其次使用默认配置中的表格/图片样式定义
+        current_tbl_img_config = {}
+        if target_file in self.file_style_maps and self.file_style_maps[target_file].get('tbl_img_config'):
+            current_tbl_img_config = self.file_style_maps[target_file]['tbl_img_config']
+        else:
+            # 从 default_config.json 中读取默认的表格/图片样式定义
+            current_tbl_img_config = {
+                'enable_table_style': self.default_config.get('enable_table_style', 0),
+                'table_style': self.default_config.get('table_style', 'Body Text'),
+                'enable_image_style': self.default_config.get('enable_image_style', 0),
+                'image_style': self.default_config.get('image_style', 'Body Text')
+            }
+        
+        # 打开对话框（传入保存的默认映射、保存回调、表格/图片样式配置）
         dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping,
                                      saved_default_mapping=self.default_style_map,
-                                     save_default_callback=self.save_default_style_map)
-        result = dialog.show()
+                                     save_default_callback=self.save_default_style_map,
+                                     current_tbl_img_config=current_tbl_img_config)
+        result, tbl_img_config = dialog.show()
         
         if result is not None:
             # 保存映射配置到对应文件
             if target_file in self.file_style_maps:
                 self.file_style_maps[target_file]['mapping'] = result
+                self.file_style_maps[target_file]['tbl_img_config'] = tbl_img_config
             else:
                 self.custom_style_map = result
             
@@ -1479,12 +1601,18 @@ class DocumentConverterGUI:
                 
                 # 获取该文件的映射配置
                 file_mapping = None
+                file_tbl_img_config = {}
                 if source in self.file_style_maps and self.file_style_maps[source].get('mapping'):
                     file_mapping = self.file_style_maps[source]['mapping']
+                    file_tbl_img_config = self.file_style_maps[source].get('tbl_img_config', {})
                     self.log(f"使用该文件的自定义映射: {len(file_mapping)} 个样式")
                 elif self.custom_style_map:
                     file_mapping = self.custom_style_map
                     self.log(f"使用全局自定义映射: {len(file_mapping)} 个样式")
+                elif self.default_style_map:
+                    # 兜底：使用 default_config.json 中的默认映射
+                    file_mapping = self.default_style_map
+                    self.log(f"使用默认配置映射: {len(file_mapping)} 个样式")
                 else:
                     self.log("使用系统默认映射规则")
                 
@@ -1521,7 +1649,11 @@ class DocumentConverterGUI:
                     hint_image_path=self.hint_image_path.get(),
                     hint_style=self.hint_style.get(),
                     progress_callback=progress_callback,
-                    warning_callback=warning_callback
+                    warning_callback=warning_callback,
+                    table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
+                    enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
+                    image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
+                    enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
                 )
                 
                 if success:
@@ -1561,9 +1693,15 @@ class DocumentConverterGUI:
                     
                     # 获取该文件的映射配置
                     file_mapping = None
+                    file_tbl_img_config = {}
                     if source in self.file_style_maps and self.file_style_maps[source].get('mapping'):
                         file_mapping = self.file_style_maps[source]['mapping']
+                        file_tbl_img_config = self.file_style_maps[source].get('tbl_img_config', {})
                         self.root.after(0, lambda: self.log("    使用该文件的自定义映射"))
+                    elif self.default_style_map:
+                        # 兜底：使用 default_config.json 中的默认映射
+                        file_mapping = self.default_style_map
+                        self.root.after(0, lambda: self.log("    使用默认配置映射"))
                     else:
                         self.root.after(0, lambda: self.log("    使用系统默认映射"))
                     
@@ -1603,7 +1741,11 @@ class DocumentConverterGUI:
                         hint_image_path=self.hint_image_path.get(),
                         hint_style=self.hint_style.get(),
                         progress_callback=progress_callback,
-                        warning_callback=warning_callback
+                        warning_callback=warning_callback,
+                        table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
+                        enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
+                        image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
                     )
                     
                     if success:
