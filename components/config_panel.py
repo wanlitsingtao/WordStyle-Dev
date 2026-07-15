@@ -80,9 +80,15 @@ def _apply_hint_defaults_to_session():
     st.session_state.do_hint_config = defaults.get('do_hint', st.session_state.get('do_hint_config', False))
     st.session_state.hint_type_config = defaults.get('hint_type', st.session_state.get('hint_type_config', 'text'))
     st.session_state.hint_text_config = defaults.get('hint_text', st.session_state.get('hint_text_config', ''))
+    # 检查保存的默认图片路径是否还存在
     hint_image_default = defaults.get('hint_image_path')
     if hint_image_default:
-        st.session_state.hint_image_config = hint_image_default
+        import os
+        if os.path.exists(hint_image_default):
+            st.session_state.hint_image_config = hint_image_default
+        else:
+            # 默认图片文件已不存在，清空配置
+            st.session_state.hint_image_config = None
     elif 'hint_image_config' not in st.session_state:
         st.session_state.hint_image_config = None
     st.session_state.hint_style_config = defaults.get('hint_style', st.session_state.get('hint_style_config', 'Normal'))
@@ -103,6 +109,43 @@ def render_conversion_config():
     
     # 首次加载时应用保存的默认提示语配置
     _apply_hint_defaults_to_session()
+    
+    # CSS：统一控件高度，修复对齐问题
+    st.markdown("""
+    <style>
+        /* 统一配置区所有行内控件高度 */
+        div[data-testid="column"] .stButton > button {
+            height: 2.5em;
+            line-height: 1;
+            font-size: 0.9em;
+        }
+        div[data-testid="column"] .stCheckbox > label {
+            min-height: 2.5em;
+            display: flex;
+            align-items: center;
+            padding-top: 0.25em;
+        }
+        div[data-testid="column"] .stTextInput > div > div > input {
+            min-height: 2.5em;
+        }
+        div[data-testid="column"] .stSelectbox > div > div > div {
+            min-height: 2.5em;
+        }
+        /* Radio 水平排列时垂直居中 */
+        div[data-testid="column"] .stRadio > div {
+            display: flex;
+            align-items: center;
+            min-height: 2.5em;
+        }
+        div[data-testid="column"] .stRadio > div > label {
+            padding-top: 0;
+        }
+        /* file_uploader 高度统壹 */
+        div[data-testid="column"] .stFileUploader > div {
+            min-height: 2.5em;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
     # 第一行:四个选项横向等距分布
     col1, col2, col3, col4 = st.columns(4)
@@ -225,6 +268,7 @@ def render_conversion_config():
     st.markdown("---")
     st.markdown("**🏷️ 章节提示语**")
     
+    # 使用比例列：checkbox(窄) + radio(中等) + selectbox(中等)
     hint_cols = st.columns([1, 2, 2])
     
     with hint_cols[0]:
@@ -282,15 +326,37 @@ def render_conversion_config():
                 if hint_text != st.session_state.get('hint_text_config'):
                     st.session_state.hint_text_config = hint_text
                 hint_image_path = None
+                # 切换为文本类型时，清除图片缓存
+                if 'hint_image_uploaded' in st.session_state:
+                    st.session_state.hint_image_uploaded = None
             else:
-                hint_image_path = st.text_input(
-                    "提示语图片路径",
-                    value=st.session_state.get('hint_image_config') or "",
-                    help="提示语图片文件的本地路径",
-                    key="hint_image_input"
+                # 图片类型：使用 file_uploader 上传图片文件
+                hint_uploaded = st.file_uploader(
+                    "上传提示语图片",
+                    type=['png', 'jpg', 'jpeg', 'bmp', 'gif'],
+                    help="上传要作为提示语的图片文件（支持 PNG/JPG/BMP/GIF）",
+                    key="hint_image_uploader"
                 )
-                if hint_image_path != st.session_state.get('hint_image_config'):
-                    st.session_state.hint_image_config = hint_image_path
+                
+                # 显示当前已上传的图片信息
+                current_img_path = st.session_state.get('hint_image_config')
+                if hint_uploaded is not None:
+                    # 有新上传的图片，保存到临时文件
+                    import os
+                    user_id = st.session_state.get('user_id', 'default')
+                    img_ext = os.path.splitext(hint_uploaded.name)[1] or '.png'
+                    img_temp_path = f"temp_hint_image_{user_id}{img_ext}"
+                    with open(img_temp_path, 'wb') as f:
+                        f.write(hint_uploaded.getbuffer())
+                    st.session_state.hint_image_config = img_temp_path
+                    st.session_state.hint_image_uploaded = hint_uploaded.name
+                    st.success(f"✅ 已上传: {hint_uploaded.name}")
+                elif current_img_path and os.path.exists(current_img_path):
+                    st.info(f"📎 当前图片: {os.path.basename(current_img_path)}")
+                else:
+                    st.caption("请上传一张提示语图片")
+                
+                hint_image_path = st.session_state.get('hint_image_config')
                 hint_text = st.session_state.get('hint_text_config', '')
         
         with hint_content_cols[1]:
@@ -311,6 +377,21 @@ def render_conversion_config():
                     st.success(f"⭐ 已将提示语配置设为默认！状态: {hint_enabled_str}, 类型: {hint_type_str}")
                 else:
                     st.error("❌ 保存默认配置失败，请检查用户数据")
+            
+            # 图片提示语：在"设为默认"按钮下方增加"清除图片"按钮
+            if hint_type == "image" and st.session_state.get('hint_image_config'):
+                if st.button("🗑️ 清除图片", key="clear_hint_img_btn", use_container_width=True,
+                             help="清除已上传的提示语图片"):
+                    import os
+                    img_path = st.session_state.hint_image_config
+                    if img_path and os.path.exists(img_path):
+                        try:
+                            os.remove(img_path)
+                        except Exception:
+                            pass
+                    st.session_state.hint_image_config = None
+                    st.session_state.hint_image_uploaded = None
+                    st.rerun()
     else:
         hint_type = st.session_state.get('hint_type_config', 'text')
         hint_text = st.session_state.get('hint_text_config', '')
