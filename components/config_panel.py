@@ -50,25 +50,42 @@ def _save_hint_defaults(hint_settings):
         return False
 
 
+def _ensure_hint_keys_initialized():
+    """确保提示语相关的 session_state 键已初始化（fragment 内防 AttributeError）"""
+    hint_defaults_keys = {
+        'do_hint_config': False,
+        'hint_type_config': 'text',
+        'hint_text_config': '',
+        'hint_image_config': None,
+        'hint_style_config': 'Normal',
+    }
+    for key, default_val in hint_defaults_keys.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_val
+
+
 def _apply_hint_defaults_to_session():
     """将保存的默认提示语配置应用到 session_state（仅当 session_state 未初始化时）"""
+    # 先确保键存在，防止 AttributeError
+    _ensure_hint_keys_initialized()
+    
     defaults = _load_hint_defaults()
     if defaults is None:
         return
     
-    # 仅在 session_state 中尚未设置自定义值时，才用默认值覆盖
-    # 判断依据：do_hint_config 是否为初始默认值 False
-    # 如果用户已经改过（比如勾选了"插入提示语"），就不覆盖
-    # 这里只在首次加载时生效
+    # 仅在首次加载时生效
     if st.session_state.get('_hint_defaults_applied', False):
         return
     
-    st.session_state.do_hint_config = defaults.get('do_hint', st.session_state.do_hint_config)
-    st.session_state.hint_type_config = defaults.get('hint_type', st.session_state.hint_type_config)
-    st.session_state.hint_text_config = defaults.get('hint_text', st.session_state.hint_text_config)
-    if defaults.get('hint_image_path'):
-        st.session_state.hint_image_config = defaults.get('hint_image_path')
-    st.session_state.hint_style_config = defaults.get('hint_style', st.session_state.hint_style_config)
+    st.session_state.do_hint_config = defaults.get('do_hint', st.session_state.get('do_hint_config', False))
+    st.session_state.hint_type_config = defaults.get('hint_type', st.session_state.get('hint_type_config', 'text'))
+    st.session_state.hint_text_config = defaults.get('hint_text', st.session_state.get('hint_text_config', ''))
+    hint_image_default = defaults.get('hint_image_path')
+    if hint_image_default:
+        st.session_state.hint_image_config = hint_image_default
+    elif 'hint_image_config' not in st.session_state:
+        st.session_state.hint_image_config = None
+    st.session_state.hint_style_config = defaults.get('hint_style', st.session_state.get('hint_style_config', 'Normal'))
     st.session_state._hint_defaults_applied = True
 
 
@@ -200,9 +217,9 @@ def render_conversion_config():
                 st.session_state.answer_mode_config = answer_mode
     else:
         # 未勾选时设置默认值
-        answer_text = st.session_state.answer_text_config
-        answer_style = st.session_state.answer_style_config
-        answer_mode = st.session_state.answer_mode_config
+        answer_text = st.session_state.get('answer_text_config', '')
+        answer_style = st.session_state.get('answer_style_config', 'Normal')
+        answer_mode = st.session_state.get('answer_mode_config', 'before_heading')
     
     # ========== 章节提示语配置（第三行） ==========
     st.markdown("---")
@@ -268,13 +285,13 @@ def render_conversion_config():
             else:
                 hint_image_path = st.text_input(
                     "提示语图片路径",
-                    value=st.session_state.hint_image_config or "",
+                    value=st.session_state.get('hint_image_config') or "",
                     help="提示语图片文件的本地路径",
                     key="hint_image_input"
                 )
                 if hint_image_path != st.session_state.get('hint_image_config'):
                     st.session_state.hint_image_config = hint_image_path
-                hint_text = st.session_state.hint_text_config
+                hint_text = st.session_state.get('hint_text_config', '')
         
         with hint_content_cols[1]:
             # 章节提示语"设为默认"按钮（保存全字段：是否启用、类型、文本、图片路径、样式）
@@ -283,8 +300,8 @@ def render_conversion_config():
                 hint_defaults = {
                     'do_hint': do_hint,
                     'hint_type': hint_type,
-                    'hint_text': hint_text if hint_type == "text" else st.session_state.hint_text_config,
-                    'hint_image_path': hint_image_path if hint_type == "image" else (st.session_state.hint_image_config or ""),
+                    'hint_text': hint_text if hint_type == "text" else st.session_state.get('hint_text_config', ''),
+                    'hint_image_path': hint_image_path if hint_type == "image" else (st.session_state.get('hint_image_config') or ""),
                     'hint_style': hint_style
                 }
                 if _save_hint_defaults(hint_defaults):
@@ -295,10 +312,10 @@ def render_conversion_config():
                 else:
                     st.error("❌ 保存默认配置失败，请检查用户数据")
     else:
-        hint_type = st.session_state.hint_type_config
-        hint_text = st.session_state.hint_text_config
-        hint_image_path = st.session_state.hint_image_config
-        hint_style = st.session_state.hint_style_config
+        hint_type = st.session_state.get('hint_type_config', 'text')
+        hint_text = st.session_state.get('hint_text_config', '')
+        hint_image_path = st.session_state.get('hint_image_config', None)
+        hint_style = st.session_state.get('hint_style_config', 'Normal')
         
         # 未启用时也显示"设为默认"按钮
         hint_off_cols = st.columns([3, 1])
