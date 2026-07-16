@@ -375,6 +375,7 @@ class DocumentConverterGUI:
         self.source_styles = set()
         self.template_styles = set()
         self.custom_style_map = {}  # 用户自定义的样式映射（全局）
+        self.custom_tbl_img_config = {}  # 用户自定义的表格/图片样式配置（全局，当file_style_maps中没有时使用）
         self.default_style_map = self.default_config.get("style_map", {})  # 用户保存的默认样式映射
         self.file_style_maps = {}  # 每个文件的独立映射配置 {file_path: {style_map}}
         self.selected_source_file = None  # 当前选中的源文件
@@ -1060,6 +1061,7 @@ class DocumentConverterGUI:
         
         # 重置自定义映射
         self.custom_style_map = {}
+        self.custom_tbl_img_config = {}
     
     def clear_template_data(self):
         """清空模板相关数据"""
@@ -1455,6 +1457,7 @@ class DocumentConverterGUI:
                 self.file_style_maps[target_file]['tbl_img_config'] = tbl_img_config
             else:
                 self.custom_style_map = result
+                self.custom_tbl_img_config = tbl_img_config or {}
             
             configured_count = sum(1 for v in result.values() if v)
             filename = os.path.basename(target_file) if target_file else "当前文件"
@@ -1641,6 +1644,7 @@ class DocumentConverterGUI:
                     self.log(f"使用该文件的自定义映射: {len(file_mapping)} 个样式")
                 elif self.custom_style_map:
                     file_mapping = self.custom_style_map
+                    file_tbl_img_config = self.custom_tbl_img_config or {}
                     self.log(f"使用全局自定义映射: {len(file_mapping)} 个样式")
                 elif self.default_style_map:
                     # 兜底：使用 default_config.json 中的默认映射
@@ -1663,6 +1667,14 @@ class DocumentConverterGUI:
                 self.root.after(0, lambda: self.log("  正在处理中，请稍候..."))
                 if self.detailed_log_var.get():
                     self.log("  [详细] 已启用详细日志模式")
+                
+                # 输出表格/图片样式参数的日志
+                tbl_style_val = file_tbl_img_config.get('table_style', 'Body Text')
+                tbl_enable_val = file_tbl_img_config.get('enable_table_style', 0)
+                img_style_val = file_tbl_img_config.get('image_style', 'Body Text')
+                img_enable_val = file_tbl_img_config.get('enable_image_style', 0)
+                self.log(f"  表格样式覆盖: {'启用(' + str(tbl_style_val) + ')' if tbl_enable_val else '未启用'} (enable={tbl_enable_val}, style={tbl_style_val})")
+                self.log(f"  图片样式覆盖: {'启用(' + str(img_style_val) + ')' if img_enable_val else '未启用'} (enable={img_enable_val}, style={img_style_val})")
                 
                 # 执行转换
                 success, actual_file, msg = self.converter.full_convert(
