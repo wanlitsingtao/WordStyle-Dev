@@ -124,6 +124,8 @@ class DocumentConverter:
         self.source_styles = set()  # 源文档中使用的样式
         self.template_styles = set()  # 模板文档中的样式
         self.list_bullet = LIST_BULLET_SYMBOL  # 列表段落符号，默认为配置常量
+        self.use_list_style_mode = False  # 是否使用样式处理列表段落
+        self.list_style_name = ""  # 列表段落使用的样式名
         
     def setup_logger(self, source_file):
         log_filename = os.path.splitext(source_file)[0] + "_err.log"
@@ -689,26 +691,51 @@ class DocumentConverter:
             return new_para
         
         if self.has_numbering(source_para):
-            new_para.add_run(self.list_bullet)
-            self.remove_auto_numbering(new_para)
-            # 对于列表段落，使用专门的编号清理函数
-            full_text = ''.join(run.text for run in source_para.runs)
-            cleaned_text = clean_list_numbering(full_text)
-            if cleaned_text:
-                new_para.add_run(cleaned_text)
-            for run_idx, run in enumerate(source_para.runs):
-                blips = run._element.findall('.//' + qn('a:blip'))
-                for blip in blips:
-                    rId = blip.get(qn('r:embed'))
-                    if rId:
-                        try:
-                            img_part = source_para.part.related_parts[rId]
-                            img_bytes = img_part.blob
-                            emu_w, emu_h = self.get_image_extent(blip)
-                            pic_run = new_para.add_run()
-                            self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
-                        except Exception:
-                            pass
+            if self.use_list_style_mode and self.list_style_name:
+                # 方式B：使用指定样式 — 设置样式，清除自动编号，复制文本
+                try:
+                    new_para.style = self.list_style_name
+                except Exception:
+                    pass
+                self.remove_auto_numbering(new_para)
+                full_text = ''.join(run.text for run in source_para.runs)
+                cleaned_text = clean_list_numbering(full_text)
+                if cleaned_text:
+                    new_para.add_run(cleaned_text)
+                for run_idx, run in enumerate(source_para.runs):
+                    blips = run._element.findall('.//' + qn('a:blip'))
+                    for blip in blips:
+                        rId = blip.get(qn('r:embed'))
+                        if rId:
+                            try:
+                                img_part = source_para.part.related_parts[rId]
+                                img_bytes = img_part.blob
+                                emu_w, emu_h = self.get_image_extent(blip)
+                                pic_run = new_para.add_run()
+                                self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            except Exception:
+                                pass
+            else:
+                # 方式A：项目符号 — 添加项目符号前缀
+                new_para.add_run(self.list_bullet)
+                self.remove_auto_numbering(new_para)
+                full_text = ''.join(run.text for run in source_para.runs)
+                cleaned_text = clean_list_numbering(full_text)
+                if cleaned_text:
+                    new_para.add_run(cleaned_text)
+                for run_idx, run in enumerate(source_para.runs):
+                    blips = run._element.findall('.//' + qn('a:blip'))
+                    for blip in blips:
+                        rId = blip.get(qn('r:embed'))
+                        if rId:
+                            try:
+                                img_part = source_para.part.related_parts[rId]
+                                img_bytes = img_part.blob
+                                emu_w, emu_h = self.get_image_extent(blip)
+                                pic_run = new_para.add_run()
+                                self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            except Exception:
+                                pass
             return new_para
         
         for run_idx, run in enumerate(source_para.runs):
@@ -907,7 +934,8 @@ class DocumentConverter:
     def convert_styles(self, source_file, template_file, output_file, custom_style_map=None, list_bullet=None,
                        warning_callback=None,
                        table_style_override=None, enable_table_style=False,
-                       image_style_override=None, enable_image_style=False):
+                       image_style_override=None, enable_image_style=False,
+                       use_list_style=False, list_style=None):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -920,6 +948,8 @@ class DocumentConverter:
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param use_list_style: 是否使用样式处理列表段落（True=使用指定样式，False=使用项目符号）
+        :param list_style: 列表段落使用的样式名（当use_list_style=True时生效）
         :return: (success, actual_file, message)
         """
         # 使用局部样式映射副本，避免修改全局变量
@@ -933,6 +963,11 @@ class DocumentConverter:
         # 设置列表符号
         if list_bullet is not None:
             self.list_bullet = list_bullet
+        
+        # 设置列表处理方式
+        self.use_list_style_mode = use_list_style
+        if list_style is not None:
+            self.list_style_name = list_style
         
         logger = self.setup_logger(source_file)
         
@@ -2075,7 +2110,8 @@ class DocumentConverter:
                      hint_style='Normal',
                      progress_callback=None, warning_callback=None,
                      table_style_override=None, enable_table_style=False,
-                     image_style_override=None, enable_image_style=False):
+                     image_style_override=None, enable_image_style=False,
+                     use_list_style=False, list_style=None):
         """
         完整转换流程：样式转换 -> 提示语插入 -> 语气转换 -> 插入应答句
         固定为7个步骤，跳过的步骤也会计入进度
@@ -2109,6 +2145,8 @@ class DocumentConverter:
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param use_list_style: 是否使用样式处理列表段落（True=使用指定样式，False=使用项目符号）
+        :param list_style: 列表段落使用的样式名（当use_list_style=True时生效）
         :return: (success, actual_output_file, message)
         """
         # 固定7个步骤，确保进度条能正确填满
@@ -2120,7 +2158,8 @@ class DocumentConverter:
         success, actual_file, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
                                            warning_callback,
                                            table_style_override, enable_table_style,
-                                           image_style_override, enable_image_style)
+                                           image_style_override, enable_image_style,
+                                           use_list_style, list_style)
         if not success:
             return False, output_file, f"样式转换失败: {msg}"
         

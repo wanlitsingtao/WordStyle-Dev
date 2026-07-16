@@ -10,7 +10,7 @@
 """
 import tkinter as tk
 from tkinter import (Tk, Frame, Label, LabelFrame, Button, Entry, Listbox, Scrollbar, 
-                     Checkbutton, IntVar, StringVar, Text, messagebox, 
+                     Checkbutton, Radiobutton, IntVar, StringVar, Text, messagebox, 
                      filedialog, ttk, VERTICAL, HORIZONTAL, END, LEFT, RIGHT, 
                      TOP, BOTTOM, X, Y, BOTH, W, E, N, S, CENTER)
 from datetime import datetime
@@ -340,7 +340,10 @@ class DocumentConverterGUI:
         # 应答句样式：优先使用用户保存的默认值，后续会根据模板样式自动修正
         saved_answer_style = self.default_config.get("answer_style", "应答句")
         self.answer_style = StringVar(value=saved_answer_style)
-        self.list_bullet = StringVar(value="● ")  # 列表段落符号
+        self.list_bullet = StringVar(value=self.default_config.get("list_bullet", "● "))  # 列表段落符号
+        self.use_list_style = IntVar(value=self.default_config.get("use_list_style", 0))  # 列表段落是否使用映射样式（0=项目符号，1=使用样式）
+        saved_list_style = self.default_config.get("list_style", "")
+        self.list_style = StringVar(value=saved_list_style)  # 列表段落使用的样式名
 
         # 应答句插入模式（显示标签 -> 模式值映射）
         self.answer_mode_options = {
@@ -554,15 +557,48 @@ class DocumentConverterGUI:
         self.template_listbox.pack(fill=BOTH, expand=True)
         template_scroll.config(command=self.template_listbox.yview)
         
-        # 列表段落符号配置
-        bullet_frame = Frame(styles_frame)
-        bullet_frame.pack(fill=X, pady=(5, 0))
+        # 列表段落符号配置 — 所有控件在同一行
+        bullet_row = Frame(styles_frame)
+        bullet_row.pack(fill=X, pady=(5, 0))
         
-        Label(bullet_frame, text="列表段落符号:", width=12, anchor=W,
+        Label(bullet_row, text="列表段落:", width=10, anchor=W,
               font=("微软雅黑", 9)).pack(side=LEFT)
-        Entry(bullet_frame, textvariable=self.list_bullet, width=15,
-              font=("微软雅黑", 9)).pack(side=LEFT, padx=5)
-        Label(bullet_frame, text="（默认: ● ）", font=("微软雅黑", 8), fg="gray").pack(side=LEFT)
+        
+        # 方式A：项目符号
+        self.list_style_radio_a = Radiobutton(
+            bullet_row, text="项目符号", variable=self.use_list_style,
+            value=0, font=("微软雅黑", 9),
+            command=self._on_list_style_changed
+        )
+        self.list_style_radio_a.pack(side=LEFT, padx=(0, 5))
+        
+        # 项目符号输入框（方式A时启用）
+        self.bullet_entry = Entry(bullet_row, textvariable=self.list_bullet, width=8,
+              font=("微软雅黑", 9))
+        self.bullet_entry.pack(side=LEFT, padx=(0, 10))
+        
+        # 方式B：使用样式
+        self.list_style_radio_b = Radiobutton(
+            bullet_row, text="使用样式", variable=self.use_list_style,
+            value=1, font=("微软雅黑", 9),
+            command=self._on_list_style_changed
+        )
+        self.list_style_radio_b.pack(side=LEFT, padx=(0, 5))
+        
+        # 样式下拉列表（方式B时启用）
+        self.list_style_combo = ttk.Combobox(bullet_row, textvariable=self.list_style,
+                                               width=16, state="readonly", font=("微软雅黑", 9))
+        self.list_style_combo.pack(side=LEFT, padx=(0, 10))
+        self.list_style_combo['values'] = []  # 等待模板加载后填充
+        
+        # 设置为默认按钮
+        self.set_list_default_btn = Button(bullet_row, text="设为默认", width=8,
+                                            font=("微软雅黑", 9),
+                                            command=self.save_default_list_settings)
+        self.set_list_default_btn.pack(side=LEFT, padx=(0, 5))
+        
+        # 初始化可见状态
+        self._update_list_style_ui()
         
         # ========== 转换选项区域 ==========
         options_frame = LabelFrame(scrollable_main, text="转换选项", font=("微软雅黑", 10),
@@ -1182,6 +1218,21 @@ class DocumentConverterGUI:
             self.hint_image_select_btn.config(state='normal')
         # 设为默认按钮始终可用（保存全部提示语配置）
     
+    def _on_list_style_changed(self):
+        """列表处理方式切换时的回调"""
+        self._update_list_style_ui()
+    
+    def _update_list_style_ui(self):
+        """根据列表处理方式切换UI状态"""
+        if self.use_list_style.get() == 0:
+            # 方式A：项目符号 — 启用输入框，禁用下拉列表
+            self.bullet_entry.config(state='normal')
+            self.list_style_combo.config(state='disabled')
+        else:
+            # 方式B：使用样式 — 禁用输入框，启用下拉列表
+            self.bullet_entry.config(state='disabled')
+            self.list_style_combo.config(state='readonly')
+    
     def select_hint_image(self):
         """选择提示语图片文件"""
         file_path = filedialog.askopenfilename(
@@ -1205,6 +1256,22 @@ class DocumentConverterGUI:
             hint_enabled = "启用" if self.do_hint_insertion.get() else "未启用"
             hint_type_str = "文本" if self.hint_type.get() == "text" else "图片"
             messagebox.showinfo("提示", f"已将当前提示语配置设为默认！\n\n状态: {hint_enabled}\n类型: {hint_type_str}")
+        else:
+            messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
+
+    def save_default_list_settings(self):
+        """将当前列表段落配置保存为默认"""
+        use_style = self.use_list_style.get()
+        list_style_val = self.list_style.get()
+        list_bullet_val = self.list_bullet.get()
+        self.default_config["use_list_style"] = use_style
+        self.default_config["list_style"] = list_style_val
+        self.default_config["list_bullet"] = list_bullet_val
+        if self._save_default_config(self.default_config):
+            mode_str = "使用样式" if use_style else "项目符号"
+            style_info = f"样式: {list_style_val}" if use_style else ""
+            self.log(f"✓ 已将列表段落设置设为默认：{mode_str} {style_info}")
+            messagebox.showinfo("成功", f"已将列表段落设置设为默认！\n\n处理方式: {mode_str}\n{'样式: ' + list_style_val if use_style else '符号: ' + list_bullet_val}\n\n下次启动将自动使用。")
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
 
@@ -1301,6 +1368,7 @@ class DocumentConverterGUI:
         template_style_list = sorted(self.template_styles)
         self.answer_style_combo['values'] = template_style_list
         self.hint_style_combo['values'] = template_style_list
+        self.list_style_combo['values'] = template_style_list
         
         # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
         current_answer_style = self.answer_style.get()
@@ -1311,6 +1379,11 @@ class DocumentConverterGUI:
         current_hint_style = self.hint_style.get()
         if current_hint_style not in template_style_list and template_style_list:
             self.hint_style.set(template_style_list[0])
+        
+        # 如果当前列表样式不在模板样式中，设置为第一个样式或保持原值
+        current_list_style = self.list_style.get()
+        if current_list_style not in template_style_list and template_style_list:
+            self.list_style.set(template_style_list[0])
         
         self.log(f"✓ 模板文档样式分析完成，共 {len(self.template_styles)} 种样式")
         self.root.after(500, lambda: self._stop_loading_progress())
@@ -1328,6 +1401,7 @@ class DocumentConverterGUI:
         template_style_list = sorted(styles)
         self.answer_style_combo['values'] = template_style_list
         self.hint_style_combo['values'] = template_style_list
+        self.list_style_combo['values'] = template_style_list
         self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
         
         # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
@@ -1340,6 +1414,11 @@ class DocumentConverterGUI:
         current_hint_style = self.hint_style.get()
         if current_hint_style not in template_style_list and template_style_list:
             self.hint_style.set(template_style_list[0])
+        
+        # 如果当前列表样式不在模板样式中，设置为第一个样式或保持原值
+        current_list_style = self.list_style.get()
+        if current_list_style not in template_style_list and template_style_list:
+            self.list_style.set(template_style_list[0])
     
     def analyze_source_styles(self, files):
         """分析源文档样式"""
@@ -1378,6 +1457,7 @@ class DocumentConverterGUI:
             template_style_list = sorted(self.template_styles)
             self.answer_style_combo['values'] = template_style_list
             self.hint_style_combo['values'] = template_style_list
+            self.list_style_combo['values'] = template_style_list
             self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
             
             # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
@@ -1390,6 +1470,11 @@ class DocumentConverterGUI:
             current_hint_style = self.hint_style.get()
             if current_hint_style not in template_style_list and template_style_list:
                 self.hint_style.set(template_style_list[0])
+            
+            # 如果当前列表样式不在模板样式中，设置为第一个样式或保持原值
+            current_list_style = self.list_style.get()
+            if current_list_style not in template_style_list and template_style_list:
+                self.list_style.set(template_style_list[0])
             
             self.log(f"模板文档样式分析完成，共 {len(self.template_styles)} 种样式")
         except Exception as e:
@@ -1686,7 +1771,9 @@ class DocumentConverterGUI:
                     table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
                     enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
                     image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                    enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
+                    enable_image_style=file_tbl_img_config.get('enable_image_style', 0),
+                    use_list_style=bool(self.use_list_style.get()),
+                    list_style=self.list_style.get()
                 )
                 
                 if success:
@@ -1778,7 +1865,9 @@ class DocumentConverterGUI:
                         table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
                         enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
                         image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                        enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', 0),
+                        use_list_style=bool(self.use_list_style.get()),
+                        list_style=self.list_style.get()
                     )
                     
                     if success:
