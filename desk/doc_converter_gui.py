@@ -31,13 +31,14 @@ class StyleMappingDialog:
     
     def __init__(self, parent, source_styles, template_styles, current_mapping=None, 
                  saved_default_mapping=None, save_default_callback=None,
-                 current_tbl_img_config=None):
+                 current_tbl_img_config=None, current_remove_chapter_label=0):
         self.parent = parent
         self.source_styles = sorted(source_styles)
         self.template_styles = sorted(template_styles)
         self.current_mapping = current_mapping or {}
         self.saved_default_mapping = saved_default_mapping or {}
         self.current_tbl_img_config = current_tbl_img_config or {}
+        self.current_remove_chapter_label = current_remove_chapter_label
         self.save_default_callback = save_default_callback  # 保存默认映射的回调函数
         self.result = None
         
@@ -214,18 +215,33 @@ class StyleMappingDialog:
         self.toggle_table_style_in_dialog()
         self.toggle_image_style_in_dialog()
         
+        # 在表格/图片样式区域底部添加分隔线和清除章节标题编号复选框
+        sep_row = Frame(tbl_img_frame)
+        sep_row.pack(fill=X, pady=(5, 2))
+        Frame(sep_row, height=1, bg="#CCCCCC").pack(fill=X)
+        
+        chapter_row = Frame(tbl_img_frame)
+        chapter_row.pack(fill=X, pady=(2, 0))
+        
+        self.remove_chapter_label_var = IntVar(value=self.current_remove_chapter_label)
+        Checkbutton(chapter_row, text='清除标题中的"第X章/第X节"等字样',
+                    variable=self.remove_chapter_label_var,
+                    font=("微软雅黑", 9)).pack(side=LEFT, padx=(0, 5))
+        Label(chapter_row, text='（勾选后自动清除"第一章、第一节……"，不勾选则保留）',
+              font=("微软雅黑", 8), fg="gray").pack(side=LEFT)
+        
         # 按钮区域
         btn_frame = Frame(self.dialog)
         btn_frame.pack(fill=X, padx=10, pady=10)
         
         Button(btn_frame, text="确定", command=self.on_ok, width=8,
-               font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+               font=("微软雅黑", 10), padx=5, pady=3).pack(side=RIGHT, padx=5)
         Button(btn_frame, text="取消", command=self.on_cancel, width=8,
-               font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+               font=("微软雅黑", 10), padx=5, pady=3).pack(side=RIGHT, padx=5)
         Button(btn_frame, text="设为默认", command=self.on_save_default, width=8,
-               font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+               font=("微软雅黑", 10), padx=5, pady=3).pack(side=RIGHT, padx=5)
         Button(btn_frame, text="恢复默认", command=self.reset_to_default, width=8,
-               font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+               font=("微软雅黑", 10), padx=5, pady=3).pack(side=RIGHT, padx=5)
     
     def reset_to_default(self):
         """恢复到保存的默认映射（如有），否则恢复到通用映射"""
@@ -241,6 +257,10 @@ class StyleMappingDialog:
             else:
                 # 无保存的默认，回退到通用映射
                 var.set(source_style if source_style in self.template_styles else "Normal")
+        # 同时恢复清除章节标题编号复选框到默认值
+        if hasattr(self, 'remove_chapter_label_var'):
+            default_val = self.current_remove_chapter_label if hasattr(self, 'current_remove_chapter_label') else 0
+            self.remove_chapter_label_var.set(default_val)
     
     def on_save_default(self):
         """将当前映射配置保存为默认（包含样式映射和表格/图片样式定义）"""
@@ -256,9 +276,12 @@ class StyleMappingDialog:
             'image_style': self.image_style_var.get()
         }
         
-        # 通过回调函数保存到主界面（同时传递映射和表格/图片配置）
+        # 收集清除章节标题编号配置
+        remove_chapter_label = self.remove_chapter_label_var.get()
+        
+        # 通过回调函数保存到主界面（同时传递映射、表格/图片配置和清除章节编号配置）
         if self.save_default_callback:
-            self.save_default_callback(current_map, tbl_img_config)
+            self.save_default_callback(current_map, tbl_img_config, remove_chapter_label)
             # 更新内部引用
             self.saved_default_mapping = current_map
     
@@ -274,12 +297,15 @@ class StyleMappingDialog:
             'enable_image_style': self.enable_image_style_var.get(),
             'image_style': self.image_style_var.get()
         }
+        # 收集清除章节标题编号配置
+        self.remove_chapter_label = self.remove_chapter_label_var.get()
         self.dialog.destroy()
     
     def on_cancel(self):
         """取消按钮点击"""
         self.result = None
         self.tbl_img_config = None
+        self.remove_chapter_label = 0
         self.dialog.destroy()
     
     def toggle_table_style_in_dialog(self):
@@ -297,9 +323,9 @@ class StyleMappingDialog:
             self.image_style_combo.config(state='disabled')
     
     def show(self):
-        """显示对话框并返回结果（映射+表格/图片样式配置）"""
+        """显示对话框并返回结果（映射+表格/图片样式配置+清除章节编号配置）"""
         self.parent.wait_window(self.dialog)
-        return self.result, self.tbl_img_config
+        return self.result, self.tbl_img_config, getattr(self, 'remove_chapter_label', 0)
 
 
 class DocumentConverterGUI:
@@ -359,6 +385,13 @@ class DocumentConverterGUI:
             saved_answer_mode = self.answer_mode_labels[0]
         self.answer_mode = StringVar(value=saved_answer_mode)
         
+        # 应答原文样式（copy_chapter 模式使用，原文副本的样式）
+        saved_answer_source_style = self.default_config.get("answer_source_style", "")
+        self.answer_source_style = StringVar(value=saved_answer_source_style)
+        # 应答原文格式（copy_chapter 模式使用，应答原文副本的样式）
+        saved_answer_copy_style = self.default_config.get("answer_copy_style", "")
+        self.answer_copy_style = StringVar(value=saved_answer_copy_style)
+        
         # 章节提示语配置（从 default_config.json 加载完整配置）
         saved_do_hint = self.default_config.get("do_hint_insertion", 0)
         saved_hint_type = self.default_config.get("hint_type", "text")
@@ -376,6 +409,8 @@ class DocumentConverterGUI:
         self.template_styles = set()
         self.custom_style_map = {}  # 用户自定义的样式映射（全局）
         self.custom_tbl_img_config = {}  # 用户自定义的表格/图片样式配置（全局，当file_style_maps中没有时使用）
+        self.custom_remove_chapter_label = 0  # 用户自定义的清除章节编号配置（全局）
+        self.remove_chapter_label = self.default_config.get('remove_chapter_label', 0)  # 当前清除章节编号配置
         self.default_style_map = self.default_config.get("style_map", {})  # 用户保存的默认样式映射
         self.file_style_maps = {}  # 每个文件的独立映射配置 {file_path: {style_map}}
         self.selected_source_file = None  # 当前选中的源文件
@@ -586,33 +621,37 @@ class DocumentConverterGUI:
         answer_frame = Frame(options_frame)
         answer_frame.pack(fill=X, pady=5)
 
-        # 应答句文本、样式、插入模式和"设为默认"按钮全部在同一行
-        text_row = Frame(answer_frame)
-        text_row.pack(fill=X, pady=2)
+        # 第一行：应答句文本 + 应答句样式
+        text_row1 = Frame(answer_frame)
+        text_row1.pack(fill=X, pady=2)
 
-        Label(text_row, text="应答句文本:", width=10, anchor=W,
+        Label(text_row1, text="应答句文本:", width=10, anchor=W,
               font=("微软雅黑", 9)).pack(side=LEFT)
-        self.answer_text_entry = Entry(text_row, textvariable=self.answer_text,
+        self.answer_text_entry = Entry(text_row1, textvariable=self.answer_text,
                                        font=("微软雅黑", 9))
         self.answer_text_entry.pack(side=LEFT, fill=X, expand=True, padx=5)
 
-        Label(text_row, text="应答句样式:", width=10, anchor=W,
+        Label(text_row1, text="应答句样式:", width=10, anchor=W,
               font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
 
         # 使用下拉框选择应答样式，从模板样式中选择
-        self.answer_style_combo = ttk.Combobox(text_row, textvariable=self.answer_style,
+        self.answer_style_combo = ttk.Combobox(text_row1, textvariable=self.answer_style,
                                                width=14, state="readonly", font=("微软雅黑", 9))
         self.answer_style_combo.pack(side=LEFT, padx=5)
 
         # 初始化下拉框为空列表，等待模板加载后填充
         self.answer_style_combo['values'] = []
 
-        # 应答句插入模式（与样式同一行）
-        Label(text_row, text="插入模式:", width=8, anchor=W,
-              font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
-        self.answer_mode_combo = ttk.Combobox(text_row, textvariable=self.answer_mode,
-                                               width=20, state="readonly", font=("微软雅黑", 9))
+        # 第二行：插入模式 + 原文格式 + 应答原文格式 + 设为默认
+        text_row2 = Frame(answer_frame)
+        text_row2.pack(fill=X, pady=2)
+
+        Label(text_row2, text="插入模式:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT)
+        self.answer_mode_combo = ttk.Combobox(text_row2, textvariable=self.answer_mode,
+                                               width=18, state="readonly", font=("微软雅黑", 9))
         self.answer_mode_combo['values'] = self.answer_mode_labels
+        self.answer_mode_combo.bind('<<ComboboxSelected>>', lambda e: self.toggle_answer_controls())
         # 根据已加载的默认值设置选中项
         if self.answer_mode.get() in self.answer_mode_labels:
             self.answer_mode_combo.current(self.answer_mode_labels.index(self.answer_mode.get()))
@@ -620,7 +659,23 @@ class DocumentConverterGUI:
             self.answer_mode_combo.current(0)
         self.answer_mode_combo.pack(side=LEFT, padx=5)
 
-        self.set_answer_default_btn = Button(text_row, text="设为默认", width=8,
+        # 原文格式下拉（copy_chapter 模式可用）
+        Label(text_row2, text="原文格式:", width=8, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
+        self.answer_source_combo = ttk.Combobox(text_row2, textvariable=self.answer_source_style,
+                                                 width=20, state="readonly", font=("微软雅黑", 9))
+        self.answer_source_combo['values'] = []
+        self.answer_source_combo.pack(side=LEFT, padx=5)
+
+        # 应答原文格式下拉（copy_chapter 模式可用）
+        Label(text_row2, text="应答原文格式:", width=10, anchor=W,
+              font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
+        self.answer_copy_combo = ttk.Combobox(text_row2, textvariable=self.answer_copy_style,
+                                               width=20, state="readonly", font=("微软雅黑", 9))
+        self.answer_copy_combo['values'] = []
+        self.answer_copy_combo.pack(side=LEFT, padx=5)
+
+        self.set_answer_default_btn = Button(text_row2, text="设为默认", width=8,
                                               font=("微软雅黑", 9),
                                               command=self.save_default_answer_settings)
         self.set_answer_default_btn.pack(side=LEFT, padx=(10, 5))
@@ -1062,6 +1117,8 @@ class DocumentConverterGUI:
         # 重置自定义映射
         self.custom_style_map = {}
         self.custom_tbl_img_config = {}
+        self.custom_remove_chapter_label = 0
+        self.remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
     
     def clear_template_data(self):
         """清空模板相关数据"""
@@ -1102,17 +1159,21 @@ class DocumentConverterGUI:
         current_text = self.answer_text.get()
         current_style = self.answer_style.get()
         current_mode = self.answer_mode.get()
+        current_answer_source = self.answer_source_style.get()
+        current_answer_copy = self.answer_copy_style.get()
         self.default_config["answer_text"] = current_text
         self.default_config["answer_style"] = current_style
         self.default_config["answer_mode"] = current_mode
+        self.default_config["answer_source_style"] = current_answer_source
+        self.default_config["answer_copy_style"] = current_answer_copy
         if self._save_default_config(self.default_config):
             self.log(f"✓ 已将应答句设置设为默认：样式={current_style}, 模式={current_mode}")
-            messagebox.showinfo("成功", f"已将以下设置设为默认：\n\n应答句文本: {current_text}\n应答句样式: {current_style}\n插入模式: {current_mode}\n\n下次启动将自动使用。")
+            messagebox.showinfo("成功", f"已将以下设置设为默认：\n\n应答句文本: {current_text}\n应答句样式: {current_style}\n插入模式: {current_mode}\n原文格式: {current_answer_source}\n应答原文格式: {current_answer_copy}\n\n下次启动将自动使用。")
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
     
-    def save_default_style_map(self, style_map, tbl_img_config=None):
-        """将当前样式映射保存为默认（包含样式映射和表格/图片样式定义）"""
+    def save_default_style_map(self, style_map, tbl_img_config=None, remove_chapter_label=None):
+        """将当前样式映射保存为默认（包含样式映射、表格/图片样式定义和清除章节编号配置）"""
         self.default_config["style_map"] = style_map
         # 同时保存表格/图片样式定义
         if tbl_img_config:
@@ -1120,6 +1181,9 @@ class DocumentConverterGUI:
             self.default_config["table_style"] = tbl_img_config.get('table_style', 'Body Text')
             self.default_config["enable_image_style"] = tbl_img_config.get('enable_image_style', 0)
             self.default_config["image_style"] = tbl_img_config.get('image_style', 'Body Text')
+        # 保存清除章节标题编号配置
+        if remove_chapter_label is not None:
+            self.default_config["remove_chapter_label"] = remove_chapter_label
         if self._save_default_config(self.default_config):
             configured_count = sum(1 for v in style_map.values() if v)
             tbl_info = ""
@@ -1128,8 +1192,11 @@ class DocumentConverterGUI:
                 img_on = tbl_img_config.get('enable_image_style', 0)
                 tbl_info = f"\n表格样式覆盖: {'启用 (' + tbl_img_config.get('table_style', '') + ')' if tbl_on else '未启用'}"
                 tbl_info += f"\n图片样式覆盖: {'启用 (' + tbl_img_config.get('image_style', '') + ')' if img_on else '未启用'}"
+            ch_label_info = ""
+            if remove_chapter_label is not None:
+                ch_label_info = f"\n清除章节标题编号: {'是' if remove_chapter_label else '否'}"
             self.log(f"✓ 已将样式映射设为默认，共 {configured_count} 个映射关系")
-            messagebox.showinfo("成功", f"已将样式映射设为默认！\n\n共 {configured_count} 个样式映射关系{tbl_info}\n下次打开样式映射对话框时将自动恢复此配置。")
+            messagebox.showinfo("成功", f"已将样式映射设为默认！\n\n共 {configured_count} 个样式映射关系{tbl_info}{ch_label_info}\n下次打开样式映射对话框时将自动恢复此配置。")
         else:
             messagebox.showerror("错误", "保存默认配置失败，请检查文件权限。")
     
@@ -1141,11 +1208,18 @@ class DocumentConverterGUI:
             self.answer_style_combo.config(state='readonly')
             self.answer_mode_combo.config(state='readonly')
             self.set_answer_default_btn.config(state='normal')
+            # 根据插入模式决定原文格式/应答原文格式是否可用
+            is_copy_chapter = (self.answer_mode.get() == "原文+应答句+应答原文")
+            state_src = 'readonly' if is_copy_chapter else 'disabled'
+            self.answer_source_combo.config(state=state_src)
+            self.answer_copy_combo.config(state=state_src)
         else:
             # 未选中：灰化控件
             self.answer_text_entry.config(state='disabled')
             self.answer_style_combo.config(state='disabled')
             self.answer_mode_combo.config(state='disabled')
+            self.answer_source_combo.config(state='disabled')
+            self.answer_copy_combo.config(state='disabled')
             self.set_answer_default_btn.config(state='disabled')
     
     def toggle_hint_controls(self):
@@ -1302,12 +1376,22 @@ class DocumentConverterGUI:
         # 更新应答句样式的下拉框选项
         template_style_list = sorted(self.template_styles)
         self.answer_style_combo['values'] = template_style_list
+        self.answer_source_combo['values'] = template_style_list
+        self.answer_copy_combo['values'] = template_style_list
         self.hint_style_combo['values'] = template_style_list
         
         # 如果当前应答样式不在模板样式中，设置为第一个样式或保持原值
         current_answer_style = self.answer_style.get()
         if current_answer_style not in template_style_list and template_style_list:
             self.answer_style.set(template_style_list[0])
+        
+        # 如果当前原文/应答原文样式不在模板样式中，设置为第一个样式或保持原值
+        current_answer_source = self.answer_source_style.get()
+        if current_answer_source not in template_style_list and template_style_list:
+            self.answer_source_style.set(template_style_list[0])
+        current_answer_copy = self.answer_copy_style.get()
+        if current_answer_copy not in template_style_list and template_style_list:
+            self.answer_copy_style.set(template_style_list[0])
         
         # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
         current_hint_style = self.hint_style.get()
@@ -1329,6 +1413,8 @@ class DocumentConverterGUI:
         # 更新应答句样式的下拉框选项
         template_style_list = sorted(styles)
         self.answer_style_combo['values'] = template_style_list
+        self.answer_source_combo['values'] = template_style_list
+        self.answer_copy_combo['values'] = template_style_list
         self.hint_style_combo['values'] = template_style_list
         self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
         
@@ -1337,6 +1423,13 @@ class DocumentConverterGUI:
         if current_answer_style not in template_style_list and template_style_list:
             self.answer_style.set(template_style_list[0])
             self.log(f"应答样式已自动设置为: {template_style_list[0]}")
+        # 如果当前原文/应答原文样式不在模板样式中，设置为第一个样式或保持原值
+        current_answer_source = self.answer_source_style.get()
+        if current_answer_source not in template_style_list and template_style_list:
+            self.answer_source_style.set(template_style_list[0])
+        current_answer_copy = self.answer_copy_style.get()
+        if current_answer_copy not in template_style_list and template_style_list:
+            self.answer_copy_style.set(template_style_list[0])
         
         # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
         current_hint_style = self.hint_style.get()
@@ -1379,6 +1472,8 @@ class DocumentConverterGUI:
             # 更新应答句样式的下拉框选项
             template_style_list = sorted(self.template_styles)
             self.answer_style_combo['values'] = template_style_list
+            self.answer_source_combo['values'] = template_style_list
+            self.answer_copy_combo['values'] = template_style_list
             self.hint_style_combo['values'] = template_style_list
             self.log(f"已更新应答样式下拉框，共 {len(template_style_list)} 个选项")
             
@@ -1387,6 +1482,13 @@ class DocumentConverterGUI:
             if current_answer_style not in template_style_list and template_style_list:
                 self.answer_style.set(template_style_list[0])
                 self.log(f"应答样式已自动设置为: {template_style_list[0]}")
+            # 如果当前原文/应答原文样式不在模板样式中，设置为第一个样式或保持原值
+            current_answer_source = self.answer_source_style.get()
+            if current_answer_source not in template_style_list and template_style_list:
+                self.answer_source_style.set(template_style_list[0])
+            current_answer_copy = self.answer_copy_style.get()
+            if current_answer_copy not in template_style_list and template_style_list:
+                self.answer_copy_style.set(template_style_list[0])
             
             # 如果当前提示语样式不在模板样式中，设置为第一个样式或保持原值
             current_hint_style = self.hint_style.get()
@@ -1443,26 +1545,36 @@ class DocumentConverterGUI:
                 'image_style': self.default_config.get('image_style', 'Body Text')
             }
         
-        # 打开对话框（传入保存的默认映射、保存回调、表格/图片样式配置）
+        # 打开对话框（传入保存的默认映射、保存回调、表格/图片样式配置、清除章节编号配置）
+        current_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
         dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping,
                                      saved_default_mapping=self.default_style_map,
                                      save_default_callback=self.save_default_style_map,
-                                     current_tbl_img_config=current_tbl_img_config)
-        result, tbl_img_config = dialog.show()
+                                     current_tbl_img_config=current_tbl_img_config,
+                                     current_remove_chapter_label=current_remove_chapter_label)
+        result, tbl_img_config, remove_chapter_label = dialog.show()
         
         if result is not None:
+            # 保存清除章节标题编号配置
+            self.remove_chapter_label = remove_chapter_label
+            
             # 保存映射配置到对应文件
             if target_file in self.file_style_maps:
                 self.file_style_maps[target_file]['mapping'] = result
                 self.file_style_maps[target_file]['tbl_img_config'] = tbl_img_config
+                self.file_style_maps[target_file]['remove_chapter_label'] = remove_chapter_label
             else:
                 self.custom_style_map = result
                 self.custom_tbl_img_config = tbl_img_config or {}
+                self.custom_remove_chapter_label = remove_chapter_label
             
             configured_count = sum(1 for v in result.values() if v)
             filename = os.path.basename(target_file) if target_file else "当前文件"
             self.log(f"已为 {filename} 配置样式映射，共 {configured_count} 个映射关系")
-            messagebox.showinfo("成功", f"样式映射配置完成！\n\n文件: {filename}\n已配置 {configured_count} 个样式映射关系")
+            # 打印清除章节编号的配置状态
+            ch_label_info = "已勾选" if remove_chapter_label else "未勾选"
+            self.log(f"  清除章节标题编号: {ch_label_info}")
+            messagebox.showinfo("成功", f"样式映射配置完成！\n\n文件: {filename}\n共 {configured_count} 个样式映射关系\n清除章节标题编号: {ch_label_info}")
     
     def log(self, message, detailed=False):
         """添加日志"""
@@ -1638,20 +1750,29 @@ class DocumentConverterGUI:
                 # 获取该文件的映射配置
                 file_mapping = None
                 file_tbl_img_config = {}
+                file_remove_chapter_label = None
                 if source in self.file_style_maps and self.file_style_maps[source].get('mapping'):
                     file_mapping = self.file_style_maps[source]['mapping']
                     file_tbl_img_config = self.file_style_maps[source].get('tbl_img_config', {})
+                    file_remove_chapter_label = self.file_style_maps[source].get('remove_chapter_label', None)
                     self.log(f"使用该文件的自定义映射: {len(file_mapping)} 个样式")
                 elif self.custom_style_map:
                     file_mapping = self.custom_style_map
                     file_tbl_img_config = self.custom_tbl_img_config or {}
+                    file_remove_chapter_label = getattr(self, 'custom_remove_chapter_label', None)
                     self.log(f"使用全局自定义映射: {len(file_mapping)} 个样式")
                 elif self.default_style_map:
                     # 兜底：使用 default_config.json 中的默认映射
                     file_mapping = self.default_style_map
+                    file_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
                     self.log(f"使用默认配置映射: {len(file_mapping)} 个样式")
                 else:
                     self.log("使用系统默认映射规则")
+                    file_remove_chapter_label = 0
+                
+                # 如果以上都没有设置清除章节编号配置，使用默认值
+                if file_remove_chapter_label is None:
+                    file_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
                 
                 # 进度回调 - 仅输出日志，不更新进度条
                 def progress_callback(step, message):
@@ -1675,6 +1796,7 @@ class DocumentConverterGUI:
                 img_enable_val = file_tbl_img_config.get('enable_image_style', 0)
                 self.log(f"  表格样式覆盖: {'启用(' + str(tbl_style_val) + ')' if tbl_enable_val else '未启用'} (enable={tbl_enable_val}, style={tbl_style_val})")
                 self.log(f"  图片样式覆盖: {'启用(' + str(img_style_val) + ')' if img_enable_val else '未启用'} (enable={img_enable_val}, style={img_style_val})")
+                self.log(f"  清除章节标题编号: {'是' if file_remove_chapter_label else '否'}")
                 
                 # 执行转换
                 success, actual_file, msg = self.converter.full_convert(
@@ -1685,6 +1807,8 @@ class DocumentConverterGUI:
                     do_mood=self.do_mood_conversion.get(),
                     answer_text=self.answer_text.get(),
                     answer_style=self.answer_style.get(),
+                    answer_source_style=self.answer_source_style.get(),
+                    answer_copy_style=self.answer_copy_style.get(),
                     list_bullet=self.list_bullet.get(),
                     do_answer_insertion=self.do_answer_insertion.get(),
                     answer_mode=self.answer_mode_options.get(self.answer_mode.get(), "before_heading"),
@@ -1698,7 +1822,8 @@ class DocumentConverterGUI:
                     table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
                     enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
                     image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                    enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
+                    enable_image_style=file_tbl_img_config.get('enable_image_style', 0),
+                    remove_chapter_label=file_remove_chapter_label
                 )
                 
                 if success:
@@ -1739,16 +1864,23 @@ class DocumentConverterGUI:
                     # 获取该文件的映射配置
                     file_mapping = None
                     file_tbl_img_config = {}
+                    file_remove_chapter_label = None
                     if source in self.file_style_maps and self.file_style_maps[source].get('mapping'):
                         file_mapping = self.file_style_maps[source]['mapping']
                         file_tbl_img_config = self.file_style_maps[source].get('tbl_img_config', {})
+                        file_remove_chapter_label = self.file_style_maps[source].get('remove_chapter_label', None)
                         self.root.after(0, lambda: self.log("    使用该文件的自定义映射"))
                     elif self.default_style_map:
                         # 兜底：使用 default_config.json 中的默认映射
                         file_mapping = self.default_style_map
+                        file_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
                         self.root.after(0, lambda: self.log("    使用默认配置映射"))
                     else:
+                        file_remove_chapter_label = 0
                         self.root.after(0, lambda: self.log("    使用系统默认映射"))
+                    
+                    if file_remove_chapter_label is None:
+                        file_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
                     
                     # 进度回调 - 仅输出日志，不更新进度条
                     def make_progress_callback(file_idx):
@@ -1777,6 +1909,8 @@ class DocumentConverterGUI:
                         do_mood=self.do_mood_conversion.get(),
                         answer_text=self.answer_text.get(),
                         answer_style=self.answer_style.get(),
+                        answer_source_style=self.answer_source_style.get(),
+                        answer_copy_style=self.answer_copy_style.get(),
                         list_bullet=self.list_bullet.get(),
                         do_answer_insertion=self.do_answer_insertion.get(),
                         answer_mode=self.answer_mode_options.get(self.answer_mode.get(), "before_heading"),
@@ -1790,7 +1924,8 @@ class DocumentConverterGUI:
                         table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
                         enable_table_style=file_tbl_img_config.get('enable_table_style', 0),
                         image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                        enable_image_style=file_tbl_img_config.get('enable_image_style', 0)
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', 0),
+                        remove_chapter_label=file_remove_chapter_label
                     )
                     
                     if success:

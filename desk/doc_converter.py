@@ -306,14 +306,22 @@ class DocumentConverter:
             pPr.remove(numPr)
     
     def remove_manual_numbering(self, text):
-        """移除手动编号（智能判断中文数字是否为编号）"""
+        """移除手动编号（智能判断中文数字是否为编号）
+        
+        仅匹配独立的编号格式，不会误伤文本中的数字（如"17号线"中的"17"）。
+        """
         fragment_patterns = [
-            r'\d+(?:\.\d+)*\.?',
-            r'[一二三四五六七八九十]+[、.．)）]',  # 中文数字后带分隔符才视为编号（支持半角/全角右括号）
-            r'（[一二三四五六七八九十]+）',  # 括号内的中文数字编号（如"（二）"）
+            # 多级阿拉伯数字编号："1.1"、"1.1.1"、"14.2.1"等，点分隔，后面可选分隔符或直接跟文字
+            r'\d+\.\d+(?:\.\d+)*(?:[\.、，,）\)\s]|(?=\D|$))',
+            # 单级阿拉伯数字编号："1."、"1、"、"1）"等，必须有显式分隔符，避免误伤"17号线"
+            r'\d+[\.、，,）\)\s]',
+            # 中文数字后带分隔符才视为编号
+            r'[一二三四五六七八九十]+[、.．)）]',
+            # 括号内的中/阿拉伯数字编号（如"（二）"、"（1）"）
+            r'（[一二三四五六七八九十0-9]+）',
             r'\([0-9]+\)',
             r'[①-⑩]',
-            r'[A-Za-z]\.',
+            r'[A-Za-z]\.[\s、，]',
         ]
         pattern = r'^\s*(' + '|'.join(fragment_patterns) + r')[\s、，]*'
         compiled = re.compile(pattern)
@@ -324,6 +332,19 @@ class DocumentConverter:
                 cleaned = cleaned[m.end():]
             else:
                 break
+        return cleaned
+    
+    def remove_chapter_section_marking(self, text):
+        """移除"第X章/第X节/第X篇"等章节标记
+        
+        匹配如：第一章、第一节、第一篇、第二章、第二节等。
+        仅对文本中实际存在的章节标记进行清理，不影响自动编号。
+        """
+        if not text:
+            return text
+        # 匹配 "第[一二三四五六七八九十]{" + "章/节/篇/部分}" 开头
+        chapter_pattern = r'^\s*第[一二三四五六七八九十]+[章节篇][\s、，]*'
+        cleaned = re.sub(chapter_pattern, '', text).strip()
         return cleaned
     
     def get_target_style(self, original_style_name, template_doc, source_file=""):
@@ -513,7 +534,8 @@ class DocumentConverter:
     
     def copy_paragraph_with_images(self, source_para, target_doc, target_style_name,
                                    page_width_emu, available_width_emu, para_idx, source_file="",
-                                   warning_callback=None, image_style_override=None, enable_image_style=False):
+                                   warning_callback=None, image_style_override=None, enable_image_style=False,
+                                   remove_chapter_label=False):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
@@ -667,10 +689,20 @@ class DocumentConverter:
         is_heading_by_style = src_style_name in HEADING_STYLES
         
         if is_heading_by_outline or is_heading_by_style:
-            if not is_heading_by_outline:
-                self.remove_auto_numbering(new_para)
             full_text = ''.join(run.text for run in source_para.runs)
-            cleaned_text = self.remove_manual_numbering(full_text)
+            if remove_chapter_label:
+                # 勾选"清除第X章/第X节"：
+                # 1. 移除自动编号（章节标记可能来自自动编号，如numId=17→"第二节"）
+                self.remove_auto_numbering(new_para)
+                # 2. 清理文本中的"第X章/第X节/第X篇"
+                cleaned_text = self.remove_chapter_section_marking(full_text)
+                # 3. 清理常规手动编号（"一、"、"3.1"等）
+                cleaned_text = self.remove_manual_numbering(cleaned_text)
+            else:
+                # 未勾选"清除第X章/第X节"：
+                # 保留章节标记，只清理常规手动编号（"一、"、"3.1"、"（1）"等）
+                # 注意：改进后的remove_manual_numbering不会误伤文本中的数字（如"17号线"）
+                cleaned_text = self.remove_manual_numbering(full_text)
             new_para.clear()
             new_para.add_run(cleaned_text)
             for run_idx, run in enumerate(source_para.runs):
@@ -907,7 +939,8 @@ class DocumentConverter:
     def convert_styles(self, source_file, template_file, output_file, custom_style_map=None, list_bullet=None,
                        warning_callback=None,
                        table_style_override=None, enable_table_style=False,
-                       image_style_override=None, enable_image_style=False):
+                       image_style_override=None, enable_image_style=False,
+                       remove_chapter_label=False):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -979,7 +1012,8 @@ class DocumentConverter:
                         para_idx, source_file,
                         warning_callback,
                         image_style_override=image_style_override,
-                        enable_image_style=enable_image_style
+                        enable_image_style=enable_image_style,
+                        remove_chapter_label=remove_chapter_label
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
@@ -1429,7 +1463,9 @@ class DocumentConverter:
     
     def insert_response_after_headings(self, input_file, output_file=None, 
                                        answer_text=None, answer_style=None,
-                                       answer_mode='before_heading'):
+                                       answer_mode='before_heading',
+                                       answer_source_style=None,
+                                       answer_copy_style=None):
         """
         插入应答句（支持5种模式）
         :param input_file: 输入文件
@@ -1442,6 +1478,7 @@ class DocumentConverter:
             - 'copy_chapter': 原文+应答句+应答原文
             - 'before_paragraph': 逐段前插入
             - 'after_paragraph': 逐段后插入
+        :param answer_source_style: 应答原文样式（仅 copy_chapter 模式使用）
         :return: (success, actual_output_file, message)
         """
         if output_file is None:
@@ -1450,6 +1487,10 @@ class DocumentConverter:
             answer_text = ANSWER_TEXT
         if answer_style is None:
             answer_style = ANSWER_STYLE
+        if answer_source_style is None:
+            answer_source_style = answer_style  # 默认与应答句样式相同
+        if answer_copy_style is None:
+            answer_copy_style = answer_source_style  # 默认与应答原文样式相同
         
         try:
             doc = Document(input_file)
@@ -1457,12 +1498,26 @@ class DocumentConverter:
             return False, output_file, f"加载文档失败: {e}"
         
         self.ensure_style_exists(doc, answer_style)
+        self.ensure_style_exists(doc, answer_source_style)
+        self.ensure_style_exists(doc, answer_copy_style)
         
         # 预创建应答段落模板
         temp_para = doc.add_paragraph(answer_text)
         temp_para.style = answer_style
         answer_template = deepcopy(temp_para._element)
         temp_para._element.getparent().remove(temp_para._element)
+        
+        # 预创建应答原文段落模板（copy_chapter 模式使用，用应答文本占位，后面会改内容）
+        temp_source = doc.add_paragraph(answer_text)
+        temp_source.style = answer_source_style
+        source_template = deepcopy(temp_source._element)
+        temp_source._element.getparent().remove(temp_source._element)
+        
+        # 预创建应答原文副本段落模板（copy_chapter 模式使用，用于应答原文副本，使用 answer_copy_style）
+        temp_copy = doc.add_paragraph(answer_text)
+        temp_copy.style = answer_copy_style
+        copy_template = deepcopy(temp_copy._element)
+        temp_copy._element.getparent().remove(temp_copy._element)
         
         body = doc.element.body
         children = list(body)
@@ -1479,7 +1534,7 @@ class DocumentConverter:
             )
         elif answer_mode == 'copy_chapter':
             insert_count, total_heading_count = self._insert_with_copy_chapter(
-                children, new_children, answer_template, doc
+                children, new_children, answer_template, source_template, copy_template, doc
             )
         elif answer_mode == 'before_paragraph':
             insert_count, total_heading_count = self._insert_before_paragraphs(
@@ -1613,12 +1668,15 @@ class DocumentConverter:
         
         return insert_count, total_heading_count
     
-    def _insert_with_copy_chapter(self, children, new_children, answer_template, doc):
+    def _insert_with_copy_chapter(self, children, new_children, answer_template, source_template, copy_template, doc):
         """
         原文+应答句+应答原文（模式3：copy_chapter）
-        最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 原文（语气转换后）
+        最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 应答原文（语气转换后）
         注意：此模式在 full_convert 中会调换流水线顺序（先插入应答句，后语气转换），
               因此原始正文在插入应答句时仍是未转换状态，加上 keepOriginal 标记后会被跳过。
+        :param answer_template: 应答句段落模板（使用 answer_style）
+        :param source_template: 应答原文段落模板（使用 answer_source_style）
+        :param copy_template: 应答原文副本段落模板（使用 answer_copy_style）
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
@@ -1680,13 +1738,23 @@ class DocumentConverter:
                         new_children.append(answer_elem)
                         insert_count += 1
                         
-                        # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                        # 复制应答原文副本（用 copy_template 样式，对应应答原文格式），跳过提示语
                         for elem in chapter_buffer:
                             if self._is_hint_paragraph(elem):
                                 continue
-                            copied_elem = deepcopy(elem)
-                            remove_keep_original_from_element(copied_elem)
-                            new_children.append(copied_elem)
+                            # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
+                            source_elem = deepcopy(copy_template)
+                            # 复制原段落的文本内容到 copy_template
+                            source_runs = source_elem.findall('.//' + qn('w:r'))
+                            orig_runs = elem.findall('.//' + qn('w:r'))
+                            # 清除模板中的 runs
+                            for r in source_runs:
+                                source_elem.remove(r)
+                            # 复制原段落的 runs
+                            for r in orig_runs:
+                                source_elem.append(deepcopy(r))
+                            remove_keep_original_from_element(source_elem)
+                            new_children.append(source_elem)
                 
                 chapter_buffer.clear()
                 new_children.append(child)
@@ -1701,19 +1769,30 @@ class DocumentConverter:
                 if self._is_hint_paragraph(child):
                     new_children.append(child)
                 else:
-                    # 给原始正文段落添加 keepOriginal 标记，使其在语气转换时保留未转换状态
+                    # 用 source_template 替换内容，应用原文格式（answer_source_style）
                     if child.tag == qn('w:p'):
+                        source_elem = deepcopy(source_template)
+                        # 复制原段落的文本内容到 source_template
+                        source_runs = source_elem.findall('.//' + qn('w:r'))
+                        orig_runs = child.findall('.//' + qn('w:r'))
+                        for r in source_runs:
+                            source_elem.remove(r)
+                        for r in orig_runs:
+                            source_elem.append(deepcopy(r))
+                        # 给原始正文段落添加 keepOriginal 标记，使其在语气转换时保留未转换状态
                         bookmark_start = OxmlElement('w:bookmarkStart')
                         bookmark_start.set(qn('w:id'), str(bookmark_id))
                         bookmark_start.set(qn('w:name'), '_keepOriginal_')
-                        child.insert(0, bookmark_start)
+                        source_elem.insert(0, bookmark_start)
                         bookmark_end = OxmlElement('w:bookmarkEnd')
                         bookmark_end.set(qn('w:id'), str(bookmark_id))
-                        child.append(bookmark_end)
+                        source_elem.append(bookmark_end)
                         bookmark_id += 1
-                    
-                    new_children.append(child)
-                    chapter_buffer.append(child)
+                        new_children.append(source_elem)
+                        chapter_buffer.append(source_elem)
+                    else:
+                        new_children.append(child)
+                        chapter_buffer.append(child)
             else:
                 # 不在任何章节内（文档开头无标题），直接输出
                 new_children.append(child)
@@ -1729,13 +1808,20 @@ class DocumentConverter:
                 new_children.append(answer_elem)
                 insert_count += 1
                 
-                # 复制第二份副本（不标记，将做语气转换），跳过提示语
+                # 复制第二份副本（应答原文，用 copy_template 样式），跳过提示语
                 for elem in chapter_buffer:
                     if self._is_hint_paragraph(elem):
                         continue
-                    copied_elem = deepcopy(elem)
-                    remove_keep_original_from_element(copied_elem)
-                    new_children.append(copied_elem)
+                    # 用 copy_template 替换内容，保持应答原文复制样式（answer_copy_style）
+                    source_elem = deepcopy(copy_template)
+                    source_runs = source_elem.findall('.//' + qn('w:r'))
+                    orig_runs = elem.findall('.//' + qn('w:r'))
+                    for r in source_runs:
+                        source_elem.remove(r)
+                    for r in orig_runs:
+                        source_elem.append(deepcopy(r))
+                    remove_keep_original_from_element(source_elem)
+                    new_children.append(source_elem)
         
         return insert_count, total_heading_count
     
@@ -2068,6 +2154,8 @@ class DocumentConverter:
     def full_convert(self, source_file, template_file, output_file, 
                      custom_style_map=None, do_mood=True, 
                      answer_text=None, answer_style=None,
+                     answer_source_style=None,
+                     answer_copy_style=None,
                      list_bullet=None, do_answer_insertion=True,
                      answer_mode='before_heading',
                      do_hint_insertion=False, hint_type='text',
@@ -2075,7 +2163,8 @@ class DocumentConverter:
                      hint_style='Normal',
                      progress_callback=None, warning_callback=None,
                      table_style_override=None, enable_table_style=False,
-                     image_style_override=None, enable_image_style=False):
+                     image_style_override=None, enable_image_style=False,
+                     remove_chapter_label=False):
         """
         完整转换流程：样式转换 -> 提示语插入 -> 语气转换 -> 插入应答句
         固定为7个步骤，跳过的步骤也会计入进度
@@ -2090,6 +2179,7 @@ class DocumentConverter:
         :param do_mood: 是否进行语气转换
         :param answer_text: 应答文本
         :param answer_style: 应答样式
+        :param answer_source_style: 应答原文样式（copy_chapter 模式使用）
         :param list_bullet: 列表段落符号
         :param do_answer_insertion: 是否插入应答句
         :param answer_mode: 应答句插入模式
@@ -2109,6 +2199,7 @@ class DocumentConverter:
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param remove_chapter_label: 是否清除章/节标题编号（如"第一章"、"第一节"）
         :return: (success, actual_output_file, message)
         """
         # 固定7个步骤，确保进度条能正确填满
@@ -2120,7 +2211,8 @@ class DocumentConverter:
         success, actual_file, msg = self.convert_styles(source_file, template_file, temp_file_1, custom_style_map, list_bullet,
                                            warning_callback,
                                            table_style_override, enable_table_style,
-                                           image_style_override, enable_image_style)
+                                           image_style_override, enable_image_style,
+                                           remove_chapter_label)
         if not success:
             return False, output_file, f"样式转换失败: {msg}"
         
@@ -2158,7 +2250,9 @@ class DocumentConverter:
                 progress_callback(3, "开始插入应答句（保留原文模式）...")
             temp_file_2 = output_file.rsplit('.', 1)[0] + "_temp2.docx"
             success, actual_file, msg = self.insert_response_after_headings(
-                temp_file_1, temp_file_2, answer_text, answer_style, answer_mode
+                temp_file_1, temp_file_2, answer_text, answer_style, answer_mode,
+                answer_source_style=answer_source_style,
+                answer_copy_style=answer_copy_style
             )
             if not success:
                 return False, output_file, f"插入应答句失败: {msg}"
