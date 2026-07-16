@@ -1387,6 +1387,16 @@ class DocumentConverter:
             return None
         return pStyle.get(qn('w:val'))
     
+    def get_style_id_by_name(self, doc, style_name):
+        """通过样式名称获取样式ID（处理 name 与 style_id 不一致的情况）"""
+        if not style_name:
+            return None
+        try:
+            style = doc.styles[style_name]
+            return style.style_id
+        except KeyError:
+            return None
+    
     def is_heading_paragraph(self, elem):
         """判断是否为标题段落"""
         if not hasattr(elem, 'tag'):
@@ -1559,7 +1569,8 @@ class DocumentConverter:
                                        answer_text=None, answer_style=None,
                                        answer_mode='before_heading',
                                        answer_source_style=None,
-                                       answer_copy_style=None):
+                                       answer_copy_style=None,
+                                       table_answer_style=None):
         """
         插入应答句（支持5种模式）
         :param input_file: 输入文件
@@ -1594,6 +1605,8 @@ class DocumentConverter:
         self.ensure_style_exists(doc, answer_style)
         self.ensure_style_exists(doc, answer_source_style)
         self.ensure_style_exists(doc, answer_copy_style)
+        if table_answer_style:
+            self.ensure_style_exists(doc, table_answer_style)
         
         # 预创建应答段落模板
         temp_para = doc.add_paragraph(answer_text)
@@ -1628,7 +1641,8 @@ class DocumentConverter:
             )
         elif answer_mode == 'copy_chapter':
             insert_count, total_heading_count = self._insert_with_copy_chapter(
-                children, new_children, answer_template, source_template, copy_template, doc
+                children, new_children, answer_template, source_template, copy_template, doc,
+                table_answer_style=table_answer_style
             )
         elif answer_mode == 'before_paragraph':
             insert_count, total_heading_count = self._insert_before_paragraphs(
@@ -1762,7 +1776,8 @@ class DocumentConverter:
         
         return insert_count, total_heading_count
     
-    def _insert_with_copy_chapter(self, children, new_children, answer_template, source_template, copy_template, doc):
+    def _insert_with_copy_chapter(self, children, new_children, answer_template, source_template, copy_template, doc,
+                                  table_answer_style=None):
         """
         原文+应答句+应答原文（模式3：copy_chapter）
         最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 应答原文（语气转换后）
@@ -1771,6 +1786,7 @@ class DocumentConverter:
         :param answer_template: 应答句段落模板（使用 answer_style）
         :param source_template: 应答原文段落模板（使用 answer_source_style）
         :param copy_template: 应答原文副本段落模板（使用 answer_copy_style）
+        :param table_answer_style: 表格应答样式（用于应答原文副本中的表格段落，若为None则使用 answer_copy_style）
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
@@ -1835,6 +1851,29 @@ class DocumentConverter:
                         # 复制应答原文副本（用 copy_template 样式，对应应答原文格式），跳过提示语
                         for elem in chapter_buffer:
                             if self._is_hint_paragraph(elem):
+                                continue
+                            # 表格元素：深拷贝原始表格，并将所有段落的样式改为 table_answer_style（优先）或 answer_copy_style
+                            if elem.tag == qn('w:tbl'):
+                                source_elem = deepcopy(elem)
+                                # 获取表格应答样式ID（优先使用 table_answer_style）
+                                tbl_style_id = None
+                                if table_answer_style:
+                                    tbl_style_id = self.get_style_id_by_name(doc, table_answer_style)
+                                if not tbl_style_id:
+                                    tbl_style_id = self.get_style_id(copy_template)
+                                if tbl_style_id:
+                                    # 遍历表格内所有段落，修改样式
+                                    for p_elem in source_elem.iter(qn('w:p')):
+                                        pPr = p_elem.find(qn('w:pPr'))
+                                        if pPr is None:
+                                            pPr = OxmlElement('w:pPr')
+                                            p_elem.insert(0, pPr)
+                                        pStyle = pPr.find(qn('w:pStyle'))
+                                        if pStyle is None:
+                                            pStyle = OxmlElement('w:pStyle')
+                                            pPr.append(pStyle)
+                                        pStyle.set(qn('w:val'), tbl_style_id)
+                                new_children.append(source_elem)
                                 continue
                             # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
                             source_elem = deepcopy(copy_template)
@@ -1905,6 +1944,29 @@ class DocumentConverter:
                 # 复制第二份副本（应答原文，用 copy_template 样式），跳过提示语
                 for elem in chapter_buffer:
                     if self._is_hint_paragraph(elem):
+                        continue
+                    # 表格元素：深拷贝原始表格，并将所有段落的样式改为 table_answer_style（优先）或 answer_copy_style
+                    if elem.tag == qn('w:tbl'):
+                        source_elem = deepcopy(elem)
+                        # 获取表格应答样式ID（优先使用 table_answer_style）
+                        tbl_style_id = None
+                        if table_answer_style:
+                            tbl_style_id = self.get_style_id_by_name(doc, table_answer_style)
+                        if not tbl_style_id:
+                            tbl_style_id = self.get_style_id(copy_template)
+                        if tbl_style_id:
+                            # 遍历表格内所有段落，修改样式
+                            for p_elem in source_elem.iter(qn('w:p')):
+                                pPr = p_elem.find(qn('w:pPr'))
+                                if pPr is None:
+                                    pPr = OxmlElement('w:pPr')
+                                    p_elem.insert(0, pPr)
+                                pStyle = pPr.find(qn('w:pStyle'))
+                                if pStyle is None:
+                                    pStyle = OxmlElement('w:pStyle')
+                                    pPr.append(pStyle)
+                                pStyle.set(qn('w:val'), tbl_style_id)
+                        new_children.append(source_elem)
                         continue
                     # 用 copy_template 替换内容，保持应答原文复制样式（answer_copy_style）
                     source_elem = deepcopy(copy_template)
@@ -2250,6 +2312,7 @@ class DocumentConverter:
                      answer_text=None, answer_style=None,
                      answer_source_style=None,
                      answer_copy_style=None,
+                     table_answer_style=None,
                      list_bullet=None, do_answer_insertion=True,
                      answer_mode='before_heading',
                      do_hint_insertion=False, hint_type='text',
@@ -2346,7 +2409,8 @@ class DocumentConverter:
             success, actual_file, msg = self.insert_response_after_headings(
                 temp_file_1, temp_file_2, answer_text, answer_style, answer_mode,
                 answer_source_style=answer_source_style,
-                answer_copy_style=answer_copy_style
+                answer_copy_style=answer_copy_style,
+                table_answer_style=table_answer_style
             )
             if not success:
                 return False, output_file, f"插入应答句失败: {msg}"

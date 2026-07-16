@@ -237,6 +237,16 @@ class StyleMappingDialog:
                                  font=("微软雅黑", 10, "bold"), padx=3, pady=2, fg="#1565C0")
         step4_frame.pack(fill=X, padx=5, pady=1)
 
+        # --- 第0行：列标题（原文 / 应答原文） ---
+        thf = Frame(step4_frame)
+        thf.pack(fill=X, pady=0)
+        Label(thf, text="", font=("微软雅黑", 9), width=8, anchor=W).pack(side=LEFT)
+        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=15, anchor=CENTER).pack(side=LEFT)
+        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=15, anchor=CENTER).pack(side=LEFT)
+        Label(thf, text="  图片", font=("微软雅黑", 9, "bold"), fg="#1565C0", anchor=W).pack(side=LEFT, padx=(18, 1))
+        Label(thf, text="原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
+        Label(thf, text="应答原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
+
         # --- 第1行：表格 + 图片（同一行） ---
         tif = Frame(step4_frame)
         tif.pack(fill=X, pady=0)
@@ -254,7 +264,7 @@ class StyleMappingDialog:
         self.table_style_combo2 = ttk.Combobox(tif, textvariable=self.table_answer_var, width=14, state="readonly")
         self.table_style_combo2['values'] = self.template_styles
         self.table_style_combo2.pack(side=LEFT, padx=1)
-        Label(tif, text="  图片:", font=("微软雅黑", 9), anchor=W).pack(side=LEFT, padx=(5, 1))
+        Label(tif, text="  ", font=("微软雅黑", 9)).pack(side=LEFT)
         self.enable_image_style_var = IntVar(value=self.current_tbl_img_config.get('enable_image_style', 0))
         Checkbutton(tif, text="启用", variable=self.enable_image_style_var,
                     font=("微软雅黑", 9), command=self.toggle_image_style).pack(side=LEFT, padx=(0, 1))
@@ -284,6 +294,9 @@ class StyleMappingDialog:
         lf = Frame(step4_frame)
         lf.pack(fill=X, pady=(1, 0))
         Label(lf, text="列表段落（未映射）:", font=("微软雅黑", 9, "bold"), fg="#1565C0").pack(side=LEFT, padx=(0, 3))
+        Label(lf, text="原文", font=("微软雅黑", 9, "bold"), width=3, anchor=CENTER).pack(side=LEFT)
+        Label(lf, text="", width=22).pack(side=LEFT)
+        Label(lf, text="应答原文", font=("微软雅黑", 9, "bold"), width=5, anchor=CENTER).pack(side=LEFT)
         # 原文：符号/样式单选
         Label(lf, text="原文", font=("微软雅黑", 9, "bold"), anchor=W, width=3).pack(side=LEFT)
         self.list_method_var = StringVar(value=self.current_list_config.get('method', 'bullet'))
@@ -1969,6 +1982,7 @@ class DocumentConverterGUI:
                     answer_style=_answer_style,
                     answer_source_style=_answer_source,
                     answer_copy_style=_answer_copy,
+                    table_answer_style=file_tbl_img_config.get('table_answer_style', ''),
                     list_bullet=_list_bullet,
                     do_answer_insertion=_do_answer,
                     answer_mode=_answer_mode,
@@ -2101,6 +2115,7 @@ class DocumentConverterGUI:
                         answer_style=_answer_style,
                         answer_source_style=_answer_source,
                         answer_copy_style=_answer_copy,
+                        table_answer_style=file_tbl_img_config.get('table_answer_style', ''),
                         list_bullet=_list_bullet,
                         do_answer_insertion=_do_answer,
                         answer_mode=_answer_mode,
