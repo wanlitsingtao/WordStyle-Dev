@@ -1,0 +1,28 @@
+{
+  "style_map": {
+    "Normal": "BN_正文缩进",
+    "[大纲级别 1]": "BN_标题0",
+    "[大纲级别 2]": "BN_标题1",
+    "[大纲级别 3]": "BN_标题2",
+    "[大纲级别 4]": "BN_标题3",
+    "[大纲级别 5]": "BN_标题4",
+    "[大纲级别 6]": "BN_标题5",
+    "[大纲级别 7]": "BN_标题6",
+    "[大纲级别 8]": "BN_标题7"
+  },
+  "enable_table_style": 1,
+  "table_style": "BN_表格单元居中",
+  "enable_image_style": 1,
+  "image_style": "BN_框图文字居中",
+  "remove_chapter_label": 0,
+  "answer_text": "应答：本投标人理解并完全满足招标要求，对招标要求逐条应答如下：",
+  "answer_style": "BN_标书应答",
+  "answer_mode": "原文+应答句+应答原文",
+  "do_hint_insertion": 1,
+  "hint_type": "image",
+  "hint_text": "招标文件原文",
+  "hint_image_path": "E:/工作目录/2.售前工作目录/0.市场项目/S-深圳项目/15、17号线/招标文件原文.png",
+  "hint_style": "BN_框图文字居中",
+  "answer_source_style": "BN_原文引用_缩进",
+  "answer_copy_style": "BN_正文缩进"
+}
