@@ -1,17 +1,20 @@
 {
   "style_map": {
+    "Heading 1": "BN_标题1",
+    "Heading 2": "BN_标题2",
+    "Heading 3": "BN_标题3",
+    "Heading 4": "BN_标题4",
+    "1 列表段落": "BN_原文引用列表项目符号",
     "Normal": "BN_正文缩进",
-    "[大纲级别 1]": "BN_标题0",
-    "[大纲级别 2]": "BN_标题1",
-    "[大纲级别 3]": "BN_标题2",
-    "[大纲级别 4]": "BN_标题3",
-    "[大纲级别 5]": "BN_标题4",
-    "[大纲级别 6]": "BN_标题5",
-    "[大纲级别 7]": "BN_标题6",
-    "[大纲级别 8]": "BN_标题7"
+    "● 列表段落": "BN_原文引用列表项目符号",
+    "正文 BJ8": "BN_正文缩进",
+    "answer_1 列表段落": "BN_列表项目符号",
+    "answer_Normal": "BN_正文缩进",
+    "answer_● 列表段落": "BN_列表项目符号",
+    "answer_正文 BJ8": "BN_列表项目符号"
   },
   "enable_table_style": 1,
-  "table_style": "BN_表格单元居中",
+  "table_style": "BN_原文引用_居中",
   "enable_image_style": 1,
   "image_style": "BN_框图文字居中",
   "remove_chapter_label": 0,
@@ -24,5 +27,14 @@
   "hint_image_path": "E:/工作目录/2.售前工作目录/0.市场项目/S-深圳项目/15、17号线/招标文件原文.png",
   "hint_style": "BN_框图文字居中",
   "answer_source_style": "BN_原文引用_缩进",
-  "answer_copy_style": "BN_正文缩进"
+  "answer_copy_style": "BN_正文缩进",
+  "do_answer": 1,
+  "table_answer_style": "BN_表格单元居中",
+  "image_answer_style": "BN_框图文字居中",
+  "list_method": "style",
+  "list_bullet": "● ",
+  "list_style": "BN_原文引用列表项目符号",
+  "list_answer_method": "style",
+  "list_answer_bullet": "● ",
+  "list_answer_style": "BN_列表项目符号"
 }

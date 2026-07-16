@@ -137,8 +137,99 @@ class DocumentConverter:
         self.logger = logger
         return logger
     
+    def get_list_virtual_styles(self, doc):
+        """检测文档中具有编号/符号的列表段落，返回分类后的虚拟样式名称集合。
+
+        对于有自动编号（numPr）的段落：
+          - 如果能获取编号格式信息，根据格式类型生成：
+            '1 列表段落'（数字编号）、'● 列表段落'（符号编号）
+          - 如果无法获取具体格式信息，统一归为 '● 列表段落'
+
+        同一种格式只出现一个虚拟样式名（不按序号区分）。
+        """
+        virtual_styles = set()
+        # 先收集所有有 numPr 的段落
+        for para in doc.paragraphs:
+            if self.has_numbering(para):
+                # 尝试获取编号格式信息
+                fmt = self._detect_numbering_format(para)
+                virtual_styles.add(fmt)
+        return virtual_styles
+
+    def _detect_numbering_format(self, paragraph):
+        """检测段落的编号格式类型，返回分类标识字符串。
+
+        返回格式：
+          - '1 列表段落'：数字编号（1. / 1) / (1) / ①）
+          - '● 列表段落'：符号编号（bullet）
+        """
+        # 尝试通过 numPr/numId 获取编号定义来判断是 bullet 还是 decimal
+        try:
+            pPr = paragraph._element.find(qn('w:pPr'))
+            if pPr is not None:
+                numPr = pPr.find(qn('w:numPr'))
+                if numPr is not None:
+                    numId_elem = numPr.find(qn('w:numId'))
+                    if numId_elem is not None:
+                        numId = numId_elem.get(qn('w:val'))
+                        if numId:
+                            # 通过文档的 numbering 部分查找编号格式
+                            from docx.oxml.ns import qn as _qn
+                            doc_element = paragraph._element.getroottree().getroot()
+                            numbering_part = doc_element.find('.//' + _qn('w:numbering'))
+                            if numbering_part is not None:
+                                # 查找 num 元素
+                                num_elem = numbering_part.find(f'.//' + _qn('w:num') + f'[@' + _qn('w:numId') + f'="{numId}"]')
+                                if num_elem is not None:
+                                    abstractNumId_elem = num_elem.find(_qn('w:abstractNumId'))
+                                    if abstractNumId_elem is not None:
+                                        abstractNumId = abstractNumId_elem.get(_qn('w:val'))
+                                        if abstractNumId:
+                                            # 查找 abstractNum 定义
+                                            abs_num = numbering_part.find(f'.//' + _qn('w:abstractNum') + f'[@' + _qn('w:abstractNumId') + f'="{abstractNumId}"]')
+                                            if abs_num is not None:
+                                                # 查找级别定义中的 numFmt
+                                                lvl = abs_num.find('.//' + _qn('w:lvl'))
+                                                if lvl is not None:
+                                                    numFmt = lvl.find(_qn('w:numFmt'))
+                                                    if numFmt is not None:
+                                                        fmt_val = numFmt.get(_qn('w:val'))
+                                                        if fmt_val == 'bullet':
+                                                            return '● 列表段落'
+                                                        elif fmt_val == 'decimal':
+                                                            return '1 列表段落'
+                                            # 查找替代格式：通过 numStyleLink
+                                            styleLink = abs_num.find(_qn('w:numStyleLink'))
+                                            if styleLink is not None:
+                                                val = styleLink.get(_qn('w:val'))
+                                                if val:
+                                                    return '1 列表段落'
+        except Exception:
+            pass
+
+        # 如果上述方式不可行，回退到通过文本前缀检测
+        text = paragraph.text.strip() if paragraph.text else ''
+        if text:
+            # 常见数字编号前缀
+            if text[0].isdigit():
+                return '1 列表段落'
+            # 常见符号前缀
+            if text[0] in ('●', '◆', '▪', '▸', '➢', '○', '·', '', '-', '–', '*', '+', '·'):
+                return '● 列表段落'
+            if text.startswith('(') or text.startswith('（'):
+                return '1 列表段落'
+            if text.startswith('①') or text.startswith('②') or text.startswith('③'):
+                return '1 列表段落'
+            # 中文数字编号
+            if text[0] in '一二三四五六七八九十':
+                if len(text) > 1 and text[1] in ('、', '，', '　', '.'):
+                    return '1 列表段落'
+
+        # 无法判断，默认为符号
+        return '● 列表段落'
+
     def get_all_styles_from_doc(self, doc):
-        """获取文档中使用的所有样式（包括虚拟大纲级别样式）"""
+        """获取文档中使用的所有样式（包括虚拟大纲级别样式和列表段落虚拟样式）"""
         styles = set()
         for para in doc.paragraphs:
             if para.style and para.style.name:
@@ -146,6 +237,9 @@ class DocumentConverter:
         # 额外收集具有 outlineLvl 但样式为 Normal 的段落，生成虚拟大纲样式名
         outline_styles = self.get_outline_virtual_styles(doc)
         styles.update(outline_styles)
+        # 额外收集具有编号/符号的列表段落，生成列表虚拟样式名
+        list_styles = self.get_list_virtual_styles(doc)
+        styles.update(list_styles)
         return styles
     
     def get_outline_virtual_styles(self, doc):
