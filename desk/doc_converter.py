@@ -629,7 +629,8 @@ class DocumentConverter:
     def copy_paragraph_with_images(self, source_para, target_doc, target_style_name,
                                    page_width_emu, available_width_emu, para_idx, source_file="",
                                    warning_callback=None, image_style_override=None, enable_image_style=False,
-                                   remove_chapter_label=False):
+                                   remove_chapter_label=False,
+                                   list_method='bullet', list_style='Body Text'):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
@@ -815,27 +816,69 @@ class DocumentConverter:
             return new_para
         
         if self.has_numbering(source_para):
-            new_para.add_run(self.list_bullet)
-            self.remove_auto_numbering(new_para)
-            # 对于列表段落，使用专门的编号清理函数
-            full_text = ''.join(run.text for run in source_para.runs)
-            cleaned_text = clean_list_numbering(full_text)
-            if cleaned_text:
-                new_para.add_run(cleaned_text)
-            for run_idx, run in enumerate(source_para.runs):
-                blips = run._element.findall('.//' + qn('a:blip'))
-                for blip in blips:
-                    rId = blip.get(qn('r:embed'))
-                    if rId:
+            if list_method == 'style':
+                # "样式"模式：优先使用 Step 3 样式映射的结果（target_style_name），
+                # 此时 target_style_name 已经是通过虚拟样式名（如 "1 列表段落"）映射得到的
+                # 目标样式（如 "BN_原文引用列表项目符号"）。
+                # 如果 target_style_name 无效（映射失败或不存在），再用 Step 4 的 list_style 兜底。
+                # 不加符号，不清除自动编号，只复制文本内容（保留原始编号）
+                try:
+                    if target_style_name and target_style_name != DEFAULT_TARGET:
+                        target_doc.styles[target_style_name]
+                        new_para.style = target_style_name
+                    else:
+                        target_doc.styles[list_style]
+                        new_para.style = list_style
+                except Exception:
+                    try:
+                        target_doc.styles[list_style]
+                        new_para.style = list_style
+                    except Exception:
                         try:
-                            img_part = source_para.part.related_parts[rId]
-                            img_bytes = img_part.blob
-                            emu_w, emu_h = self.get_image_extent(blip)
-                            pic_run = new_para.add_run()
-                            self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            new_para.style = target_doc.styles['Normal']
                         except Exception:
                             pass
-            return new_para
+                for run_idx, run in enumerate(source_para.runs):
+                    blips = run._element.findall('.//' + qn('a:blip'))
+                    if blips:
+                        for blip in blips:
+                            rId = blip.get(qn('r:embed'))
+                            if rId:
+                                try:
+                                    img_part = source_para.part.related_parts[rId]
+                                    img_bytes = img_part.blob
+                                    emu_w, emu_h = self.get_image_extent(blip)
+                                    pic_run = new_para.add_run()
+                                    self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                                except Exception:
+                                    pass
+                    else:
+                        if run.text:
+                            new_para.add_run(run.text)
+                return new_para
+            else:
+                # "符号"模式：保留原有逻辑（添加 bullet 符号，清除编号）
+                new_para.add_run(self.list_bullet)
+                self.remove_auto_numbering(new_para)
+                # 对于列表段落，使用专门的编号清理函数
+                full_text = ''.join(run.text for run in source_para.runs)
+                cleaned_text = clean_list_numbering(full_text)
+                if cleaned_text:
+                    new_para.add_run(cleaned_text)
+                for run_idx, run in enumerate(source_para.runs):
+                    blips = run._element.findall('.//' + qn('a:blip'))
+                    for blip in blips:
+                        rId = blip.get(qn('r:embed'))
+                        if rId:
+                            try:
+                                img_part = source_para.part.related_parts[rId]
+                                img_bytes = img_part.blob
+                                emu_w, emu_h = self.get_image_extent(blip)
+                                pic_run = new_para.add_run()
+                                self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            except Exception:
+                                pass
+                return new_para
         
         for run_idx, run in enumerate(source_para.runs):
             blips = run._element.findall('.//' + qn('a:blip'))
@@ -1034,7 +1077,8 @@ class DocumentConverter:
                        warning_callback=None,
                        table_style_override=None, enable_table_style=False,
                        image_style_override=None, enable_image_style=False,
-                       remove_chapter_label=False):
+                       remove_chapter_label=False,
+                       list_method='bullet', list_style='Body Text'):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -1047,6 +1091,8 @@ class DocumentConverter:
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param list_method: 列表段落处理方式 'bullet'（符号）或 'style'（样式）
+        :param list_style: 列表段落兜底样式名（当list_method='style'时使用）
         :return: (success, actual_file, message)
         """
         # 使用局部样式映射副本，避免修改全局变量
@@ -1098,7 +1144,14 @@ class DocumentConverter:
                     para = source_doc.paragraphs[para_idx]
                     src_style = para.style.name
                     
-                    target_style = self.get_target_style(src_style, new_doc, source_file)
+                    # ★ 修复：对于有编号的列表段落，使用虚拟样式名（如 "1 列表段落"）进行样式映射，
+                    # 而不是用真实的样式名（通常是 "Normal"）。这样 Step 3 中用户配置的
+                    # "1 列表段落" → "BN_原文引用列表项目符号" 映射才能生效。
+                    if self.has_numbering(para):
+                        virtual_style = self._detect_numbering_format(para)
+                        target_style = self.get_target_style(virtual_style, new_doc, source_file)
+                    else:
+                        target_style = self.get_target_style(src_style, new_doc, source_file)
                     
                     new_para = self.copy_paragraph_with_images(
                         para, new_doc, target_style,
@@ -1107,7 +1160,9 @@ class DocumentConverter:
                         warning_callback,
                         image_style_override=image_style_override,
                         enable_image_style=enable_image_style,
-                        remove_chapter_label=remove_chapter_label
+                        remove_chapter_label=remove_chapter_label,
+                        list_method=list_method,
+                        list_style=list_style
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
@@ -1570,7 +1625,10 @@ class DocumentConverter:
                                        answer_mode='before_heading',
                                        answer_source_style=None,
                                        answer_copy_style=None,
-                                       table_answer_style=None):
+                                       table_answer_style=None,
+                                       list_answer_method='bullet',
+                                       list_answer_style='Body Text',
+                                       list_answer_bullet='● '):
         """
         插入应答句（支持5种模式）
         :param input_file: 输入文件
@@ -1642,7 +1700,10 @@ class DocumentConverter:
         elif answer_mode == 'copy_chapter':
             insert_count, total_heading_count = self._insert_with_copy_chapter(
                 children, new_children, answer_template, source_template, copy_template, doc,
-                table_answer_style=table_answer_style
+                table_answer_style=table_answer_style,
+                list_answer_method=list_answer_method,
+                list_answer_style=list_answer_style,
+                list_answer_bullet=list_answer_bullet
             )
         elif answer_mode == 'before_paragraph':
             insert_count, total_heading_count = self._insert_before_paragraphs(
@@ -1777,7 +1838,9 @@ class DocumentConverter:
         return insert_count, total_heading_count
     
     def _insert_with_copy_chapter(self, children, new_children, answer_template, source_template, copy_template, doc,
-                                  table_answer_style=None):
+                                  table_answer_style=None,
+                                  list_answer_method='bullet', list_answer_style='Body Text',
+                                  list_answer_bullet='● '):
         """
         原文+应答句+应答原文（模式3：copy_chapter）
         最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 应答原文（语气转换后）
@@ -1787,6 +1850,9 @@ class DocumentConverter:
         :param source_template: 应答原文段落模板（使用 answer_source_style）
         :param copy_template: 应答原文副本段落模板（使用 answer_copy_style）
         :param table_answer_style: 表格应答样式（用于应答原文副本中的表格段落，若为None则使用 answer_copy_style）
+        :param list_answer_method: 应答原文列表段落处理方式 'bullet'（符号）或 'style'（样式）
+        :param list_answer_style: 应答原文列表段落兜底样式名
+        :param list_answer_bullet: 应答原文列表段落符号
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
@@ -1820,6 +1886,21 @@ class DocumentConverter:
                 elem.remove(start)
             for end in ends_to_remove:
                 elem.remove(end)
+        
+        def _elem_has_numbering(elem):
+            """检查XML元素（w:p）是否有编号"""
+            pPr = elem.find(qn('w:pPr'))
+            if pPr is not None:
+                return pPr.find(qn('w:numPr')) is not None
+            return False
+        
+        def _get_list_answer_style_id():
+            """获取应答原文列表段落的样式ID"""
+            if list_answer_method == 'style' and list_answer_style:
+                sid = self.get_style_id_by_name(doc, list_answer_style)
+                if sid:
+                    return sid
+            return None
         
         # 当前章节标题索引，None 表示尚未进入任何章节
         current_chapter_heading = None
@@ -1875,19 +1956,54 @@ class DocumentConverter:
                                         pStyle.set(qn('w:val'), tbl_style_id)
                                 new_children.append(source_elem)
                                 continue
-                            # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
-                            source_elem = deepcopy(copy_template)
-                            # 复制原段落的文本内容到 copy_template
-                            source_runs = source_elem.findall('.//' + qn('w:r'))
-                            orig_runs = elem.findall('.//' + qn('w:r'))
-                            # 清除模板中的 runs
-                            for r in source_runs:
-                                source_elem.remove(r)
-                            # 复制原段落的 runs
-                            for r in orig_runs:
-                                source_elem.append(deepcopy(r))
-                            remove_keep_original_from_element(source_elem)
-                            new_children.append(source_elem)
+                            # 判断是否为列表段落：原段落有 numPr 且启用了 style 模式
+                            is_list_para = (_elem_has_numbering(elem) and 
+                                            list_answer_method == 'style' and 
+                                            list_answer_style)
+                            if is_list_para:
+                                # 列表段落：使用指定的列表样式
+                                list_sid = self.get_style_id_by_name(doc, list_answer_style)
+                                if list_sid:
+                                    # ★ 修复：基于 elem（有 numPr）创建，而不是 copy_template
+                                    source_elem = deepcopy(elem)
+                                    # 修改样式为指定的列表样式
+                                    pPr = source_elem.find(qn('w:pPr'))
+                                    if pPr is None:
+                                        pPr = OxmlElement('w:pPr')
+                                        source_elem.insert(0, pPr)
+                                    pStyle = pPr.find(qn('w:pStyle'))
+                                    if pStyle is None:
+                                        pStyle = OxmlElement('w:pStyle')
+                                        pPr.append(pStyle)
+                                    pStyle.set(qn('w:val'), list_sid)
+                                    # 确保保留 numPr
+                                    remove_keep_original_from_element(source_elem)
+                                    new_children.append(source_elem)
+                                else:
+                                    # 样式名称无效，回退到普通模板
+                                    source_elem = deepcopy(copy_template)
+                                    source_runs = source_elem.findall('.//' + qn('w:r'))
+                                    orig_runs = elem.findall('.//' + qn('w:r'))
+                                    for r in source_runs:
+                                        source_elem.remove(r)
+                                    for r in orig_runs:
+                                        source_elem.append(deepcopy(r))
+                                    remove_keep_original_from_element(source_elem)
+                                    new_children.append(source_elem)
+                            else:
+                                # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
+                                source_elem = deepcopy(copy_template)
+                                # 复制原段落的文本内容到 copy_template
+                                source_runs = source_elem.findall('.//' + qn('w:r'))
+                                orig_runs = elem.findall('.//' + qn('w:r'))
+                                # 清除模板中的 runs
+                                for r in source_runs:
+                                    source_elem.remove(r)
+                                # 复制原段落的 runs
+                                for r in orig_runs:
+                                    source_elem.append(deepcopy(r))
+                                remove_keep_original_from_element(source_elem)
+                                new_children.append(source_elem)
                 
                 chapter_buffer.clear()
                 new_children.append(child)
@@ -1921,6 +2037,21 @@ class DocumentConverter:
                         bookmark_end.set(qn('w:id'), str(bookmark_id))
                         source_elem.append(bookmark_end)
                         bookmark_id += 1
+                        # ★ 关键修复：检查子元素是否有 numPr（列表编号），如果有则在 source_elem 中保留标记
+                        child_pPr = child.find(qn('w:pPr'))
+                        child_numPr = child_pPr.find(qn('w:numPr')) if child_pPr is not None else None
+                        # print(f"  child_numPr: {child_numPr is not None}, style in pPr: {child_pPr.find(qn('w:pStyle')).get(qn('w:val')) if child_pPr is not None and child_pPr.find(qn('w:pStyle')) is not None else 'None'}")
+                        if child_numPr is not None:
+                            # 在 source_elem 的 pPr 中加入 numPr 标记，供后续副本拷贝时检测列表段落
+                            src_pPr = source_elem.find(qn('w:pPr'))
+                            if src_pPr is None:
+                                src_pPr = OxmlElement('w:pPr')
+                                source_elem.insert(0, src_pPr)
+                            src_numPr = src_pPr.find(qn('w:numPr'))
+                            if src_numPr is None:
+                                # 复制完整的 numPr 元素（包括 numId 等），而不仅仅是添加空标记
+                                src_numPr = deepcopy(child_numPr)
+                                src_pPr.append(src_numPr)
                         new_children.append(source_elem)
                         chapter_buffer.append(source_elem)
                     else:
@@ -1968,16 +2099,50 @@ class DocumentConverter:
                                 pStyle.set(qn('w:val'), tbl_style_id)
                         new_children.append(source_elem)
                         continue
-                    # 用 copy_template 替换内容，保持应答原文复制样式（answer_copy_style）
-                    source_elem = deepcopy(copy_template)
-                    source_runs = source_elem.findall('.//' + qn('w:r'))
-                    orig_runs = elem.findall('.//' + qn('w:r'))
-                    for r in source_runs:
-                        source_elem.remove(r)
-                    for r in orig_runs:
-                        source_elem.append(deepcopy(r))
-                    remove_keep_original_from_element(source_elem)
-                    new_children.append(source_elem)
+                    # 判断是否为列表段落：原段落有 numPr 且启用了 style 模式
+                    is_list_para = (_elem_has_numbering(elem) and 
+                                    list_answer_method == 'style' and 
+                                    list_answer_style)
+                    if is_list_para:
+                        # 列表段落：使用指定的列表样式
+                        list_sid = self.get_style_id_by_name(doc, list_answer_style)
+                        if list_sid:
+                            # ★ 修复：基于 elem（有 numPr）创建，而不是 copy_template
+                            source_elem = deepcopy(elem)
+                            # 修改样式为指定的列表样式
+                            pPr = source_elem.find(qn('w:pPr'))
+                            if pPr is None:
+                                pPr = OxmlElement('w:pPr')
+                                source_elem.insert(0, pPr)
+                            pStyle = pPr.find(qn('w:pStyle'))
+                            if pStyle is None:
+                                pStyle = OxmlElement('w:pStyle')
+                                pPr.append(pStyle)
+                            pStyle.set(qn('w:val'), list_sid)
+                            remove_keep_original_from_element(source_elem)
+                            new_children.append(source_elem)
+                        else:
+                            # 样式名称无效，回退到普通模板
+                            source_elem = deepcopy(copy_template)
+                            source_runs = source_elem.findall('.//' + qn('w:r'))
+                            orig_runs = elem.findall('.//' + qn('w:r'))
+                            for r in source_runs:
+                                source_elem.remove(r)
+                            for r in orig_runs:
+                                source_elem.append(deepcopy(r))
+                            remove_keep_original_from_element(source_elem)
+                            new_children.append(source_elem)
+                    else:
+                        # 非列表段落：用 copy_template 替换内容
+                        source_elem = deepcopy(copy_template)
+                        source_runs = source_elem.findall('.//' + qn('w:r'))
+                        orig_runs = elem.findall('.//' + qn('w:r'))
+                        for r in source_runs:
+                            source_elem.remove(r)
+                        for r in orig_runs:
+                            source_elem.append(deepcopy(r))
+                        remove_keep_original_from_element(source_elem)
+                        new_children.append(source_elem)
         
         return insert_count, total_heading_count
     
@@ -2321,7 +2486,10 @@ class DocumentConverter:
                      progress_callback=None, warning_callback=None,
                      table_style_override=None, enable_table_style=False,
                      image_style_override=None, enable_image_style=False,
-                     remove_chapter_label=False):
+                     remove_chapter_label=False,
+                     list_method='bullet', list_style='Body Text',
+                     list_answer_method='bullet', list_answer_style='Body Text',
+                     list_answer_bullet='● '):
         """
         完整转换流程：样式转换 -> 提示语插入 -> 语气转换 -> 插入应答句
         固定为7个步骤，跳过的步骤也会计入进度
@@ -2369,7 +2537,8 @@ class DocumentConverter:
                                            warning_callback,
                                            table_style_override, enable_table_style,
                                            image_style_override, enable_image_style,
-                                           remove_chapter_label)
+                                           remove_chapter_label,
+                                           list_method=list_method, list_style=list_style)
         if not success:
             return False, output_file, f"样式转换失败: {msg}"
         
@@ -2410,7 +2579,10 @@ class DocumentConverter:
                 temp_file_1, temp_file_2, answer_text, answer_style, answer_mode,
                 answer_source_style=answer_source_style,
                 answer_copy_style=answer_copy_style,
-                table_answer_style=table_answer_style
+                table_answer_style=table_answer_style,
+                list_answer_method=list_answer_method,
+                list_answer_style=list_answer_style,
+                list_answer_bullet=list_answer_bullet
             )
             if not success:
                 return False, output_file, f"插入应答句失败: {msg}"

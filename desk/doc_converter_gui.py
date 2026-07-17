@@ -266,7 +266,7 @@ class StyleMappingDialog:
         self.table_style_combo2.pack(side=LEFT, padx=1)
         Label(tif, text="  ", font=("微软雅黑", 9)).pack(side=LEFT)
         self.enable_image_style_var = IntVar(value=self.current_tbl_img_config.get('enable_image_style', 0))
-        Checkbutton(tif, text="启用", variable=self.enable_image_style_var,
+        Checkbutton(tif, text="图片", variable=self.enable_image_style_var,
                     font=("微软雅黑", 9), command=self.toggle_image_style).pack(side=LEFT, padx=(0, 1))
         isd = self.current_tbl_img_config.get('image_style', 'Body Text')
         self.image_style_var = StringVar(value=isd)
@@ -281,7 +281,53 @@ class StyleMappingDialog:
         self.toggle_table_style()
         self.toggle_image_style()
 
-        # 分隔线 + 清除章节编号
+        # --- 第2行：列表段落（原文+应答 同一行） ---
+        lf = Frame(step4_frame)
+        lf.pack(fill=X, pady=(1, 0))
+        Label(lf, text="列表段落（未映射）", font=("微软雅黑", 9, "bold"), fg="#1565C0").pack(side=LEFT, padx=(0, 3))
+        # 列标题（与表格共用同一对齐）
+        Label(lf, text="原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=28, anchor=CENTER).pack(side=LEFT)
+        Label(lf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=28, anchor=CENTER).pack(side=LEFT)
+        # 第2行：控件行
+        lf2 = Frame(step4_frame)
+        lf2.pack(fill=X, pady=0)
+        Label(lf2, text="", font=("微软雅黑", 9), width=14, anchor=W).pack(side=LEFT)
+        # 原文控件
+        self.list_method_var = StringVar(value=self.current_list_config.get('method', 'bullet'))
+        Radiobutton(lf2, text="符号", variable=self.list_method_var, value="bullet",
+                    font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=0)
+        sld = self.current_list_config.get('bullet', '* ')
+        self.list_bullet_var = StringVar(value=sld)
+        self.list_bullet_entry = Entry(lf2, textvariable=self.list_bullet_var, width=4, font=("微软雅黑", 9))
+        self.list_bullet_entry.pack(side=LEFT, padx=1)
+        Radiobutton(lf2, text="样式", variable=self.list_method_var, value="style",
+                    font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=(3, 0))
+        slsd = self.current_list_config.get('style', 'Body Text')
+        self.list_style_var = StringVar(value=slsd)
+        self.list_style_combo = ttk.Combobox(lf2, textvariable=self.list_style_var, width=14, state="readonly")
+        self.list_style_combo['values'] = self.template_styles
+        self.list_style_combo.pack(side=LEFT, padx=1)
+        self.toggle_list_method()
+        # 应答原文控件
+        Label(lf2, text="", width=8).pack(side=LEFT)
+        saved_list_method2 = self.current_list_config.get('answer_method', self.list_method_var.get())
+        self.list_method_var2 = StringVar(value=saved_list_method2)
+        Radiobutton(lf2, text="符号", variable=self.list_method_var2, value="bullet",
+                    font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=0)
+        sld2 = self.current_list_config.get('answer_bullet', self.list_bullet_var.get())
+        self.list_bullet_var2 = StringVar(value=sld2)
+        self.list_bullet_entry2 = Entry(lf2, textvariable=self.list_bullet_var2, width=4, font=("微软雅黑", 9))
+        self.list_bullet_entry2.pack(side=LEFT, padx=1)
+        Radiobutton(lf2, text="样式", variable=self.list_method_var2, value="style",
+                    font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=(3, 0))
+        slsd2 = self.current_list_config.get('answer_style', self.list_style_var.get())
+        self.list_style_var2 = StringVar(value=slsd2)
+        self.list_style_combo2 = ttk.Combobox(lf2, textvariable=self.list_style_var2, width=14, state="readonly")
+        self.list_style_combo2['values'] = self.template_styles
+        self.list_style_combo2.pack(side=LEFT, padx=1)
+        self.toggle_list_method2()
+
+        # 分隔线 + 清除章节编号（放在列表段落之后）
         sep = Frame(step4_frame, height=1, bg="#DDDDDD")
         sep.pack(fill=X, pady=(1, 0))
         cr = Frame(step4_frame)
@@ -290,48 +336,10 @@ class StyleMappingDialog:
         Checkbutton(cr, text='清除标题中的"第X章/第X节"等字样',
                     variable=self.remove_chapter_label_var, font=("微软雅黑", 9)).pack(side=LEFT)
 
-        # --- 第2行：列表段落（原文+应答 同一行） ---
-        lf = Frame(step4_frame)
-        lf.pack(fill=X, pady=(1, 0))
-        Label(lf, text="列表段落（未映射）:", font=("微软雅黑", 9, "bold"), fg="#1565C0").pack(side=LEFT, padx=(0, 3))
-        Label(lf, text="原文", font=("微软雅黑", 9, "bold"), width=3, anchor=CENTER).pack(side=LEFT)
-        Label(lf, text="", width=22).pack(side=LEFT)
-        Label(lf, text="应答原文", font=("微软雅黑", 9, "bold"), width=5, anchor=CENTER).pack(side=LEFT)
-        # 原文：符号/样式单选
-        Label(lf, text="原文", font=("微软雅黑", 9, "bold"), anchor=W, width=3).pack(side=LEFT)
-        self.list_method_var = StringVar(value=self.current_list_config.get('method', 'bullet'))
-        Radiobutton(lf, text="符号", variable=self.list_method_var, value="bullet",
-                    font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=0)
-        Radiobutton(lf, text="样式", variable=self.list_method_var, value="style",
-                    font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=0)
-        sld = self.current_list_config.get('bullet', '* ')
-        self.list_bullet_var = StringVar(value=sld)
-        self.list_bullet_entry = Entry(lf, textvariable=self.list_bullet_var, width=4, font=("微软雅黑", 9))
-        self.list_bullet_entry.pack(side=LEFT, padx=1)
-        slsd = self.current_list_config.get('style', 'Body Text')
-        self.list_style_var = StringVar(value=slsd)
-        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=14, state="readonly")
-        self.list_style_combo['values'] = self.template_styles
-        self.list_style_combo.pack(side=LEFT, padx=1)
-        self.toggle_list_method()
-        # 应答句
-        Label(lf, text="  应答", font=("微软雅黑", 9, "bold"), anchor=W, width=3).pack(side=LEFT)
-        saved_list_method2 = self.current_list_config.get('answer_method', self.list_method_var.get())
-        self.list_method_var2 = StringVar(value=saved_list_method2)
-        Radiobutton(lf, text="符号", variable=self.list_method_var2, value="bullet",
-                    font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=0)
-        Radiobutton(lf, text="样式", variable=self.list_method_var2, value="style",
-                    font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=0)
-        sld2 = self.current_list_config.get('answer_bullet', self.list_bullet_var.get())
-        self.list_bullet_var2 = StringVar(value=sld2)
-        self.list_bullet_entry2 = Entry(lf, textvariable=self.list_bullet_var2, width=4, font=("微软雅黑", 9))
-        self.list_bullet_entry2.pack(side=LEFT, padx=1)
-        slsd2 = self.current_list_config.get('answer_style', self.list_style_var.get())
-        self.list_style_var2 = StringVar(value=slsd2)
-        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=14, state="readonly")
-        self.list_style_combo2['values'] = self.template_styles
-        self.list_style_combo2.pack(side=LEFT, padx=1)
-        self.toggle_list_method2()
+        # 对话框初始状态同步：根据 do_answer 和 answer_mode 设置 Step 4 应答列状态
+        do_answer = (self.do_answer_var.get() == 1)
+        is_dual = (do_answer and self.answer_mode_var.get() == "原文+应答句+应答原文")
+        self._update_dual_mode_widgets(is_dual)
 
         # ===== 底部按钮 =====
         bf = Frame(scrollable_main)
@@ -357,6 +365,23 @@ class StyleMappingDialog:
         self.answer_mode_combo.config(state=state)
         self.answer_source_combo.config(state=state)
         self.answer_copy_combo.config(state=state)
+        # Step 4 应答原文列控件状态
+        is_dual = (enabled and self.answer_mode_var.get() == "原文+应答句+应答原文")
+        answer_state = "normal" if (enabled and is_dual) else "disabled"
+        # 表格应答列
+        if hasattr(self, 'table_style_combo2') and self.table_style_combo2:
+            if self.enable_table_style_var.get() == 1 and enabled and is_dual:
+                self.table_style_combo2.config(state="normal")
+            else:
+                self.table_style_combo2.config(state="disabled")
+        # 图片应答列
+        if hasattr(self, 'image_style_combo2') and self.image_style_combo2:
+            if self.enable_image_style_var.get() == 1 and enabled and is_dual:
+                self.image_style_combo2.config(state="normal")
+            else:
+                self.image_style_combo2.config(state="disabled")
+        # 列表段落应答控件
+        self._set_list_answer_state(answer_state)
         self.rebuild_style_mapping()
 
     def on_answer_mode_change(self):
@@ -373,9 +398,22 @@ class StyleMappingDialog:
         """更新双列模式下第二列控件的状态"""
         state = "normal" if is_dual else "disabled"
         if self.table_style_combo2:
-            self.table_style_combo2.config(state=state)
+            tbl_enabled = self.enable_table_style_var.get() == 1
+            self.table_style_combo2.config(state="normal" if (tbl_enabled and is_dual) else "disabled")
         if self.image_style_combo2:
-            self.image_style_combo2.config(state=state)
+            img_enabled = self.enable_image_style_var.get() == 1
+            self.image_style_combo2.config(state="normal" if (img_enabled and is_dual) else "disabled")
+        self._set_list_answer_state(state)
+
+    def _set_list_answer_state(self, state):
+        """设置列表段落应答控件的可用状态"""
+        if hasattr(self, 'list_style_combo2') and self.list_style_combo2:
+            is_style = self.list_method_var2.get() == "style"
+            self.list_style_combo2.config(state="normal" if (state == "normal" and is_style) else "disabled")
+        if hasattr(self, 'list_bullet_entry2') and self.list_bullet_entry2:
+            is_bullet = self.list_method_var2.get() == "bullet"
+            self.list_bullet_entry2.config(state="normal" if (state == "normal" and is_bullet) else "disabled")
+        # RadioButton 本身不做 disabled，因为 value 仍然需要可读，但它们的容器状态由外部控制
 
     def rebuild_style_mapping(self):
         """重建样式映射部分（根据应答句模式切换单列/双列）"""
@@ -439,8 +477,7 @@ class StyleMappingDialog:
     def toggle_table_style(self):
         """切换表格样式控件的启用状态"""
         enabled = self.enable_table_style_var.get() == 1
-        state = "normal" if enabled else "disabled"
-        self.table_style_combo.config(state=state)
+        self.table_style_combo.config(state="normal" if enabled else "disabled")
         if self.table_style_combo2:
             is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
             self.table_style_combo2.config(state="normal" if (enabled and is_dual) else "disabled")
@@ -448,8 +485,7 @@ class StyleMappingDialog:
     def toggle_image_style(self):
         """切换图片样式控件的启用状态"""
         enabled = self.enable_image_style_var.get() == 1
-        state = "normal" if enabled else "disabled"
-        self.image_style_combo.config(state=state)
+        self.image_style_combo.config(state="normal" if enabled else "disabled")
         if self.image_style_combo2:
             is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
             self.image_style_combo2.config(state="normal" if (enabled and is_dual) else "disabled")
@@ -463,8 +499,9 @@ class StyleMappingDialog:
     def toggle_list_method2(self):
         """切换应答句列表段落处理方式（默认符号/指定样式）"""
         is_style = self.list_method_var2.get() == "style"
-        self.list_style_combo2.config(state="normal" if is_style else "disabled")
-        self.list_bullet_entry2.config(state="normal" if not is_style else "disabled")
+        is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
+        self.list_style_combo2.config(state="normal" if (is_style and is_dual) else "disabled")
+        self.list_bullet_entry2.config(state="normal" if (not is_style and is_dual) else "disabled")
 
     def save_as_default(self):
         """保存当前配置为默认"""
@@ -532,28 +569,32 @@ class StyleMappingDialog:
 
     def _collect_tbl_img_config(self):
         """收集表格/图片兜底配置"""
+        do_answer = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
         cfg = {
             'enable_table_style': self.enable_table_style_var.get(),
             'table_style': self.table_style_var.get(),
             'enable_image_style': self.enable_image_style_var.get(),
             'image_style': self.image_style_var.get(),
         }
-        if self.table_answer_var:
+        if self.table_answer_var and do_answer:
             cfg['table_answer_style'] = self.table_answer_var.get()
-        if self.image_answer_var:
+        if self.image_answer_var and do_answer:
             cfg['image_answer_style'] = self.image_answer_var.get()
         return cfg
 
     def _collect_list_config(self):
         """收集列表段落兜底配置"""
-        return {
+        do_answer = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
+        cfg = {
             'method': self.list_method_var.get(),
             'bullet': self.list_bullet_var.get(),
             'style': self.list_style_var.get(),
-            'answer_method': self.list_method_var2.get(),
-            'answer_bullet': self.list_bullet_var2.get(),
-            'answer_style': self.list_style_var2.get(),
         }
+        if do_answer:
+            cfg['answer_method'] = self.list_method_var2.get()
+            cfg['answer_bullet'] = self.list_bullet_var2.get()
+            cfg['answer_style'] = self.list_style_var2.get()
+        return cfg
 
 
 class DocumentConverterGUI:
@@ -1970,6 +2011,15 @@ class DocumentConverterGUI:
                 _list_method = file_list_config.get('method', 'bullet') if file_list_config else 'bullet'
                 _list_bullet = file_list_config.get('bullet', '● ') if file_list_config else '● '
                 _list_style = file_list_config.get('style', 'Body Text') if file_list_config else 'Body Text'
+                # 当 do_answer=0 时，应答原文的列表配置不应生效
+                if _do_answer:
+                    _list_answer_method = file_list_config.get('answer_method', 'bullet') if file_list_config else 'bullet'
+                    _list_answer_bullet = file_list_config.get('answer_bullet', '● ') if file_list_config else '● '
+                    _list_answer_style = file_list_config.get('answer_style', 'Body Text') if file_list_config else 'Body Text'
+                else:
+                    _list_answer_method = 'bullet'
+                    _list_answer_bullet = '● '
+                    _list_answer_style = 'Body Text'
                 
                 # 执行转换
                 success, actual_file, msg = self.converter.full_convert(
@@ -1984,6 +2034,11 @@ class DocumentConverterGUI:
                     answer_copy_style=_answer_copy,
                     table_answer_style=file_tbl_img_config.get('table_answer_style', ''),
                     list_bullet=_list_bullet,
+                    list_method=_list_method,
+                    list_style=_list_style,
+                    list_answer_method=_list_answer_method,
+                    list_answer_style=_list_answer_style,
+                    list_answer_bullet=_list_answer_bullet,
                     do_answer_insertion=_do_answer,
                     answer_mode=_answer_mode,
                     do_hint_insertion=self.do_hint_insertion.get(),
@@ -2103,7 +2158,12 @@ class DocumentConverterGUI:
                     _answer_copy = file_answer_config.get('answer_copy_style', '') if file_answer_config else ''
                     _answer_mode_label = file_answer_config.get('answer_mode', '章节标题后插入') if file_answer_config else '章节标题后插入'
                     _answer_mode = self.answer_mode_options.get(_answer_mode_label, "before_heading")
+                    _list_method = file_list_config.get('method', 'bullet') if file_list_config else 'bullet'
                     _list_bullet = file_list_config.get('bullet', '● ') if file_list_config else '● '
+                    _list_style = file_list_config.get('style', 'Body Text') if file_list_config else 'Body Text'
+                    _list_answer_method = file_list_config.get('answer_method', 'bullet') if file_list_config else 'bullet'
+                    _list_answer_bullet = file_list_config.get('answer_bullet', '● ') if file_list_config else '● '
+                    _list_answer_style = file_list_config.get('answer_style', 'Body Text') if file_list_config else 'Body Text'
                     
                     success, actual_file, msg = self.converter.full_convert(
                         source_file=source,
@@ -2117,6 +2177,11 @@ class DocumentConverterGUI:
                         answer_copy_style=_answer_copy,
                         table_answer_style=file_tbl_img_config.get('table_answer_style', ''),
                         list_bullet=_list_bullet,
+                        list_method=_list_method,
+                        list_style=_list_style,
+                        list_answer_method=_list_answer_method,
+                        list_answer_style=_list_answer_style,
+                        list_answer_bullet=_list_answer_bullet,
                         do_answer_insertion=_do_answer,
                         answer_mode=_answer_mode,
                         do_hint_insertion=self.do_hint_insertion.get(),
