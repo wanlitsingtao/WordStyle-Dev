@@ -112,7 +112,7 @@ class StyleMappingDialog:
         step1_frame.pack(fill=X, padx=5, pady=(1, 1))
         if not self.heading_styles:
             Label(step1_frame, text="（当前源文档未检测到标题样式）",
-                  font=("微软雅黑", 9), fg="gray").pack(anchor=W, pady=1)
+                  font=("微软雅黑", 9), fg="black").pack(anchor=W, pady=1)
         else:
             # 步骤1内部使用可滚动容器：固定高度，内容多时滚动
             hdr = Frame(step1_frame)
@@ -164,7 +164,7 @@ class StyleMappingDialog:
         r0 = Frame(step2_frame)
         r0.pack(fill=X, pady=0)
         self.do_answer_var = IntVar(value=self.current_answer_config.get('do_answer', 0))
-        Checkbutton(r0, text="插入应答句", variable=self.do_answer_var,
+        Checkbutton(r0, text="插入模式", variable=self.do_answer_var,
                     font=("微软雅黑", 9), command=self.toggle_answer_section).pack(side=LEFT, padx=(0, 3))
         Label(r0, text="文本:", width=4, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT)
         saved_answer_text = self.current_answer_config.get('answer_text', '应答：本投标人理解并满足要求。')
@@ -182,7 +182,7 @@ class StyleMappingDialog:
         self.answer_style_combo['values'] = self.template_styles
         self.answer_style_combo.pack(side=LEFT, padx=1)
 
-        Label(r1, text="插入:", width=5, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
+        Label(r1, text="插入模式:", width=7, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
         self.answer_mode_labels = ["章节标题后插入", "章节末尾插入", "原文+应答句+应答原文", "逐段前插入", "逐段后插入"]
         saved_answer_mode = self.current_answer_config.get('answer_mode', self.answer_mode_labels[2])
         if saved_answer_mode not in self.answer_mode_labels:
@@ -241,9 +241,9 @@ class StyleMappingDialog:
         thf = Frame(step4_frame)
         thf.pack(fill=X, pady=0)
         Label(thf, text="", font=("微软雅黑", 9), width=8, anchor=W).pack(side=LEFT)
-        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=15, anchor=CENTER).pack(side=LEFT)
-        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=15, anchor=CENTER).pack(side=LEFT)
-        Label(thf, text="  图片", font=("微软雅黑", 9, "bold"), fg="#1565C0", anchor=W).pack(side=LEFT, padx=(18, 1))
+        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="black", width=15, anchor=CENTER).pack(side=LEFT)
+        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="black", width=15, anchor=CENTER).pack(side=LEFT)
+        Label(thf, text="  图片", font=("微软雅黑", 9, "bold"), fg="black", anchor=W).pack(side=LEFT, padx=(18, 1))
         Label(thf, text="原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
         Label(thf, text="应答原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
 
@@ -281,48 +281,42 @@ class StyleMappingDialog:
         self.toggle_table_style()
         self.toggle_image_style()
 
-        # --- 第2行：列表段落（原文+应答 同一行） ---
+        # --- 第2行：列表段落（原文+应答 同一行，标签+控件全部在同一行） ---
         lf = Frame(step4_frame)
         lf.pack(fill=X, pady=(1, 0))
-        Label(lf, text="列表段落（未映射）", font=("微软雅黑", 9, "bold"), fg="#1565C0").pack(side=LEFT, padx=(0, 3))
-        # 列标题（与表格共用同一对齐）
-        Label(lf, text="原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=28, anchor=CENTER).pack(side=LEFT)
-        Label(lf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="#1565C0", width=28, anchor=CENTER).pack(side=LEFT)
-        # 第2行：控件行
-        lf2 = Frame(step4_frame)
-        lf2.pack(fill=X, pady=0)
-        Label(lf2, text="", font=("微软雅黑", 9), width=14, anchor=W).pack(side=LEFT)
-        # 原文控件
+        # 标签：列表段落（未映射）
+        Label(lf, text="列表段落（未映射）", font=("微软雅黑", 9, "bold"), fg="black", width=14, anchor=W).pack(side=LEFT)
+        # 原文控件（符号/样式在同一行）
         self.list_method_var = StringVar(value=self.current_list_config.get('method', 'bullet'))
-        Radiobutton(lf2, text="符号", variable=self.list_method_var, value="bullet",
+        Radiobutton(lf, text="符号", variable=self.list_method_var, value="bullet",
                     font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=0)
         sld = self.current_list_config.get('bullet', '* ')
         self.list_bullet_var = StringVar(value=sld)
-        self.list_bullet_entry = Entry(lf2, textvariable=self.list_bullet_var, width=4, font=("微软雅黑", 9))
+        self.list_bullet_entry = Entry(lf, textvariable=self.list_bullet_var, width=4, font=("微软雅黑", 9))
         self.list_bullet_entry.pack(side=LEFT, padx=1)
-        Radiobutton(lf2, text="样式", variable=self.list_method_var, value="style",
+        Radiobutton(lf, text="样式", variable=self.list_method_var, value="style",
                     font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=(3, 0))
         slsd = self.current_list_config.get('style', 'Body Text')
         self.list_style_var = StringVar(value=slsd)
-        self.list_style_combo = ttk.Combobox(lf2, textvariable=self.list_style_var, width=14, state="readonly")
+        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=14, state="readonly")
         self.list_style_combo['values'] = self.template_styles
         self.list_style_combo.pack(side=LEFT, padx=1)
         self.toggle_list_method()
         # 应答原文控件
-        Label(lf2, text="", width=8).pack(side=LEFT)
+        Label(lf, text="", width=2).pack(side=LEFT)
         saved_list_method2 = self.current_list_config.get('answer_method', self.list_method_var.get())
         self.list_method_var2 = StringVar(value=saved_list_method2)
-        Radiobutton(lf2, text="符号", variable=self.list_method_var2, value="bullet",
+        Radiobutton(lf, text="符号", variable=self.list_method_var2, value="bullet",
                     font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=0)
         sld2 = self.current_list_config.get('answer_bullet', self.list_bullet_var.get())
         self.list_bullet_var2 = StringVar(value=sld2)
-        self.list_bullet_entry2 = Entry(lf2, textvariable=self.list_bullet_var2, width=4, font=("微软雅黑", 9))
+        self.list_bullet_entry2 = Entry(lf, textvariable=self.list_bullet_var2, width=4, font=("微软雅黑", 9))
         self.list_bullet_entry2.pack(side=LEFT, padx=1)
-        Radiobutton(lf2, text="样式", variable=self.list_method_var2, value="style",
+        Radiobutton(lf, text="样式", variable=self.list_method_var2, value="style",
                     font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=(3, 0))
         slsd2 = self.current_list_config.get('answer_style', self.list_style_var.get())
         self.list_style_var2 = StringVar(value=slsd2)
-        self.list_style_combo2 = ttk.Combobox(lf2, textvariable=self.list_style_var2, width=14, state="readonly")
+        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=14, state="readonly")
         self.list_style_combo2['values'] = self.template_styles
         self.list_style_combo2.pack(side=LEFT, padx=1)
         self.toggle_list_method2()
@@ -723,7 +717,7 @@ class DocumentConverterGUI:
         # 在可滚动容器中创建内容
         # ========== 文件选择区域 ==========
         file_frame = LabelFrame(scrollable_main, text="文件选择", font=("微软雅黑", 10),
-                                padx=10, pady=10)
+                                padx=10, pady=10, fg="#0000FF")
         file_frame.pack(fill=X, pady=10, padx=10)
         
         # 添加 Visio 图提示（居中显示）
@@ -776,7 +770,7 @@ class DocumentConverterGUI:
         
         # ========== 样式信息区域（包含三个列表）==========
         styles_frame = LabelFrame(scrollable_main, text="样式信息", font=("微软雅黑", 10),
-                                  padx=10, pady=10)
+                                  padx=10, pady=10, fg="#0000FF")
         styles_frame.pack(fill=BOTH, expand=False, pady=5, padx=10)
         
         # 样式映射按钮和提示
@@ -787,7 +781,7 @@ class DocumentConverterGUI:
                width=15, font=("微软雅黑", 9, "bold"), bg="#2196F3", fg="white").pack(side=LEFT)
         
         Label(btn_row, text="  （选择源文件后点击按钮配置该文件的样式映射）", 
-              font=("微软雅黑", 8), fg="gray").pack(side=LEFT)
+              font=("微软雅黑", 8), fg="black").pack(side=LEFT)
         
         # 三栏布局：源文件列表、源样式列表、模板样式列表
         styles_container = Frame(styles_frame)
@@ -798,7 +792,7 @@ class DocumentConverterGUI:
         file_list_frame.pack(side=LEFT, fill=BOTH, expand=True, padx=5)
         
         Label(file_list_frame, text="源文件列表", font=("微软雅黑", 9, "bold")).pack(anchor=W)
-        Label(file_list_frame, text="（点击选择）", font=("微软雅黑", 8), fg="gray").pack(anchor=W)
+        Label(file_list_frame, text="（点击选择）", font=("微软雅黑", 8), fg="black").pack(anchor=W)
         
         file_scroll = Scrollbar(file_list_frame)
         file_scroll.pack(side=RIGHT, fill=Y)
@@ -816,7 +810,7 @@ class DocumentConverterGUI:
         source_style_frame.pack(side=LEFT, fill=BOTH, expand=True, padx=5)
         
         Label(source_style_frame, text="源文档样式", font=("微软雅黑", 9, "bold")).pack(anchor=W)
-        Label(source_style_frame, text="（选中文件的样式）", font=("微软雅黑", 8), fg="gray").pack(anchor=W)
+        Label(source_style_frame, text="（选中文件的样式）", font=("微软雅黑", 8), fg="black").pack(anchor=W)
         
         source_scroll = Scrollbar(source_style_frame)
         source_scroll.pack(side=RIGHT, fill=Y)
@@ -831,7 +825,7 @@ class DocumentConverterGUI:
         right_frame.pack(side=LEFT, fill=BOTH, expand=True, padx=5)
         
         Label(right_frame, text="模板文档样式", font=("微软雅黑", 9, "bold")).pack(anchor=W)
-        Label(right_frame, text="（可用的目标样式）", font=("微软雅黑", 8), fg="gray").pack(anchor=W)
+        Label(right_frame, text="（可用的目标样式）", font=("微软雅黑", 8), fg="black").pack(anchor=W)
         
         template_scroll = Scrollbar(right_frame)
         template_scroll.pack(side=RIGHT, fill=Y)
@@ -843,7 +837,7 @@ class DocumentConverterGUI:
         
         # ========== 转换选项区域 ==========
         options_frame = LabelFrame(scrollable_main, text="转换选项", font=("微软雅黑", 10),
-                                   padx=10, pady=10)
+                                   padx=10, pady=10, fg="#0000FF")
         options_frame.pack(fill=X, pady=5, padx=10)
         
         # 复选框（并排显示）
