@@ -1938,10 +1938,26 @@ class DocumentConverter:
                 elem.remove(end)
         
         def _elem_has_numbering(elem):
-            """检查XML元素（w:p）是否有编号"""
+            """检查XML元素（w:p）是否有编号
+            检查两种方式：
+            1. 段落元素自身是否有 w:numPr（直接定义的编号）
+            2. 段落样式（pStyle）是否在样式定义中包含 w:numPr（样式自带的编号）
+            """
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
-                return pPr.find(qn('w:numPr')) is not None
+                if pPr.find(qn('w:numPr')) is not None:
+                    return True
+                # 检查段落样式是否自带编号
+                pStyle = pPr.find(qn('w:pStyle'))
+                if pStyle is not None:
+                    pStyle_val = pStyle.get(qn('w:val'))
+                    if pStyle_val:
+                        try:
+                            style_xml = doc.styles[pStyle_val]._element.xml
+                            if '<w:numPr>' in style_xml:
+                                return True
+                        except Exception:
+                            pass
             return False
         
         def _get_list_answer_style_id():
@@ -2074,8 +2090,27 @@ class DocumentConverter:
                         child_pPr = child.find(qn('w:pPr'))
                         child_numPr = child_pPr.find(qn('w:numPr')) if child_pPr is not None else None
                         
+                        # 判断是否为列表段落
+                        _is_list_para = child_numPr is not None
+                        if not _is_list_para:
+                            # 获取段落样式ID
+                            _pStyle_val = None
+                            if child_pPr is not None:
+                                _pStyle_elem = child_pPr.find(qn('w:pStyle'))
+                                if _pStyle_elem is not None:
+                                    _pStyle_val = _pStyle_elem.get(qn('w:val'))
+                            # 补充检查1：段落样式名是否为虚拟列表样式（样式名包含"列表段落"）
+                            if _pStyle_val and ('列表段落' in _pStyle_val):
+                                _is_list_para = True
+                            if not _is_list_para:
+                                # 补充检查2：list_method='style'时，检查段落的 style_id 是否等于 list_style 的 style_id
+                                if _pStyle_val and list_method == 'style' and list_style:
+                                    _list_sid = self.get_style_id_by_name(doc, list_style)
+                                    if _list_sid and _pStyle_val == _list_sid:
+                                        _is_list_para = True
+                        
                         # ★ 修复：列表段落用 deepcopy(child) 保留原始列表结构，再用指定样式覆盖
-                        if child_numPr is not None:
+                        if _is_list_para:
                             source_elem = deepcopy(child)
                             # 添加 keepOriginal 标记，使其在语气转换时保留未转换状态
                             bookmark_start = OxmlElement('w:bookmarkStart')
@@ -2199,7 +2234,25 @@ class DocumentConverter:
                         new_children.append(source_elem)
                         continue
                     # 判断是否为列表段落：原段落有 numPr 且启用了 style 模式
-                    is_list_para = (_elem_has_numbering(elem) and 
+                    # 补充检查：如果段落样式为虚拟列表样式也视为列表段落
+                    _has_numpr = _elem_has_numbering(elem)
+                    _has_list_style = False
+                    _is_style_match = False
+                    if not _has_numpr:
+                        _pPr_el = elem.find(qn('w:pPr'))
+                        if _pPr_el is not None:
+                            _pS_el = _pPr_el.find(qn('w:pStyle'))
+                            if _pS_el is not None:
+                                _ps_val = _pS_el.get(qn('w:val'))
+                                # 检查1：虚拟列表样式
+                                if _ps_val and '列表段落' in str(_ps_val):
+                                    _has_list_style = True
+                                # 检查2：list_answer_method='style'时匹配 style_id
+                                if not _has_list_style and _ps_val and list_answer_method == 'style' and list_answer_style:
+                                    _ans_sid = self.get_style_id_by_name(doc, list_answer_style)
+                                    if _ans_sid and _ps_val == _ans_sid:
+                                        _is_style_match = True
+                    is_list_para = ((_has_numpr or _has_list_style or _is_style_match) and 
                                     list_answer_method == 'style' and 
                                     list_answer_style)
                     if is_list_para:
