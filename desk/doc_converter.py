@@ -414,14 +414,17 @@ class DocumentConverter:
         """移除手动编号（智能判断中文数字是否为编号）
         
         仅匹配独立的编号格式，不会误伤文本中的数字（如"17号线"中的"17"）。
+        改进：支持"1 .总则"（数字与分隔符之间有空格）等变体格式。
         """
         fragment_patterns = [
             # 多级阿拉伯数字编号："1.1"、"1.1.1"、"14.2.1"等，点分隔，后面可选分隔符或直接跟文字
-            r'\d+\.\d+(?:\.\d+)*(?:[\.、，,）\)\s]|(?=\D|$))',
+            # 允许数字与点之间有空格，如"1 .总则"
+            r'\d+\s*\.\s*\d+(?:\s*\.\s*\d+)*(?:\s*[\.、，,）\)\s]|(?=\D|$))',
             # 单级阿拉伯数字编号："1."、"1、"、"1）"等，必须有显式分隔符，避免误伤"17号线"
-            r'\d+[\.、，,）\)\s]',
+            # 允许数字与分隔符之间有空格：如"1 .总则"、"1 、总则"
+            r'\d+\s*[\.、，,）\)\s]',
             # 中文数字后带分隔符才视为编号
-            r'[一二三四五六七八九十]+[、.．)）]',
+            r'[一二三四五六七八九十]+\s*[、.．)）]',
             # 括号内的中/阿拉伯数字编号（如"（二）"、"（1）"）
             r'（[一二三四五六七八九十0-9]+）',
             r'\([0-9]+\)',
@@ -439,6 +442,25 @@ class DocumentConverter:
                 break
         return cleaned
     
+    def _clean_residual_numbering_artifacts(self, text):
+        """清理自动编号段落中残留的手动编号痕迹
+        
+        当段落具有自动编号（numPr）时，原文中可能残留：
+        - 前导点号：如".总则"（原始文档中自动编号提供"1"，文本残留"."）
+        - 空格+点号：如" .总则"
+        - 前导空格：如"  概述"
+        - 其他分隔符残留
+        
+        此方法仅在段落有自动编号时调用，用于清理这些残留字符。
+        """
+        if not text:
+            return text
+        
+        # 清理前导的点号、空格、分隔符等（这些是手动编号被自动编号取代后残留的）
+        cleaned = re.sub(r'^[\s\.．、，,）\)]+', '', text)
+        
+        return cleaned
+    
     def remove_chapter_section_marking(self, text):
         """移除"第X章/第X节/第X篇/第X部分"等章节标记
         
@@ -452,7 +474,292 @@ class DocumentConverter:
         chapter_pattern = r'^\s*第[一二三四五六七八九十]+(?:部分|[章节篇])[\s、，]*'
         cleaned = re.sub(chapter_pattern, '', text).strip()
         return cleaned
+
+    def _copy_numPr_to_paragraph(self, target_para, src_numPr):
+        """复制自动编号定义(numPr)到目标段落"""
+        if src_numPr is None:
+            return
+        new_pPr = target_para._element.find(qn('w:pPr'))
+        if new_pPr is None:
+            new_pPr = etree.SubElement(target_para._element, qn('w:pPr'))
+            target_para._element.insert(0, new_pPr)
+        new_numPr = etree.SubElement(new_pPr, qn('w:numPr'))
+        for child_tag in ['w:numId', 'w:ilvl']:
+            src_child = src_numPr.find(qn(child_tag))
+            if src_child is not None:
+                val = src_child.get(qn('w:val'))
+                if val is not None:
+                    new_child = etree.SubElement(new_numPr, qn(child_tag))
+                    new_child.set(qn('w:val'), val)
+
+    def _is_chapter_style_numbering(self, para):
+        """判断段落的自动编号是否是章节样式（如"第%1节"、"第%1章"等）
+        
+        返回 True 如果编号模板中包含"第"字，表示是章节标记类编号。
+        用于在不勾选"清除章/节/篇"时，仅对章节类编号进行解析和保留。
+        """
+        result = self._get_numbering_lvl_text(para)
+        if result and '第' in result:
+            return True
+        return False
+
+    def _get_numbering_lvl_text(self, para):
+        """获取段落自动编号的 lvlText 模板
+        
+        返回 lvlText 的 val 属性值（如"第%1节"、"%1"、"%1.%2"等），
+        如果无法获取则返回空字符串。
+        """
+        pPr = para._element.find(qn('w:pPr'))
+        if pPr is None:
+            return ''
+        numPr = pPr.find(qn('w:numPr'))
+        if numPr is None:
+            return ''
+        numId_elem = numPr.find(qn('w:numId'))
+        ilvl_elem = numPr.find(qn('w:ilvl'))
+        if numId_elem is None or ilvl_elem is None:
+            return ''
+        numId = numId_elem.get(qn('w:val'))
+        ilvl = ilvl_elem.get(qn('w:val'))
+        if numId is None or ilvl is None:
+            return ''
+        
+        try:
+            doc = para.part.document
+            numbering_part = doc.part.numbering_part
+            root = numbering_part._element
+            nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            
+            abstractNumId = None
+            for num in root.findall('.//w:num', nsmap):
+                nid = num.get(qn('w:numId'))
+                if nid == numId:
+                    abs_ref = num.find('w:abstractNumId', nsmap)
+                    if abs_ref is not None:
+                        abstractNumId = abs_ref.get(qn('w:val'))
+                    break
+            if abstractNumId is None:
+                return ''
+            
+            abstractNum = None
+            for an in root.findall('.//w:abstractNum', nsmap):
+                aid = an.get(qn('w:abstractNumId'))
+                if aid == abstractNumId:
+                    abstractNum = an
+                    break
+            if abstractNum is None:
+                return ''
+            
+            current_lvl = None
+            for l in abstractNum.findall('w:lvl', nsmap):
+                li = l.get(qn('w:ilvl'))
+                if li == ilvl:
+                    current_lvl = l
+                    break
+            if current_lvl is None:
+                return ''
+            
+            lvlText_elem = current_lvl.find('w:lvlText', nsmap)
+            if lvlText_elem is None:
+                return ''
+            return lvlText_elem.get(qn('w:val'), '')
+        except Exception:
+            return ''
+
+    def _resolve_auto_numbering_text(self, para):
+        """解析段落自动编号的文本表示（如numId=4, ilvl=0 → "第二节"）
+        
+        通过访问源文档的 numbering part（内存中的 XML），查找 numId 对应的
+        abstractNumId，再找到对应级别的 lvlText 和 numFmt，结合编号实例的
+        当前值，生成完整的编号文本。如果无法解析，返回空字符串。
+        
+        改进：支持多级编号占位符（%1、%2、%3...）的完整解析。
+        例如 lvlText='%1.%2.%3' 时，会分别解析级别0、1、2的编号值，
+        正确替换所有占位符，避免出现未替换的"%2"等残留字符。
+        """
+        # 获取段落的 numPr
+        pPr = para._element.find(qn('w:pPr'))
+        if pPr is None:
+            return ''
+        numPr = pPr.find(qn('w:numPr'))
+        if numPr is None:
+            return ''
+        
+        numId_elem = numPr.find(qn('w:numId'))
+        ilvl_elem = numPr.find(qn('w:ilvl'))
+        if numId_elem is None or ilvl_elem is None:
+            return ''
+        
+        numId = numId_elem.get(qn('w:val'))
+        ilvl = ilvl_elem.get(qn('w:val'))
+        if numId is None or ilvl is None:
+            return ''
+        
+        try:
+            # 获取文档的 numbering part（内存中的 XML）
+            doc = para.part.document
+            numbering_part = doc.part.numbering_part
+            root = numbering_part._element
+            
+            nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            
+            # 查找 numId 对应的抽象编号
+            abstractNumId = None
+            for num in root.findall('.//w:num', nsmap):
+                nid = num.get(qn('w:numId'))
+                if nid == numId:
+                    abs_ref = num.find('w:abstractNumId', nsmap)
+                    if abs_ref is not None:
+                        abstractNumId = abs_ref.get(qn('w:val'))
+                    break
+            
+            if abstractNumId is None:
+                return ''
+            
+            # 查找抽象编号定义
+            abstractNum = None
+            for an in root.findall('.//w:abstractNum', nsmap):
+                aid = an.get(qn('w:abstractNumId'))
+                if aid == abstractNumId:
+                    abstractNum = an
+                    break
+            
+            if abstractNum is None:
+                return ''
+            
+            # 查找当前级别的定义，获取 lvlText 模板
+            current_lvl = None
+            for l in abstractNum.findall('w:lvl', nsmap):
+                li = l.get(qn('w:ilvl'))
+                if li == ilvl:
+                    current_lvl = l
+                    break
+            
+            if current_lvl is None:
+                return ''
+            
+            # 获取文本模板
+            lvlText_elem = current_lvl.find('w:lvlText', nsmap)
+            if lvlText_elem is None:
+                return ''
+            lvlText = lvlText_elem.get(qn('w:val'), '')
+            
+            if not lvlText:
+                return ''
+            
+            # 查找所有占位符 %1, %2, %3, ...
+            import re
+            placeholders = set(re.findall(r'%(\d+)', lvlText))
+            
+            # 对每个占位符级别，解析对应的编号值
+            result = lvlText
+            for ph in placeholders:
+                level = int(ph) - 1  # %1 → level 0, %2 → level 1, ...
+                level_str = str(level)
+                
+                # 查找该级别的定义
+                lvl_def = None
+                for l in abstractNum.findall('w:lvl', nsmap):
+                    li = l.get(qn('w:ilvl'))
+                    if li == level_str:
+                        lvl_def = l
+                        break
+                
+                if lvl_def is None:
+                    # 级别定义不存在，用当前级别的 fmt 替代
+                    lvl_def = current_lvl
+                
+                # 获取起始值（默认1）
+                start_elem = lvl_def.find('w:start', nsmap)
+                start_val = 1
+                if start_elem is not None:
+                    start_val = int(start_elem.get(qn('w:val'), '1'))
+                
+                # 检查 num 元素是否有该级别的 lvlOverride
+                for num in root.findall('.//w:num', nsmap):
+                    nid = num.get(qn('w:numId'))
+                    if nid == numId:
+                        for lo in num.findall('w:lvlOverride', nsmap):
+                            loi = lo.get(qn('w:ilvl'))
+                            if loi == level_str:
+                                so = lo.find('w:startOverride', nsmap)
+                                if so is not None:
+                                    start_val = int(so.get(qn('w:val'), str(start_val)))
+                        break
+                
+                # 统计该 numId+ilvl 在此段落之前出现的次数
+                count = 0
+                for p in doc.paragraphs:
+                    # 先检查是否已到达当前段落（基于 element identity）
+                    if p._element is para._element:
+                        break
+                    ppPr = p._element.find(qn('w:pPr'))
+                    if ppPr is not None:
+                        pnumPr = ppPr.find(qn('w:numPr'))
+                        if pnumPr is not None:
+                            pnid = pnumPr.find(qn('w:numId'))
+                            if pnid is not None and pnid.get(qn('w:val')) == numId:
+                                pilvl = pnumPr.find(qn('w:ilvl'))
+                                if pilvl is not None and pilvl.get(qn('w:val')) == level_str:
+                                    count += 1
+                
+                current_num = start_val + count
+                
+                # 获取编号格式
+                numFmt_elem = lvl_def.find('w:numFmt', nsmap)
+                if numFmt_elem is None:
+                    continue
+                numFmt = numFmt_elem.get(qn('w:val'), '')
+                
+                # 将编号值转换为对应格式的文本
+                num_text = self._format_numbering_value(current_num, numFmt)
+                if num_text is None:
+                    continue
+                
+                # 替换占位符
+                result = result.replace('%' + ph, num_text)
+            
+            # 编号文本后加一个空格，与段落文本分隔
+            if result:
+                result = result + ' '
+            
+            return result
+        except Exception:
+            return ''
     
+    def _format_numbering_value(self, num, fmt):
+        """将数字编号值转换为指定格式的文本"""
+        if fmt == 'decimal':
+            return str(num)
+        elif fmt in ('upperRoman', 'upperLetter'):
+            # 大写罗马数字/字母 - 简化处理
+            return str(num)
+        elif fmt in ('lowerRoman', 'lowerLetter'):
+            return str(num)
+        elif fmt in ('chineseCounting', 'chineseCountingThousand', 'japaneseCounting'):
+            # 中文数字：一、二、三...
+            chinese_nums = '一二三四五六七八九十'
+            if num <= 10:
+                return chinese_nums[num - 1]
+            elif num < 100:
+                tens = num // 10
+                ones = num % 10
+                if tens == 1:
+                    result = '十'
+                else:
+                    result = chinese_nums[tens - 1] + '十'
+                if ones > 0:
+                    result += chinese_nums[ones - 1]
+                return result
+            return str(num)
+        elif fmt == 'bullet':
+            # 项目符号 - 返回空或符号本身
+            return ''
+        elif fmt == 'none':
+            return ''
+        else:
+            return str(num)
+
     def get_target_style(self, original_style_name, template_doc, source_file=""):
         """获取目标样式名称"""
         # 使用实例变量中的样式映射，避免使用全局变量
@@ -796,7 +1103,11 @@ class DocumentConverter:
         is_heading_by_style = src_style_name in HEADING_STYLES
         
         if is_heading_by_outline or is_heading_by_style:
-            full_text = ''.join(run.text for run in source_para.runs)
+            # 使用 para.text 而非手动拼接 runs，因为 runs 不包含超链接(w:hyperlink)内部的 run 文本
+            # 例如"第六章  图纸（如有）"中，"第六章"和"图纸"在 hyperlink 内部，runs 无法获取
+            full_text = source_para.text
+            has_auto_numbering = self.has_numbering(source_para)
+            
             if remove_chapter_label:
                 # 勾选"清除第X章/第X节"：
                 # 1. 移除自动编号（章节标记可能来自自动编号，如numId=17→"第二节"）
@@ -805,11 +1116,24 @@ class DocumentConverter:
                 cleaned_text = self.remove_chapter_section_marking(full_text)
                 # 3. 清理常规手动编号（"一、"、"3.1"等）
                 cleaned_text = self.remove_manual_numbering(cleaned_text)
+                # 4. 如果有自动编号，清理残留的手动编号痕迹（如".总则"中的前导点）
+                if has_auto_numbering:
+                    cleaned_text = self._clean_residual_numbering_artifacts(cleaned_text)
             else:
                 # 未勾选"清除第X章/第X节"：
                 # 保留章节标记，只清理常规手动编号（"一、"、"3.1"、"（1）"等）
-                # 注意：改进后的remove_manual_numbering不会误伤文本中的数字（如"17号线"）
                 cleaned_text = self.remove_manual_numbering(full_text)
+                # 如果有自动编号，清理残留的手动编号痕迹
+                if has_auto_numbering:
+                    cleaned_text = self._clean_residual_numbering_artifacts(cleaned_text)
+                # ★ 修复：不直接复制 numPr（不同文档的 numId 映射不同，会导致错误编号），
+                # 改为选择性解析自动编号：
+                # 1. 如果编号是章节样式（如"第%1节"→"第二节"），解析并拼接到文本前
+                # 2. 普通数字编号（如"%1"→"1"、"%1.%2"→"1.1"）不解析，避免文本中出现冗余编号
+                if has_auto_numbering and self._is_chapter_style_numbering(source_para):
+                    numbering_text = self._resolve_auto_numbering_text(source_para)
+                    if numbering_text:
+                        cleaned_text = numbering_text + cleaned_text
             new_para.clear()
             new_para.add_run(cleaned_text)
             for run_idx, run in enumerate(source_para.runs):
@@ -871,30 +1195,59 @@ class DocumentConverter:
                                 if val is not None:
                                     new_child = etree.SubElement(new_numPr, qn(child_tag))
                                     new_child.set(qn('w:val'), val)
-                for run_idx, run in enumerate(source_para.runs):
-                    blips = run._element.findall('.//' + qn('a:blip'))
-                    if blips:
-                        for blip in blips:
-                            rId = blip.get(qn('r:embed'))
-                            if rId:
-                                try:
-                                    img_part = source_para.part.related_parts[rId]
-                                    img_bytes = img_part.blob
-                                    emu_w, emu_h = self.get_image_extent(blip)
-                                    pic_run = new_para.add_run()
-                                    self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
-                                except Exception:
-                                    pass
-                    else:
-                        if run.text:
-                            new_para.add_run(run.text)
+                # 使用 para.text 获取完整文本（包括超链接内部的run）
+                list_runs_text = ''.join(run.text for run in source_para.runs)
+                list_full_text = source_para.text
+                if list_full_text and len(list_full_text) > len(list_runs_text):
+                    # 有超链接内部文本，使用完整文本
+                    # 但仍需处理图片
+                    for run_idx, run in enumerate(source_para.runs):
+                        blips = run._element.findall('.//' + qn('a:blip'))
+                        if blips:
+                            for blip in blips:
+                                rId = blip.get(qn('r:embed'))
+                                if rId:
+                                    try:
+                                        img_part = source_para.part.related_parts[rId]
+                                        img_bytes = img_part.blob
+                                        emu_w, emu_h = self.get_image_extent(blip)
+                                        pic_run = new_para.add_run()
+                                        self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                                    except Exception:
+                                        pass
+                    if list_full_text.strip():
+                        new_para.add_run(list_full_text.strip())
+                else:
+                    for run_idx, run in enumerate(source_para.runs):
+                        blips = run._element.findall('.//' + qn('a:blip'))
+                        if blips:
+                            for blip in blips:
+                                rId = blip.get(qn('r:embed'))
+                                if rId:
+                                    try:
+                                        img_part = source_para.part.related_parts[rId]
+                                        img_bytes = img_part.blob
+                                        emu_w, emu_h = self.get_image_extent(blip)
+                                        pic_run = new_para.add_run()
+                                        self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                                    except Exception:
+                                        pass
+                        else:
+                            if run.text:
+                                new_para.add_run(run.text)
                 return new_para
             else:
                 # "符号"模式：保留原有逻辑（添加 bullet 符号，清除编号）
                 new_para.add_run(self.list_bullet)
                 self.remove_auto_numbering(new_para)
                 # 对于列表段落，使用专门的编号清理函数
-                full_text = ''.join(run.text for run in source_para.runs)
+                # 使用 para.text 获取完整文本（包括超链接内部的run）
+                symbol_runs_text = ''.join(run.text for run in source_para.runs)
+                symbol_full_text = source_para.text
+                if symbol_full_text and len(symbol_full_text) > len(symbol_runs_text):
+                    full_text = symbol_full_text
+                else:
+                    full_text = symbol_runs_text
                 cleaned_text = clean_list_numbering(full_text)
                 if cleaned_text:
                     new_para.add_run(cleaned_text)
@@ -913,23 +1266,50 @@ class DocumentConverter:
                                 pass
                 return new_para
         
-        for run_idx, run in enumerate(source_para.runs):
-            blips = run._element.findall('.//' + qn('a:blip'))
-            if blips:
-                for blip in blips:
-                    rId = blip.get(qn('r:embed'))
-                    if rId:
-                        try:
-                            img_part = source_para.part.related_parts[rId]
-                            img_bytes = img_part.blob
-                            emu_w, emu_h = self.get_image_extent(blip)
-                            pic_run = new_para.add_run()
-                            self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
-                        except Exception:
-                            pass
-            else:
-                if run.text:
-                    new_para.add_run(run.text)
+        # 获取段落完整文本（包括超链接内部的run文本）
+        # python-docx 的 para.runs 不返回超链接(w:hyperlink)内部的run，需要用 para.text
+        runs_text = ''.join(run.text for run in source_para.runs)
+        full_para_text = source_para.text
+        
+        if full_para_text and len(full_para_text) > len(runs_text):
+            # 段落中有超链接内部的隐藏文本，使用完整文本
+            # 但仍需处理图片（图片在直接子级run中）
+            for run_idx, run in enumerate(source_para.runs):
+                blips = run._element.findall('.//' + qn('a:blip'))
+                if blips:
+                    for blip in blips:
+                        rId = blip.get(qn('r:embed'))
+                        if rId:
+                            try:
+                                img_part = source_para.part.related_parts[rId]
+                                img_bytes = img_part.blob
+                                emu_w, emu_h = self.get_image_extent(blip)
+                                pic_run = new_para.add_run()
+                                self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            except Exception:
+                                pass
+            # 使用完整段落文本
+            cleaned_text = full_para_text.strip()
+            if cleaned_text:
+                new_para.add_run(cleaned_text)
+        else:
+            for run_idx, run in enumerate(source_para.runs):
+                blips = run._element.findall('.//' + qn('a:blip'))
+                if blips:
+                    for blip in blips:
+                        rId = blip.get(qn('r:embed'))
+                        if rId:
+                            try:
+                                img_part = source_para.part.related_parts[rId]
+                                img_bytes = img_part.blob
+                                emu_w, emu_h = self.get_image_extent(blip)
+                                pic_run = new_para.add_run()
+                                self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            except Exception:
+                                pass
+                else:
+                    if run.text:
+                        new_para.add_run(run.text)
         
         return new_para
     
