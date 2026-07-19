@@ -82,34 +82,32 @@ class StyleMappingDialog:
         """创建对话框界面"""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("样式映射配置")
+        self.dialog.configure(bg="#f5f7fb")
         screen_width = self.dialog.winfo_screenwidth()
         screen_height = self.dialog.winfo_screenheight()
-        # 固定大小，完整显示所有步骤 + 底部按钮（步骤1/3内部滚动）
-        dialog_width = min(1280, screen_width - 20)
-        dialog_height = min(int(screen_height * 0.85), screen_height - 40)
-        dialog_height = max(dialog_height, 600)
-        self.dialog.minsize(1050, 550)
+        dialog_width = min(1240, max(1040, screen_width - 40))
+        dialog_height = min(820, max(660, int(screen_height * 0.88)))
+        if screen_width >= 1920:
+            dialog_width = min(1280, screen_width - 80)
+            dialog_height = min(860, screen_height - 80)
+        self.dialog.minsize(1040, 650)
         x = max(0, (screen_width - dialog_width) // 2)
-        y = max(0, (screen_height - dialog_height) // 2 - 15)
+        y = max(0, (screen_height - dialog_height) // 2 - 20)
         self.dialog.geometry(f'{dialog_width}x{dialog_height}+{x}+{y}')
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
-        # 确保对话框在显示前完成布局计算
         self.dialog.update_idletasks()
 
-        # ===== 主容器：使用普通 Frame + pack fill，不再整体滚动 =====
-        # 步骤1/3各自内部有独立滚动，主窗口固定显示所有步骤和按钮
-        main_container = Frame(self.dialog)
+        main_container = Frame(self.dialog, bg="#f5f7fb")
         main_container.pack(fill=BOTH, expand=True)
 
-        # 使用普通 Frame 作为主内容容器（无需滚动）
-        scrollable_main = Frame(main_container, borderwidth=0)
+        scrollable_main = Frame(main_container, bg="#f5f7fb", padx=8, pady=6)
         scrollable_main.pack(fill=BOTH, expand=True)
 
         # ===== 步骤1: 标题样式映射（内部可滚动） =====
         step1_frame = LabelFrame(scrollable_main, text="1. 标题样式映射（统一，不分原文/应答句）",
-                                 font=("微软雅黑", 10, "bold"), padx=3, pady=2, fg="#1565C0")
-        step1_frame.pack(fill=X, padx=5, pady=(1, 1))
+                                 font=("微软雅黑", 10, "bold"), padx=8, pady=6, fg="#2563eb", bg="#ffffff")
+        step1_frame.pack(fill=X, padx=5, pady=(2, 4))
         if not self.heading_styles:
             Label(step1_frame, text="（当前源文档未检测到标题样式）",
                   font=("微软雅黑", 9), fg="black").pack(anchor=W, pady=1)
@@ -158,13 +156,13 @@ class StyleMappingDialog:
 
         # ===== 步骤2: 应答句配置 =====
         step2_frame = LabelFrame(scrollable_main, text="2. 应答句配置",
-                                 font=("微软雅黑", 10, "bold"), padx=5, pady=2, fg="#1565C0")
-        step2_frame.pack(fill=X, padx=5, pady=1)
+                                 font=("微软雅黑", 10, "bold"), padx=8, pady=6, fg="#2563eb", bg="#ffffff")
+        step2_frame.pack(fill=X, padx=5, pady=(0, 4))
         # 第1行：启用 + 文本（一行）
         r0 = Frame(step2_frame)
         r0.pack(fill=X, pady=0)
         self.do_answer_var = IntVar(value=self.current_answer_config.get('do_answer', 0))
-        Checkbutton(r0, text="插入模式", variable=self.do_answer_var,
+        Checkbutton(r0, text="插入应答句", variable=self.do_answer_var,
                     font=("微软雅黑", 9), command=self.toggle_answer_section).pack(side=LEFT, padx=(0, 3))
         Label(r0, text="文本:", width=4, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT)
         saved_answer_text = self.current_answer_config.get('answer_text', '应答：本投标人理解并满足要求。')
@@ -209,8 +207,8 @@ class StyleMappingDialog:
 
         # ===== 步骤3: 样式映射（内部可滚动） =====
         self.step3_frame = LabelFrame(scrollable_main, text="3. 样式映射（正文+列表段落）",
-                                      font=("微软雅黑", 10, "bold"), padx=3, pady=2, fg="#1565C0")
-        self.step3_frame.pack(fill=X, padx=5, pady=1)
+                                      font=("微软雅黑", 10, "bold"), padx=8, pady=6, fg="#2563eb", bg="#ffffff")
+        self.step3_frame.pack(fill=X, padx=5, pady=(0, 4))
         # 步骤3内部使用可滚动容器
         self.s3_canvas = Canvas(self.step3_frame, highlightthickness=0, borderwidth=0, height=100)
         self.s3_scrollbar = Scrollbar(self.step3_frame, orient=VERTICAL, command=self.s3_canvas.yview)
@@ -234,8 +232,8 @@ class StyleMappingDialog:
 
         # ===== 步骤4: 表格/图片/列表兜底 =====
         step4_frame = LabelFrame(scrollable_main, text="4. 表格/图片/列表兜底配置",
-                                 font=("微软雅黑", 10, "bold"), padx=3, pady=2, fg="#1565C0")
-        step4_frame.pack(fill=X, padx=5, pady=1)
+                                 font=("微软雅黑", 10, "bold"), padx=8, pady=6, fg="#2563eb", bg="#ffffff")
+        step4_frame.pack(fill=X, padx=5, pady=(0, 6))
 
         # --- 第0行：列标题（原文 / 应答原文） ---
         thf = Frame(step4_frame)
@@ -335,15 +333,14 @@ class StyleMappingDialog:
         is_dual = (do_answer and self.answer_mode_var.get() == "原文+应答句+应答原文")
         self._update_dual_mode_widgets(is_dual)
 
-        # ===== 底部按钮 =====
-        bf = Frame(scrollable_main)
-        bf.pack(fill=X, padx=5, pady=(2, 4))
+        bf = Frame(scrollable_main, bg="#f5f7fb")
+        bf.pack(fill=X, padx=5, pady=(6, 8))
         bf.columnconfigure(0, weight=1)
         bf.columnconfigure(1, weight=1)
         bf.columnconfigure(2, weight=1)
-        Button(bf, text="恢复默认", width=10, font=("微软雅黑", 9), command=self.reset_defaults).grid(row=0, column=0, padx=2)
-        Button(bf, text="设为默认", width=10, font=("微软雅黑", 9), command=self.save_as_default).grid(row=0, column=1, padx=2)
-        Button(bf, text="确认", width=10, font=("微软雅黑", 9, "bold"), command=self.confirm).grid(row=0, column=2, padx=2)
+        Button(bf, text="恢复默认", width=12, font=("微软雅黑", 9), command=self.reset_defaults, bg="#f8fafc", relief="raised").grid(row=0, column=0, padx=3)
+        Button(bf, text="设为默认", width=12, font=("微软雅黑", 9), command=self.save_as_default, bg="#f8fafc", relief="raised").grid(row=0, column=1, padx=3)
+        Button(bf, text="确认", width=12, font=("微软雅黑", 9, "bold"), command=self.confirm, bg="#2563eb", fg="white", relief="raised").grid(row=0, column=2, padx=3)
 
         # 强制刷新布局
         self.dialog.update_idletasks()
@@ -599,18 +596,16 @@ class DocumentConverterGUI:
         self.root.title("Word文档格式转换工具")
         self._apply_ui_theme()
         
-        # 设置窗口为最大化状态，自动适应屏幕并考虑任务栏
         try:
-            # Windows下使用wm_state设置最大化
             self.root.state('zoomed')
         except Exception:
-            # 其他系统使用geometry最大化
             screen_width = root.winfo_screenwidth()
             screen_height = root.winfo_screenheight()
             self.root.geometry(f'{screen_width}x{screen_height}+0+0')
         
-        # 设置最小窗口大小，兼容本机分辨率与 1920×1080
-        self.root.minsize(1180, 720)
+        self.root.minsize(1120, 700)
+        if root.winfo_screenwidth() >= 1920:
+            self.root.geometry('1400x860')
         
         self.converter = DocumentConverter()
         
@@ -672,9 +667,9 @@ class DocumentConverterGUI:
 
     def _apply_ui_theme(self):
         """统一桌面端界面主题，提升本机分辨率与 1920×1080 的视觉适配。"""
-        self.root.configure(bg="#f4f7fb")
+        self.root.configure(bg="#f5f7fb")
         self.root.option_add("*Font", "微软雅黑 10")
-        self.root.option_add("*Background", "#f4f7fb")
+        self.root.option_add("*Background", "#f5f7fb")
         self.root.option_add("*Foreground", "#23395d")
 
         style = ttk.Style(self.root)
@@ -682,9 +677,9 @@ class DocumentConverterGUI:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure("TFrame", background="#f4f7fb")
-        style.configure("TLabelframe", background="#f4f7fb", bordercolor="#d6e2f0")
-        style.configure("TLabelframe.Label", background="#f4f7fb", foreground="#1f4e79", font=("微软雅黑", 10, "bold"))
+        style.configure("TFrame", background="#f5f7fb")
+        style.configure("TLabelframe", background="#ffffff", bordercolor="#dce7f3")
+        style.configure("TLabelframe.Label", background="#ffffff", foreground="#2563eb", font=("微软雅黑", 10, "bold"))
         style.configure("TButton", padding=(10, 7), font=("微软雅黑", 10), background="#2563eb", foreground="white")
         style.map("TButton", background=[("active", "#1d4ed8")], foreground=[("active", "white")])
         style.configure("TEntry", padding=(6, 4), fieldbackground="#ffffff")
