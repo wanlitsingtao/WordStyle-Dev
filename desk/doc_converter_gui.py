@@ -85,10 +85,10 @@ class StyleMappingDialog:
         screen_width = self.dialog.winfo_screenwidth()
         screen_height = self.dialog.winfo_screenheight()
         # 固定大小，完整显示所有步骤 + 底部按钮（步骤1/3内部滚动）
-        dialog_width = min(1180, screen_width - 20)
-        dialog_height = min(int(screen_height * 0.82), screen_height - 40)
-        dialog_height = max(dialog_height, 500)
-        self.dialog.minsize(960, 500)
+        dialog_width = min(1280, screen_width - 20)
+        dialog_height = min(int(screen_height * 0.85), screen_height - 40)
+        dialog_height = max(dialog_height, 600)
+        self.dialog.minsize(1050, 550)
         x = max(0, (screen_width - dialog_width) // 2)
         y = max(0, (screen_height - dialog_height) // 2 - 15)
         self.dialog.geometry(f'{dialog_width}x{dialog_height}+{x}+{y}')
@@ -117,9 +117,9 @@ class StyleMappingDialog:
             # 步骤1内部使用可滚动容器：固定高度，内容多时滚动
             hdr = Frame(step1_frame)
             hdr.pack(fill=X, pady=(1, 1))
-            Label(hdr, text="源标题样式", width=22, font=("微软雅黑", 9, "bold"), anchor=W).pack(side=LEFT, padx=2)
+            Label(hdr, text="源标题样式", width=26, font=("微软雅黑", 9, "bold"), anchor=W).pack(side=LEFT, padx=2)
             Label(hdr, text="→", width=2, anchor=CENTER).pack(side=LEFT)
-            Label(hdr, text="目标样式", width=22, font=("微软雅黑", 9, "bold"), anchor=W).pack(side=LEFT, padx=2)
+            Label(hdr, text="目标样式", width=26, font=("微软雅黑", 9, "bold"), anchor=W).pack(side=LEFT, padx=2)
 
             # 标题列表滚动容器
             s1_canvas = Canvas(step1_frame, highlightthickness=0, borderwidth=0, height=70)
@@ -145,13 +145,13 @@ class StyleMappingDialog:
             for src_style in self.heading_styles:
                 row = Frame(s1_inner)
                 row.pack(fill=X, pady=0)
-                Label(row, text=src_style, width=22, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=2)
+                Label(row, text=src_style, width=26, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=2)
                 Label(row, text="→", width=2, anchor=CENTER).pack(side=LEFT)
                 default_val = self.current_mapping.get(src_style, self.saved_default_mapping.get(src_style, src_style if src_style in self.template_styles else "Normal"))
                 if default_val not in self.template_styles:
                     default_val = src_style if src_style in self.template_styles else "Normal"
                 var = StringVar(value=default_val)
-                combo = ttk.Combobox(row, textvariable=var, width=22, state="readonly")
+                combo = ttk.Combobox(row, textvariable=var, width=26, state="readonly")
                 combo['values'] = self.template_styles
                 combo.pack(side=LEFT, padx=3)
                 self.heading_widgets.append((src_style, var))
@@ -178,7 +178,7 @@ class StyleMappingDialog:
         Label(r1, text="答样式:", width=7, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT)
         saved_answer_style = self.current_answer_config.get('answer_style', '应答句')
         self.answer_style_var = StringVar(value=saved_answer_style)
-        self.answer_style_combo = ttk.Combobox(r1, textvariable=self.answer_style_var, width=14, state="readonly")
+        self.answer_style_combo = ttk.Combobox(r1, textvariable=self.answer_style_var, width=22, state="readonly")
         self.answer_style_combo['values'] = self.template_styles
         self.answer_style_combo.pack(side=LEFT, padx=1)
 
@@ -188,7 +188,7 @@ class StyleMappingDialog:
         if saved_answer_mode not in self.answer_mode_labels:
             saved_answer_mode = self.answer_mode_labels[2]
         self.answer_mode_var = StringVar(value=saved_answer_mode)
-        self.answer_mode_combo = ttk.Combobox(r1, textvariable=self.answer_mode_var, width=16, state="readonly")
+        self.answer_mode_combo = ttk.Combobox(r1, textvariable=self.answer_mode_var, width=22, state="readonly")
         self.answer_mode_combo['values'] = self.answer_mode_labels
         self.answer_mode_combo.bind('<<ComboboxSelected>>', lambda e: self.on_answer_mode_change())
         self.answer_mode_combo.pack(side=LEFT, padx=1)
@@ -196,14 +196,14 @@ class StyleMappingDialog:
         Label(r1, text="原文:", width=5, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
         saved_answer_source = self.current_answer_config.get('answer_source_style', '')
         self.answer_source_var = StringVar(value=saved_answer_source)
-        self.answer_source_combo = ttk.Combobox(r1, textvariable=self.answer_source_var, width=14, state="readonly")
+        self.answer_source_combo = ttk.Combobox(r1, textvariable=self.answer_source_var, width=22, state="readonly")
         self.answer_source_combo['values'] = self.template_styles
         self.answer_source_combo.pack(side=LEFT, padx=1)
 
         Label(r1, text="答原文:", width=6, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(3, 0))
         saved_answer_copy = self.current_answer_config.get('answer_copy_style', '')
         self.answer_copy_var = StringVar(value=saved_answer_copy)
-        self.answer_copy_combo = ttk.Combobox(r1, textvariable=self.answer_copy_var, width=14, state="readonly")
+        self.answer_copy_combo = ttk.Combobox(r1, textvariable=self.answer_copy_var, width=22, state="readonly")
         self.answer_copy_combo['values'] = self.template_styles
         self.answer_copy_combo.pack(side=LEFT, padx=1)
 
@@ -256,12 +256,12 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_table_style).pack(side=LEFT, padx=(0, 1))
         tsd = self.current_tbl_img_config.get('table_style', 'Body Text')
         self.table_style_var = StringVar(value=tsd)
-        self.table_style_combo = ttk.Combobox(tif, textvariable=self.table_style_var, width=14, state="readonly")
+        self.table_style_combo = ttk.Combobox(tif, textvariable=self.table_style_var, width=18, state="readonly")
         self.table_style_combo['values'] = self.template_styles
         self.table_style_combo.pack(side=LEFT, padx=1)
         tad = self.current_tbl_img_config.get('table_answer_style', tsd)
         self.table_answer_var = StringVar(value=tad)
-        self.table_style_combo2 = ttk.Combobox(tif, textvariable=self.table_answer_var, width=14, state="readonly")
+        self.table_style_combo2 = ttk.Combobox(tif, textvariable=self.table_answer_var, width=18, state="readonly")
         self.table_style_combo2['values'] = self.template_styles
         self.table_style_combo2.pack(side=LEFT, padx=1)
         Label(tif, text="  ", font=("微软雅黑", 9)).pack(side=LEFT)
@@ -270,12 +270,12 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_image_style).pack(side=LEFT, padx=(0, 1))
         isd = self.current_tbl_img_config.get('image_style', 'Body Text')
         self.image_style_var = StringVar(value=isd)
-        self.image_style_combo = ttk.Combobox(tif, textvariable=self.image_style_var, width=14, state="readonly")
+        self.image_style_combo = ttk.Combobox(tif, textvariable=self.image_style_var, width=18, state="readonly")
         self.image_style_combo['values'] = self.template_styles
         self.image_style_combo.pack(side=LEFT, padx=1)
         iad = self.current_tbl_img_config.get('image_answer_style', isd)
         self.image_answer_var = StringVar(value=iad)
-        self.image_style_combo2 = ttk.Combobox(tif, textvariable=self.image_answer_var, width=14, state="readonly")
+        self.image_style_combo2 = ttk.Combobox(tif, textvariable=self.image_answer_var, width=18, state="readonly")
         self.image_style_combo2['values'] = self.template_styles
         self.image_style_combo2.pack(side=LEFT, padx=1)
         self.toggle_table_style()
@@ -298,7 +298,7 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=(3, 0))
         slsd = self.current_list_config.get('style', 'Body Text')
         self.list_style_var = StringVar(value=slsd)
-        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=14, state="readonly")
+        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=18, state="readonly")
         self.list_style_combo['values'] = self.template_styles
         self.list_style_combo.pack(side=LEFT, padx=1)
         self.toggle_list_method()
@@ -316,7 +316,7 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=(3, 0))
         slsd2 = self.current_list_config.get('answer_style', self.list_style_var.get())
         self.list_style_var2 = StringVar(value=slsd2)
-        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=14, state="readonly")
+        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=18, state="readonly")
         self.list_style_combo2['values'] = self.template_styles
         self.list_style_combo2.pack(side=LEFT, padx=1)
         self.toggle_list_method2()
@@ -427,7 +427,7 @@ class StyleMappingDialog:
             return
         hdr = Frame(self.step3_container)
         hdr.pack(fill=X, pady=(2, 1))
-        cw = 20 if is_dual else 26
+        cw = 24 if is_dual else 28
         Label(hdr, text="源样式", width=cw, font=("微软雅黑", 9, "bold"), anchor=W).pack(side=LEFT, padx=3)
         Label(hdr, text=" > ", width=3, anchor=CENTER).pack(side=LEFT)
         if is_dual:
@@ -597,6 +597,7 @@ class DocumentConverterGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Word文档格式转换工具")
+        self._apply_ui_theme()
         
         # 设置窗口为最大化状态，自动适应屏幕并考虑任务栏
         try:
@@ -608,8 +609,8 @@ class DocumentConverterGUI:
             screen_height = root.winfo_screenheight()
             self.root.geometry(f'{screen_width}x{screen_height}+0+0')
         
-        # 设置最小窗口大小
-        self.root.minsize(900, 600)
+        # 设置最小窗口大小，兼容本机分辨率与 1920×1080
+        self.root.minsize(1180, 720)
         
         self.converter = DocumentConverter()
         
@@ -668,13 +669,34 @@ class DocumentConverterGUI:
         self.stop_conversion_flag = False  # 停止转换标志
         
         self.create_widgets()
-    
+
+    def _apply_ui_theme(self):
+        """统一桌面端界面主题，提升本机分辨率与 1920×1080 的视觉适配。"""
+        self.root.configure(bg="#f4f7fb")
+        self.root.option_add("*Font", "微软雅黑 10")
+        self.root.option_add("*Background", "#f4f7fb")
+        self.root.option_add("*Foreground", "#23395d")
+
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("TFrame", background="#f4f7fb")
+        style.configure("TLabelframe", background="#f4f7fb", bordercolor="#d6e2f0")
+        style.configure("TLabelframe.Label", background="#f4f7fb", foreground="#1f4e79", font=("微软雅黑", 10, "bold"))
+        style.configure("TButton", padding=(10, 7), font=("微软雅黑", 10), background="#2563eb", foreground="white")
+        style.map("TButton", background=[("active", "#1d4ed8")], foreground=[("active", "white")])
+        style.configure("TEntry", padding=(6, 4), fieldbackground="#ffffff")
+        style.configure("TCombobox", padding=(6, 4), fieldbackground="#ffffff")
+        style.configure("Horizontal.TProgressbar", background="#34d399", troughcolor="#e5e7eb")
+
     def create_widgets(self):
         """创建界面组件"""
         # 创建主容器 - 使用Canvas实现可滚动内容
-        main_canvas = tk.Canvas(self.root, highlightthickness=0)
+        main_canvas = tk.Canvas(self.root, highlightthickness=0, bg="#f4f7fb", borderwidth=0)
         main_scrollbar = Scrollbar(self.root, orient=VERTICAL, command=main_canvas.yview)
-        scrollable_main = Frame(main_canvas)
+        scrollable_main = Frame(main_canvas, bg="#f4f7fb")
         
         # 配置滚动
         scrollable_main.bind(
@@ -716,17 +738,17 @@ class DocumentConverterGUI:
         
         # 在可滚动容器中创建内容
         # ========== 文件选择区域 ==========
-        file_frame = LabelFrame(scrollable_main, text="文件选择", font=("微软雅黑", 10),
-                                padx=10, pady=10, fg="#0000FF")
-        file_frame.pack(fill=X, pady=10, padx=10)
+        file_frame = LabelFrame(scrollable_main, text="文件选择", font=("微软雅黑", 10, "bold"),
+                                padx=12, pady=10, fg="#1f4e79", bg="#ffffff", borderwidth=1, relief="groove")
+        file_frame.pack(fill=X, pady=(10, 6), padx=10)
         
         # 添加 Visio 图提示（居中显示）
-        visio_hint_frame = Frame(file_frame)
+        visio_hint_frame = Frame(file_frame, bg="#fff7ed")
         visio_hint_frame.pack(fill=X, pady=(0, 8))
         
         visio_hint = Label(visio_hint_frame, 
                           text="[TIP] 提示：建议提前将源文档中的 Visio 图提前转换为 JPG/PNG 等图片格式，为保证转换后文档最大可用性，本软件暂不支持viso等OLE对象的复制。",
-                          font=("微软雅黑", 9), fg="#FF6B35", justify=CENTER)
+                          font=("微软雅黑", 9), fg="#c2410c", bg="#fff7ed", justify=CENTER)
         visio_hint.pack(anchor=CENTER)
         
         # 源文件
@@ -769,9 +791,9 @@ class DocumentConverterGUI:
         self.loading_progress['value'] = 0
         
         # ========== 样式信息区域（包含三个列表）==========
-        styles_frame = LabelFrame(scrollable_main, text="样式信息", font=("微软雅黑", 10),
-                                  padx=10, pady=10, fg="#0000FF")
-        styles_frame.pack(fill=BOTH, expand=False, pady=5, padx=10)
+        styles_frame = LabelFrame(scrollable_main, text="样式信息", font=("微软雅黑", 10, "bold"),
+                                  padx=12, pady=10, fg="#1f4e79", bg="#ffffff", borderwidth=1, relief="groove")
+        styles_frame.pack(fill=BOTH, expand=False, pady=(0, 6), padx=10)
         
         # 样式映射按钮和提示
         btn_row = Frame(styles_frame)
@@ -798,7 +820,7 @@ class DocumentConverterGUI:
         file_scroll.pack(side=RIGHT, fill=Y)
         
         self.file_listbox = Listbox(file_list_frame, yscrollcommand=file_scroll.set,
-                                    font=("微软雅黑", 9), height=5)
+                                    font=("微软雅黑", 9), height=6, bg="#ffffff", selectbackground="#93c5fd", selectforeground="#0f172a")
         self.file_listbox.pack(fill=BOTH, expand=True)
         file_scroll.config(command=self.file_listbox.yview)
         
@@ -816,7 +838,7 @@ class DocumentConverterGUI:
         source_scroll.pack(side=RIGHT, fill=Y)
         
         self.source_listbox = Listbox(source_style_frame, yscrollcommand=source_scroll.set,
-                                      font=("微软雅黑", 9), height=5)
+                                      font=("微软雅黑", 9), height=6, bg="#ffffff", selectbackground="#93c5fd", selectforeground="#0f172a")
         self.source_listbox.pack(fill=BOTH, expand=True)
         source_scroll.config(command=self.source_listbox.yview)
         
@@ -831,14 +853,14 @@ class DocumentConverterGUI:
         template_scroll.pack(side=RIGHT, fill=Y)
         
         self.template_listbox = Listbox(right_frame, yscrollcommand=template_scroll.set,
-                                        font=("微软雅黑", 9), height=5)
+                                        font=("微软雅黑", 9), height=6, bg="#ffffff", selectbackground="#93c5fd", selectforeground="#0f172a")
         self.template_listbox.pack(fill=BOTH, expand=True)
         template_scroll.config(command=self.template_listbox.yview)
         
         # ========== 转换选项区域 ==========
-        options_frame = LabelFrame(scrollable_main, text="转换选项", font=("微软雅黑", 10),
-                                   padx=10, pady=10, fg="#0000FF")
-        options_frame.pack(fill=X, pady=5, padx=10)
+        options_frame = LabelFrame(scrollable_main, text="转换选项", font=("微软雅黑", 10, "bold"),
+                                   padx=12, pady=10, fg="#1f4e79", bg="#ffffff", borderwidth=1, relief="groove")
+        options_frame.pack(fill=X, pady=(0, 6), padx=10)
         
         # 复选框（并排显示）
         check_row = Frame(options_frame)
@@ -920,15 +942,15 @@ class DocumentConverterGUI:
         self.toggle_hint_controls()
         
         # ========== 输出文件列表区域 ==========
-        output_frame = LabelFrame(scrollable_main, text="输出文件列表", font=("微软雅黑", 10),
-                                  padx=10, pady=10)
-        output_frame.pack(fill=BOTH, expand=True, pady=5, padx=10)
+        output_frame = LabelFrame(scrollable_main, text="输出文件列表", font=("微软雅黑", 10, "bold"),
+                                  padx=12, pady=10, fg="#1f4e79", bg="#ffffff", borderwidth=1, relief="groove")
+        output_frame.pack(fill=BOTH, expand=True, pady=(0, 6), padx=10)
         
         output_scroll = Scrollbar(output_frame)
         output_scroll.pack(side=RIGHT, fill=Y)
         
         self.output_listbox = Listbox(output_frame, yscrollcommand=output_scroll.set,
-                                      font=("微软雅黑", 9), height=6)
+                                      font=("微软雅黑", 9), height=6, bg="#ffffff", selectbackground="#93c5fd", selectforeground="#0f172a")
         self.output_listbox.pack(fill=BOTH, expand=True)
         output_scroll.config(command=self.output_listbox.yview)
         
@@ -936,9 +958,9 @@ class DocumentConverterGUI:
         self.output_listbox.bind('<Double-Button-1>', self.open_selected_file)
         
         # ========== 日志输出区域 ==========
-        log_frame = LabelFrame(scrollable_main, text="处理日志", font=("微软雅黑", 10),
-                               padx=10, pady=10)
-        log_frame.pack(fill=BOTH, expand=True, pady=5, padx=10)
+        log_frame = LabelFrame(scrollable_main, text="处理日志", font=("微软雅黑", 10, "bold"),
+                               padx=12, pady=10, fg="#1f4e79", bg="#ffffff", borderwidth=1, relief="groove")
+        log_frame.pack(fill=BOTH, expand=True, pady=(0, 6), padx=10)
         
         # 日志控制区域
         log_control_frame = Frame(log_frame)
@@ -951,23 +973,23 @@ class DocumentConverterGUI:
         log_scroll = Scrollbar(log_frame)
         log_scroll.pack(side=RIGHT, fill=Y)
         
-        self.log_text = Text(log_frame, height=5, font=("Consolas", 9),
-                             yscrollcommand=log_scroll.set)
+        self.log_text = Text(log_frame, height=7, font=("Consolas", 9),
+                             yscrollcommand=log_scroll.set, bg="#f8fafc", padx=8, pady=6)
         self.log_text.pack(fill=BOTH, expand=True)
         log_scroll.config(command=self.log_text.yview)
         
         # ========== 按钮区域（固定在底部）==========
-        btn_frame = Frame(scrollable_main, pady=5)
-        btn_frame.pack(fill=X, side=BOTTOM, pady=5, padx=10)
+        btn_frame = Frame(scrollable_main, bg="#f4f7fb", pady=8)
+        btn_frame.pack(fill=X, side=BOTTOM, pady=(4, 10), padx=10)
         
         self.convert_btn = Button(btn_frame, text="开始转换", command=self.start_conversion,
-                                  width=15, font=("微软雅黑", 11, "bold"), bg="#4CAF50",
-                                  fg="white")
+                                  width=15, font=("微软雅黑", 11, "bold"), bg="#16a34a",
+                                  fg="white", relief="raised")
         self.convert_btn.pack(side=LEFT, padx=5)
         
         self.stop_btn = Button(btn_frame, text="停止转换", command=self.stop_conversion,
-                               width=10, font=("微软雅黑", 10), bg="#FF5722",
-                               fg="white", state='disabled')
+                               width=10, font=("微软雅黑", 10), bg="#ef4444",
+                               fg="white", state='disabled', relief="raised")
         self.stop_btn.pack(side=LEFT, padx=5)
         
         self.clear_log_btn = Button(btn_frame, text="清空日志", command=self.clear_log,
@@ -975,11 +997,11 @@ class DocumentConverterGUI:
         self.clear_log_btn.pack(side=LEFT, padx=5)
         
         self.open_folder_btn = Button(btn_frame, text="打开输出文件夹", command=self.open_output_folder,
-                                      width=12, font=("微软雅黑", 10))
+                                      width=12, font=("微软雅黑", 10), bg="#f8fafc", relief="raised")
         self.open_folder_btn.pack(side=LEFT, padx=5)
         
         Button(btn_frame, text="退出", command=self.root.quit,
-               width=10, font=("微软雅黑", 10)).pack(side=RIGHT, padx=5)
+               width=10, font=("微软雅黑", 10), bg="#f8fafc", relief="raised").pack(side=RIGHT, padx=5)
     
     def _start_loading_progress(self, total_steps):
         """启动进度条"""

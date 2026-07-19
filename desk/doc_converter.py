@@ -440,15 +440,16 @@ class DocumentConverter:
         return cleaned
     
     def remove_chapter_section_marking(self, text):
-        """移除"第X章/第X节/第X篇"等章节标记
+        """移除"第X章/第X节/第X篇/第X部分"等章节标记
         
-        匹配如：第一章、第一节、第一篇、第二章、第二节等。
+        匹配如：第一章、第一节、第一篇、第二部分、第二章、第二节等。
         仅对文本中实际存在的章节标记进行清理，不影响自动编号。
         """
         if not text:
             return text
-        # 匹配 "第[一二三四五六七八九十]{" + "章/节/篇/部分}" 开头
-        chapter_pattern = r'^\s*第[一二三四五六七八九十]+[章节篇][\s、，]*'
+        # 匹配 "第[一二三四五六七八九十]+[章节篇部分][\s、，]*" 开头
+        # 注意："部分"为两字词，使用 (?:部分|[章节篇]) 来同时匹配单字和双字
+        chapter_pattern = r'^\s*第[一二三四五六七八九十]+(?:部分|[章节篇])[\s、，]*'
         cleaned = re.sub(chapter_pattern, '', text).strip()
         return cleaned
     
