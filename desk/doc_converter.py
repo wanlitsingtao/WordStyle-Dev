@@ -395,11 +395,19 @@ class DocumentConverter:
         return False
     
     def has_numbering(self, paragraph):
-        """检查段落是否有编号"""
+        """检查段落是否有编号
+        numId=0 表示无编号（Word 中的特殊值），应视为没有编号。
+        """
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
+                # 检查 numId 是否为 0（0 表示无编号）
+                numId = numPr.find(qn('w:numId'))
+                if numId is not None:
+                    val = numId.get(qn('w:val'))
+                    if val == '0':
+                        return False
                 return True
         return False
     
@@ -1176,25 +1184,11 @@ class DocumentConverter:
                     pass
                 
                 if not style_has_numPr:
-                    # 只有当目标样式没有自带编号定义时，才从源段落复制自动编号
-                    src_numPr = source_para._element.find(qn('w:pPr') + '/' + qn('w:numPr'))
-                    if src_numPr is not None:
-                        from lxml import etree
-                        new_pPr = new_para._element.find(qn('w:pPr'))
-                        if new_pPr is None:
-                            new_pPr = etree.SubElement(new_para._element, qn('w:pPr'))
-                            new_para._element.insert(0, new_pPr)
-                        new_numPr = etree.SubElement(new_pPr, qn('w:numPr'))
-                        # 复制 numId 和 ilvl
-                        # 注意：numId 和 ilvl 是 numPr 的子元素（如 <w:numId w:val="1"/>），
-                        # 不是 numPr 的属性。需要先找到子元素，再获取其 val 属性。
-                        for child_tag in ['w:numId', 'w:ilvl']:
-                            src_child = src_numPr.find(qn(child_tag))
-                            if src_child is not None:
-                                val = src_child.get(qn('w:val'))
-                                if val is not None:
-                                    new_child = etree.SubElement(new_numPr, qn(child_tag))
-                                    new_child.set(qn('w:val'), val)
+                    # ★ 修复：如果目标样式没有自带编号定义（如 BN_正文），
+                    # 说明用户希望将列表段落转为普通正文段落。
+                    # 此时不应该从源段落复制自动编号，而应该移除原有编号。
+                    # 清除源段落原有的自动编号，使其变为普通正文段落
+                    self.remove_auto_numbering(new_para)
                 # 使用 para.text 获取完整文本（包括超链接内部的run）
                 list_runs_text = ''.join(run.text for run in source_para.runs)
                 list_full_text = source_para.text
@@ -1560,7 +1554,15 @@ class DocumentConverter:
                     # ★ 修复：对于有编号的列表段落，使用虚拟样式名（如 "1 列表段落"）进行样式映射，
                     # 而不是用真实的样式名（通常是 "Normal"）。这样 Step 3 中用户配置的
                     # "1 列表段落" → "BN_原文引用列表项目符号" 映射才能生效。
-                    if self.has_numbering(para):
+                    # ★ 修复：标题段落（有outlineLevel或样式为Heading）即使有编号也不视为列表段落，
+                    # 应走正常的标题样式映射路径。
+                    is_heading_by_outline = self.get_outline_level(para) > 0
+                    is_heading_by_style = src_style in HEADING_STYLES
+                    if is_heading_by_outline or is_heading_by_style:
+                        # 标题段落：走标题样式映射
+                        target_style = self.get_target_style(src_style, new_doc, source_file)
+                    elif self.has_numbering(para):
+                        # 非标题的列表段落：使用虚拟样式名进行映射
                         virtual_style = self._detect_numbering_format(para)
                         target_style = self.get_target_style(virtual_style, new_doc, source_file)
                     else:
@@ -2323,10 +2325,18 @@ class DocumentConverter:
             检查两种方式：
             1. 段落元素自身是否有 w:numPr（直接定义的编号）
             2. 段落样式（pStyle）是否在样式定义中包含 w:numPr（样式自带的编号）
+            注意：numId=0 表示无编号，应视为没有编号。
             """
             pPr = elem.find(qn('w:pPr'))
             if pPr is not None:
-                if pPr.find(qn('w:numPr')) is not None:
+                numPr = pPr.find(qn('w:numPr'))
+                if numPr is not None:
+                    # 检查 numId 是否为 0（0 表示无编号）
+                    numId = numPr.find(qn('w:numId'))
+                    if numId is not None:
+                        val = numId.get(qn('w:val'))
+                        if val == '0':
+                            return False
                     return True
                 # 检查段落样式是否自带编号
                 pStyle = pPr.find(qn('w:pStyle'))
@@ -2471,24 +2481,29 @@ class DocumentConverter:
                         child_pPr = child.find(qn('w:pPr'))
                         child_numPr = child_pPr.find(qn('w:numPr')) if child_pPr is not None else None
                         
-                        # 判断是否为列表段落
-                        _is_list_para = child_numPr is not None
-                        if not _is_list_para:
-                            # 获取段落样式ID
-                            _pStyle_val = None
-                            if child_pPr is not None:
-                                _pStyle_elem = child_pPr.find(qn('w:pStyle'))
-                                if _pStyle_elem is not None:
-                                    _pStyle_val = _pStyle_elem.get(qn('w:val'))
-                            # 补充检查1：段落样式名是否为虚拟列表样式（样式名包含"列表段落"）
-                            if _pStyle_val and ('列表段落' in _pStyle_val):
-                                _is_list_para = True
+                        # 获取段落样式ID
+                        _pStyle_val = None
+                        if child_pPr is not None:
+                            _pStyle_elem = child_pPr.find(qn('w:pStyle'))
+                            if _pStyle_elem is not None:
+                                _pStyle_val = _pStyle_elem.get(qn('w:val'))
+                        
+                        # ★ 修复：标题段落（包括带编号的标题）不视为列表段落
+                        if _pStyle_val and self.is_heading_paragraph(child, doc):
+                            _is_list_para = False
+                        else:
+                            # 判断是否为列表段落（使用 _elem_has_numbering 函数，自动排除 numId=0 的情况）
+                            _is_list_para = _elem_has_numbering(child)
                             if not _is_list_para:
-                                # 补充检查2：list_method='style'时，检查段落的 style_id 是否等于 list_style 的 style_id
-                                if _pStyle_val and list_method == 'style' and list_style:
-                                    _list_sid = self.get_style_id_by_name(doc, list_style)
-                                    if _list_sid and _pStyle_val == _list_sid:
-                                        _is_list_para = True
+                                # 补充检查1：段落样式名是否为虚拟列表样式（样式名包含"列表段落"）
+                                if _pStyle_val and ('列表段落' in _pStyle_val):
+                                    _is_list_para = True
+                                if not _is_list_para:
+                                    # 补充检查2：list_method='style'时，检查段落的 style_id 是否等于 list_style 的 style_id
+                                    if _pStyle_val and list_method == 'style' and list_style:
+                                        _list_sid = self.get_style_id_by_name(doc, list_style)
+                                        if _list_sid and _pStyle_val == _list_sid:
+                                            _is_list_para = True
                         
                         # ★ 修复：列表段落用 deepcopy(child) 保留原始列表结构，再用指定样式覆盖
                         if _is_list_para:
@@ -2507,6 +2522,13 @@ class DocumentConverter:
                                 list_sid = self.get_style_id_by_name(doc, list_style)
                                 if list_sid:
                                     _apply_paragraph_style(source_elem, list_sid)
+                                # ★ 修复：如果目标样式没有自带编号，移除此段落的自动编号
+                                try:
+                                    _style_xml2 = doc.styles[list_style]._element.xml
+                                    if not ('<w:numPr>' in _style_xml2 or '<w:numPr ' in _style_xml2):
+                                        self.remove_auto_numbering(source_elem)
+                                except Exception:
+                                    pass
                             new_children.append(source_elem)
                             chapter_buffer.append(source_elem)
                             # ★ 修复：图片段落应用兜底样式
@@ -2542,17 +2564,36 @@ class DocumentConverter:
                         bookmark_id += 1
                         # ★ 关键修复：检查子元素是否有 numPr（列表编号），如果有则在 source_elem 中保留标记
                         if child_numPr is not None:
-                            # 在 source_elem 的 pPr 中加入 numPr 标记，供后续副本拷贝时检测列表段落
-                            src_pPr = source_elem.find(qn('w:pPr'))
-                            if src_pPr is None:
-                                src_pPr = OxmlElement('w:pPr')
-                                source_elem.insert(0, src_pPr)
-                            src_numPr = src_pPr.find(qn('w:numPr'))
-                            if src_numPr is None:
-                                # 复制完整的 numPr 元素（包括 numId 等），而不仅仅是添加空标记
-                                src_numPr = deepcopy(child_numPr)
-                                src_pPr.append(src_numPr)
-                        if child_numPr is not None and list_method == 'style' and list_style:
+                            # 判断目标样式是否自带编号（list_method='style' 时）
+                            _style_has_numPr = False
+                            if list_method == 'style' and list_style:
+                                try:
+                                    _style_xml = doc.styles[list_style]._element.xml
+                                    if '<w:numPr>' in _style_xml or '<w:numPr ' in _style_xml:
+                                        _style_has_numPr = True
+                                except Exception:
+                                    pass
+                            # ★ 修复：如果目标样式没有自带编号（如 BN_正文），
+                            # 说明用户希望将列表段落转为普通正文段落，不应复制 numPr
+                            if not _style_has_numPr:
+                                # 不复制 numPr，并移除已有编号（直接操作lxml元素）
+                                src_pPr2 = source_elem.find(qn('w:pPr'))
+                                if src_pPr2 is not None:
+                                    old_numPr = src_pPr2.find(qn('w:numPr'))
+                                    if old_numPr is not None:
+                                        src_pPr2.remove(old_numPr)
+                            else:
+                                # 在 source_elem 的 pPr 中加入 numPr 标记，供后续副本拷贝时检测列表段落
+                                src_pPr = source_elem.find(qn('w:pPr'))
+                                if src_pPr is None:
+                                    src_pPr = OxmlElement('w:pPr')
+                                    source_elem.insert(0, src_pPr)
+                                src_numPr = src_pPr.find(qn('w:numPr'))
+                                if src_numPr is None:
+                                    # 复制完整的 numPr 元素（包括 numId 等），而不仅仅是添加空标记
+                                    src_numPr = deepcopy(child_numPr)
+                                    src_pPr.append(src_numPr)
+                        if child_numPr is not None and list_method == 'style' and list_style and _is_list_para:
                             list_sid = self.get_style_id_by_name(doc, list_style)
                             if list_sid:
                                 _apply_paragraph_style(source_elem, list_sid)
@@ -2778,7 +2819,9 @@ class DocumentConverter:
     # ==================== 语义分组辅助方法 ====================
     
     def _is_list_paragraph(self, elem):
-        """判断段落是否是列表（有编号或项目符号）"""
+        """判断段落是否是列表（有编号或项目符号）
+        numId=0 表示无编号，应视为没有列表。
+        """
         if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
             return False
         
@@ -2786,6 +2829,11 @@ class DocumentConverter:
         if pPr is not None:
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
+                numId = numPr.find(qn('w:numId'))
+                if numId is not None:
+                    val = numId.get(qn('w:val'))
+                    if val == '0':
+                        return False
                 return True
         
         return False
