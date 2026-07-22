@@ -98,6 +98,26 @@ class StyleMappingDialog:
         self.dialog.grab_set()
         self.dialog.update_idletasks()
 
+        # --- 统一ttk控件样式（正常白底黑字，不可用灰底灰字） ---
+        style = ttk.Style(self.dialog)
+        # 自定义ComboBox样式
+        # 正常(readonly)状态：白底黑字（整个控件为白色）
+        # 不可用(disabled)状态：灰底灰字（整个控件为灰色，与正常明显区分）
+        style.configure("Mono.TCombobox",
+                       fieldbackground="white",
+                       background="white",
+                       foreground="black",
+                       arrowcolor="#666666",
+                       selectbackground="white",
+                       selectforeground="black")
+        style.map("Mono.TCombobox",
+                 fieldbackground=[("readonly", "white"), ("disabled", "#E8E8E8")],
+                 background=[("disabled", "#E8E8E8")],
+                 foreground=[("disabled", "#A0A0A0")],
+                 arrowcolor=[("disabled", "#C0C0C0")],
+                 selectbackground=[("disabled", "#E8E8E8")],
+                 selectforeground=[("disabled", "#A0A0A0")])
+
         main_container = Frame(self.dialog, bg="#f5f7fb")
         main_container.pack(fill=BOTH, expand=True)
 
@@ -149,7 +169,7 @@ class StyleMappingDialog:
                 if default_val not in self.template_styles:
                     default_val = src_style if src_style in self.template_styles else "Normal"
                 var = StringVar(value=default_val)
-                combo = ttk.Combobox(row, textvariable=var, width=26, state="readonly")
+                combo = ttk.Combobox(row, textvariable=var, width=26, state="readonly", style="Mono.TCombobox")
                 combo['values'] = self.template_styles
                 combo.pack(side=LEFT, padx=3)
                 self.heading_widgets.append((src_style, var))
@@ -176,7 +196,7 @@ class StyleMappingDialog:
         Label(r1, text="答样式:", width=7, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT)
         saved_answer_style = self.current_answer_config.get('answer_style', '应答句')
         self.answer_style_var = StringVar(value=saved_answer_style)
-        self.answer_style_combo = ttk.Combobox(r1, textvariable=self.answer_style_var, width=22, state="readonly")
+        self.answer_style_combo = ttk.Combobox(r1, textvariable=self.answer_style_var, width=22, state="readonly", style="Mono.TCombobox")
         self.answer_style_combo['values'] = self.template_styles
         self.answer_style_combo.pack(side=LEFT, padx=1)
 
@@ -186,7 +206,7 @@ class StyleMappingDialog:
         if saved_answer_mode not in self.answer_mode_labels:
             saved_answer_mode = self.answer_mode_labels[2]
         self.answer_mode_var = StringVar(value=saved_answer_mode)
-        self.answer_mode_combo = ttk.Combobox(r1, textvariable=self.answer_mode_var, width=22, state="readonly")
+        self.answer_mode_combo = ttk.Combobox(r1, textvariable=self.answer_mode_var, width=22, state="readonly", style="Mono.TCombobox")
         self.answer_mode_combo['values'] = self.answer_mode_labels
         self.answer_mode_combo.bind('<<ComboboxSelected>>', lambda e: self.on_answer_mode_change())
         self.answer_mode_combo.pack(side=LEFT, padx=1)
@@ -194,14 +214,14 @@ class StyleMappingDialog:
         Label(r1, text="原文:", width=5, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(5, 0))
         saved_answer_source = self.current_answer_config.get('answer_source_style', '')
         self.answer_source_var = StringVar(value=saved_answer_source)
-        self.answer_source_combo = ttk.Combobox(r1, textvariable=self.answer_source_var, width=22, state="readonly")
+        self.answer_source_combo = ttk.Combobox(r1, textvariable=self.answer_source_var, width=22, state="readonly", style="Mono.TCombobox")
         self.answer_source_combo['values'] = self.template_styles
         self.answer_source_combo.pack(side=LEFT, padx=1)
 
         Label(r1, text="答原文:", width=6, anchor=W, font=("微软雅黑", 9)).pack(side=LEFT, padx=(3, 0))
         saved_answer_copy = self.current_answer_config.get('answer_copy_style', '')
         self.answer_copy_var = StringVar(value=saved_answer_copy)
-        self.answer_copy_combo = ttk.Combobox(r1, textvariable=self.answer_copy_var, width=22, state="readonly")
+        self.answer_copy_combo = ttk.Combobox(r1, textvariable=self.answer_copy_var, width=22, state="readonly", style="Mono.TCombobox")
         self.answer_copy_combo['values'] = self.template_styles
         self.answer_copy_combo.pack(side=LEFT, padx=1)
 
@@ -238,44 +258,56 @@ class StyleMappingDialog:
         # --- 第0行：列标题（原文 / 应答原文） ---
         thf = Frame(step4_frame)
         thf.pack(fill=X, pady=0)
-        Label(thf, text="", font=("微软雅黑", 9), width=8, anchor=W).pack(side=LEFT)
-        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="black", width=15, anchor=CENTER).pack(side=LEFT)
-        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="black", width=15, anchor=CENTER).pack(side=LEFT)
-        Label(thf, text="  图片", font=("微软雅黑", 9, "bold"), fg="black", anchor=W).pack(side=LEFT, padx=(18, 1))
-        Label(thf, text="原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
-        Label(thf, text="应答原文", font=("微软雅黑", 8), width=15, anchor=CENTER).pack(side=LEFT)
+        thf.columnconfigure(0, minsize=60)   # 表格checkbox列
+        thf.columnconfigure(1, minsize=155)  # 表格原文combo列
+        thf.columnconfigure(2, minsize=155)  # 表格应答原文combo列
+        thf.columnconfigure(3, minsize=20)   # 间隔
+        thf.columnconfigure(4, minsize=60)   # 图片checkbox列
+        thf.columnconfigure(5, minsize=155)  # 图片原文combo列
+        thf.columnconfigure(6, minsize=155)  # 图片应答原文combo列
+        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="black").grid(row=0, column=1, padx=1)
+        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="black").grid(row=0, column=2, padx=1)
+        Label(thf, text="原文", font=("微软雅黑", 9, "bold"), fg="black").grid(row=0, column=5, padx=1)
+        Label(thf, text="应答原文", font=("微软雅黑", 9, "bold"), fg="black").grid(row=0, column=6, padx=1)
 
         # --- 第1行：表格 + 图片（同一行） ---
         tif = Frame(step4_frame)
         tif.pack(fill=X, pady=0)
+        tif.columnconfigure(0, minsize=60)   # 表格checkbox列
+        tif.columnconfigure(1, minsize=155)  # 表格原文combo列
+        tif.columnconfigure(2, minsize=155)  # 表格应答原文combo列
+        tif.columnconfigure(3, minsize=20)   # 间隔
+        tif.columnconfigure(4, minsize=60)   # 图片checkbox列
+        tif.columnconfigure(5, minsize=155)  # 图片原文combo列
+        tif.columnconfigure(6, minsize=155)  # 图片应答原文combo列
         # 表格
         self.enable_table_style_var = IntVar(value=self.current_tbl_img_config.get('enable_table_style', 0))
         Checkbutton(tif, text="表格", variable=self.enable_table_style_var,
-                    font=("微软雅黑", 9), command=self.toggle_table_style).pack(side=LEFT, padx=(0, 1))
+                    font=("微软雅黑", 9), command=self.toggle_table_style).grid(row=0, column=0, padx=(0, 1), sticky=W)
         tsd = self.current_tbl_img_config.get('table_style', 'Body Text')
         self.table_style_var = StringVar(value=tsd)
-        self.table_style_combo = ttk.Combobox(tif, textvariable=self.table_style_var, width=18, state="readonly")
+        self.table_style_combo = ttk.Combobox(tif, textvariable=self.table_style_var, width=18, state="readonly", style="Mono.TCombobox")
         self.table_style_combo['values'] = self.template_styles
-        self.table_style_combo.pack(side=LEFT, padx=1)
+        self.table_style_combo.grid(row=0, column=1, padx=1, sticky=W)
         tad = self.current_tbl_img_config.get('table_answer_style', tsd)
         self.table_answer_var = StringVar(value=tad)
-        self.table_style_combo2 = ttk.Combobox(tif, textvariable=self.table_answer_var, width=18, state="readonly")
+        self.table_style_combo2 = ttk.Combobox(tif, textvariable=self.table_answer_var, width=18, state="readonly", style="Mono.TCombobox")
         self.table_style_combo2['values'] = self.template_styles
-        self.table_style_combo2.pack(side=LEFT, padx=1)
-        Label(tif, text="  ", font=("微软雅黑", 9)).pack(side=LEFT)
+        self.table_style_combo2.grid(row=0, column=2, padx=1, sticky=W)
+        # 图片
         self.enable_image_style_var = IntVar(value=self.current_tbl_img_config.get('enable_image_style', 0))
         Checkbutton(tif, text="图片", variable=self.enable_image_style_var,
-                    font=("微软雅黑", 9), command=self.toggle_image_style).pack(side=LEFT, padx=(0, 1))
+                    font=("微软雅黑", 9), command=self.toggle_image_style).grid(row=0, column=4, padx=(0, 1), sticky=W)
         isd = self.current_tbl_img_config.get('image_style', 'Body Text')
         self.image_style_var = StringVar(value=isd)
-        self.image_style_combo = ttk.Combobox(tif, textvariable=self.image_style_var, width=18, state="readonly")
+        self.image_style_combo = ttk.Combobox(tif, textvariable=self.image_style_var, width=18, state="readonly", style="Mono.TCombobox")
         self.image_style_combo['values'] = self.template_styles
-        self.image_style_combo.pack(side=LEFT, padx=1)
+        self.image_style_combo.grid(row=0, column=5, padx=1, sticky=W)
         iad = self.current_tbl_img_config.get('image_answer_style', isd)
         self.image_answer_var = StringVar(value=iad)
-        self.image_style_combo2 = ttk.Combobox(tif, textvariable=self.image_answer_var, width=18, state="readonly")
+        self.image_style_combo2 = ttk.Combobox(tif, textvariable=self.image_answer_var, width=18, state="readonly", style="Mono.TCombobox")
         self.image_style_combo2['values'] = self.template_styles
-        self.image_style_combo2.pack(side=LEFT, padx=1)
+        self.image_style_combo2.grid(row=0, column=6, padx=1, sticky=W)
         self.toggle_table_style()
         self.toggle_image_style()
 
@@ -296,7 +328,7 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_list_method).pack(side=LEFT, padx=(3, 0))
         slsd = self.current_list_config.get('style', 'Body Text')
         self.list_style_var = StringVar(value=slsd)
-        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=18, state="readonly")
+        self.list_style_combo = ttk.Combobox(lf, textvariable=self.list_style_var, width=18, state="readonly", style="Mono.TCombobox")
         self.list_style_combo['values'] = self.template_styles
         self.list_style_combo.pack(side=LEFT, padx=1)
         self.toggle_list_method()
@@ -314,7 +346,7 @@ class StyleMappingDialog:
                     font=("微软雅黑", 9), command=self.toggle_list_method2).pack(side=LEFT, padx=(3, 0))
         slsd2 = self.current_list_config.get('answer_style', self.list_style_var.get())
         self.list_style_var2 = StringVar(value=slsd2)
-        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=18, state="readonly")
+        self.list_style_combo2 = ttk.Combobox(lf, textvariable=self.list_style_var2, width=18, state="readonly", style="Mono.TCombobox")
         self.list_style_combo2['values'] = self.template_styles
         self.list_style_combo2.pack(side=LEFT, padx=1)
         self.toggle_list_method2()
