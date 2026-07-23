@@ -918,7 +918,10 @@ class DocumentConverter:
             return self.copy_special_element(source_elem, target_doc, target_style_name)
     
     def copy_special_element(self, source_elem, target_doc, target_style_name):
-        """复制特殊元素（OLE对象、Visio图等）"""
+        """复制特殊元素（OLE对象、Visio图等）
+        注意：OLE/VML对象的关系ID(rId)在新文档中无效，直接复制XML会导致文档损坏。
+        因此OLE/VML对象只添加占位提示，不复制其XML结构。
+        """
         try:
             # 创建一个新的段落来容纳特殊对象
             new_para = target_doc.add_paragraph()
@@ -927,18 +930,13 @@ class DocumentConverter:
             except KeyError:
                 new_para.style = target_doc.styles['Normal']
             
-            # 检查是否包含OLE对象或形状（使用正确的命名空间）
+            # 检查是否包含OLE对象或形状
             objects = source_elem.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object')
             shapes = source_elem.findall('.//{urn:schemas-microsoft-com:vml}shape')
             
             if objects or shapes:
-                # 对于包含特殊对象的元素，我们尝试直接复制XML结构
-                from copy import deepcopy
-                new_elem = deepcopy(source_elem)
-                
-                # 将复制的元素添加到新段落的底层XML中
-                new_para._element.append(new_elem)
-                
+                # 不复制OLE/VML的XML（会导致文档损坏），只输出提示
+                new_para.add_run("[OLE对象已跳过，请手动复制]")
                 return new_para
             else:
                 # 如果没有特殊对象，返回空段落
@@ -1002,26 +1000,52 @@ class DocumentConverter:
         has_ole_objects = source_para._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object')
         has_vml_shapes = source_para._element.findall('.//{urn:schemas-microsoft-com:vml}shape')
         
-        # 如果包含特殊对象，暂时跳过并记录警告
-        # TODO: 未来需要实现完整的 OLE 对象处理
+        # ★ 修复：包含 OLE/VML 对象的段落，按源文档顺序重建内容：
+        # OLE对象所在run的位置插入占位提示，文本保持原位置。
+        # 不能直接深度复制OLE的XML到新文档，因为OLE引用的关系ID(rId)在新文档中无效，
+        # 会导致文档打开报错。文本内容必须保留，避免用户信息丢失。
         if has_ole_objects or has_vml_shapes:
-            warning_msg = f"[WARNING] 段落 {para_idx} 包含 OLE/VML 对象，暂时跳过以避免文档损坏\n  - OLE 对象数: {len(has_ole_objects)}\n  - VML 形状数: {len(has_vml_shapes)}"
-            print(warning_msg)  # 仍然输出到控制台
-            
-            # 如果有回调函数，也通过回调输出
+            warning_msg = f"[WARNING] 段落 {para_idx} 包含 OLE/VML 对象\n  - OLE 对象数: {len(has_ole_objects)}\n  - VML 形状数: {len(has_vml_shapes)}\n  文本内容已保留，OLE对象请在原文中手动复制。"
+            print(warning_msg)
             if warning_callback:
                 try:
                     warning_callback(warning_msg)
                 except:
                     pass
             
-            # 创建一个占位段落
+            # 创建新段落，设置目标样式
             new_para = target_doc.add_paragraph()
-            new_para.add_run("[此处有 Visio 图或 OLE 对象，请手动复制]")
             try:
                 new_para.style = target_style_name
             except KeyError:
                 new_para.style = target_doc.styles['Normal']
+            
+            # 按源段落的XML子元素顺序重建内容
+            # run的XML顺序与 source_para.runs 的顺序一致
+            for run in source_para.runs:
+                # 检查这个run是否包含OLE对象
+                run_has_ole = bool(run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object'))
+                run_has_vml = bool(run._element.findall('.//{urn:schemas-microsoft-com:vml}shape'))
+                
+                if run_has_ole or run_has_vml:
+                    # OLE对象所在位置：插入占位提示（替代原OLE对象）
+                    new_para.add_run("[OLE对象，请手动复制]")
+                elif run.text:
+                    # 普通文本：复制文本及格式
+                    new_run = new_para.add_run(run.text)
+                    # 复制基本格式
+                    if run.font:
+                        new_run.font.bold = run.font.bold
+                        new_run.font.italic = run.font.italic
+                        new_run.font.underline = run.font.underline
+                        if run.font.size:
+                            new_run.font.size = run.font.size
+                        if run.font.color and run.font.color.rgb:
+                            try:
+                                new_run.font.color.rgb = run.font.color.rgb
+                            except:
+                                pass
+            
             return new_para
         
         # 普通段落处理（原有逻辑）
