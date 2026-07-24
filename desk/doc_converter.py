@@ -1014,9 +1014,17 @@ class DocumentConverter:
                     pass
             
             # 创建新段落，设置目标样式
+            # ★ 修复：OLE提示语段落使用图片兜底样式（如果启用了图片样式覆盖）
+            ole_para_style = target_style_name
+            if enable_image_style and image_style_override:
+                try:
+                    target_doc.styles[image_style_override]
+                    ole_para_style = image_style_override
+                except KeyError:
+                    pass
             new_para = target_doc.add_paragraph()
             try:
-                new_para.style = target_style_name
+                new_para.style = ole_para_style
             except KeyError:
                 new_para.style = target_doc.styles['Normal']
             
@@ -1029,7 +1037,24 @@ class DocumentConverter:
                 
                 if run_has_ole or run_has_vml:
                     # OLE对象所在位置：插入占位提示（替代原OLE对象）
-                    new_para.add_run("[OLE对象，请手动复制]")
+                    # ★ 修复：OLE占位提示应用图片兜底样式格式
+                    ole_run = new_para.add_run("[OLE对象，请手动复制]")
+                    if enable_image_style and image_style_override:
+                        try:
+                            img_style = target_doc.styles[image_style_override]
+                            if img_style.font:
+                                ole_run.font.bold = img_style.font.bold
+                                ole_run.font.italic = img_style.font.italic
+                                ole_run.font.underline = img_style.font.underline
+                                if img_style.font.size:
+                                    ole_run.font.size = img_style.font.size
+                                if img_style.font.color and img_style.font.color.rgb:
+                                    try:
+                                        ole_run.font.color.rgb = img_style.font.color.rgb
+                                    except:
+                                        pass
+                        except KeyError:
+                            pass
                 elif run.text:
                     # 普通文本：复制文本及格式
                     new_run = new_para.add_run(run.text)
