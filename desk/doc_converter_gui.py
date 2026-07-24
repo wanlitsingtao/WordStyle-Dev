@@ -1665,13 +1665,10 @@ class DocumentConverterGUI:
     
     def open_style_mapping(self):
         """打开样式映射配置对话框"""
-        if not self.template_styles:
-            messagebox.showwarning("警告", "请先选择模板文档以加载样式信息")
-            return
-        
         # 确定要配置的文件
         target_file = None
         target_styles = None
+        current_mapping = {}
         
         if self.selected_source_file and self.selected_source_file in self.file_style_maps:
             # 有选中的文件，针对该文件配置
@@ -1687,25 +1684,22 @@ class DocumentConverterGUI:
             else:
                 target_styles = self.source_styles
                 current_mapping = self.custom_style_map
-        else:
-            messagebox.showwarning("警告", "请先在源文件列表中选择一个文件")
-            return
         
+        # 没有源文件/styles 时，允许打开空对话框
         if not target_styles:
-            messagebox.showwarning("警告", "所选文件没有样式信息。\n\n请先点击「浏览...」加载源文档，等待样式分析完成后，再点击「配置样式映射」按钮。")
-            return
+            target_styles = set() if not self.source_styles else self.source_styles
         
-        # 检查模板样式是否为空
-        if not self.template_styles:
-            messagebox.showwarning("警告", "模板文档的样式列表为空。\n\n请先选择模板文档，等待样式分析完成后，再点击「配置样式映射」按钮。")
-            return
+        # 没有模板样式时，使用默认值
+        template_styles = self.template_styles if self.template_styles else []
+        if not template_styles:
+            template_styles = []
         
         # 获取该文件的当前所有辅助配置（表格/图片、应答句、列表段落、清除章节编号等）
         # 优先使用文件级保存的 dialog_config（保持用户上次关闭对话框时的完整设置）
         # 仅当文件级配置不存在时，才从 default_config 逐项补充
         dialog_aux_config = self._load_dialog_aux_config(target_file)
         
-        dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping,
+        dialog = StyleMappingDialog(self.root, target_styles, template_styles, current_mapping,
                                      saved_default_mapping=self.default_style_map,
                                      save_default_callback=self.save_default_style_map,
                                      current_tbl_img_config=dialog_aux_config.get('tbl_img_config', {}),
@@ -1719,8 +1713,9 @@ class DocumentConverterGUI:
             self.remove_chapter_label = remove_chapter_label
             
             # 统一保存映射配置和所有辅助配置到对应文件
-            self._save_dialog_config(target_file, mapping_result, answer_config,
-                                     tbl_img_config, list_config, remove_chapter_label)
+            if target_file:
+                self._save_dialog_config(target_file, mapping_result, answer_config,
+                                         tbl_img_config, list_config, remove_chapter_label)
             
             configured_count = sum(1 for v in mapping_result.values() if v)
             filename = os.path.basename(target_file) if target_file else "当前文件"
