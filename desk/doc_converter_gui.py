@@ -1700,80 +1700,27 @@ class DocumentConverterGUI:
             messagebox.showwarning("警告", "模板文档的样式列表为空。\n\n请先选择模板文档，等待样式分析完成后，再点击「配置样式映射」按钮。")
             return
         
-        # 获取该文件的当前表格/图片样式配置
-        # 优先使用文件级配置，其次使用默认配置中的表格/图片样式定义
-        current_tbl_img_config = {}
-        if target_file in self.file_style_maps and self.file_style_maps[target_file].get('tbl_img_config'):
-            current_tbl_img_config = self.file_style_maps[target_file]['tbl_img_config']
-        else:
-            # 从 default_config.json 中读取默认的表格/图片样式定义
-            current_tbl_img_config = {
-                'enable_table_style': self.default_config.get('enable_table_style', 0),
-                'table_style': self.default_config.get('table_style', 'Body Text'),
-                'table_answer_style': self.default_config.get('table_answer_style', 'Body Text'),
-                'enable_image_style': self.default_config.get('enable_image_style', 0),
-                'image_style': self.default_config.get('image_style', 'Body Text'),
-                'image_answer_style': self.default_config.get('image_answer_style', 'Body Text')
-            }
-        
-        # 获取当前应答句配置
-        current_answer_config = self.default_config.get('answer_config', {})
-        if not current_answer_config:
-            current_answer_config = {
-                'do_answer': self.default_config.get('do_answer', 0),
-                'answer_text': self.default_config.get('answer_text', '应答：本投标人理解并满足要求。'),
-                'answer_style': self.default_config.get('answer_style', '应答句'),
-                'answer_mode': self.default_config.get('answer_mode', '章节标题后插入'),
-                'answer_source_style': self.default_config.get('answer_source_style', ''),
-                'answer_copy_style': self.default_config.get('answer_copy_style', ''),
-            }
-        
-        # 获取当前列表段落兜底配置
-        current_list_config = {
-            'method': self.default_config.get('list_method', 'bullet'),
-            'bullet': self.default_config.get('list_bullet', '● '),
-            'style': self.default_config.get('list_style', 'Body Text'),
-            'answer_method': self.default_config.get('list_answer_method', 'bullet'),
-            'answer_bullet': self.default_config.get('list_answer_bullet', '● '),
-            'answer_style': self.default_config.get('list_answer_style', 'Body Text'),
-        }
-        
-        # 打开对话框（传入保存的默认映射、保存回调、应答句配置、表格/图片/列表配置、清除章节编号配置）
-        current_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
-        
-        # 优先使用文件级配置
-        if target_file in self.file_style_maps:
-            if self.file_style_maps[target_file].get('answer_config'):
-                current_answer_config = self.file_style_maps[target_file]['answer_config']
-            if self.file_style_maps[target_file].get('list_config'):
-                current_list_config = self.file_style_maps[target_file]['list_config']
+        # 获取该文件的当前所有辅助配置（表格/图片、应答句、列表段落、清除章节编号等）
+        # 优先使用文件级保存的 dialog_config（保持用户上次关闭对话框时的完整设置）
+        # 仅当文件级配置不存在时，才从 default_config 逐项补充
+        dialog_aux_config = self._load_dialog_aux_config(target_file)
         
         dialog = StyleMappingDialog(self.root, target_styles, self.template_styles, current_mapping,
                                      saved_default_mapping=self.default_style_map,
                                      save_default_callback=self.save_default_style_map,
-                                     current_tbl_img_config=current_tbl_img_config,
-                                     current_remove_chapter_label=current_remove_chapter_label,
-                                     current_answer_config=current_answer_config,
-                                     current_list_config=current_list_config)
+                                     current_tbl_img_config=dialog_aux_config.get('tbl_img_config', {}),
+                                     current_remove_chapter_label=dialog_aux_config.get('remove_chapter_label', 0),
+                                     current_answer_config=dialog_aux_config.get('answer_config', {}),
+                                     current_list_config=dialog_aux_config.get('list_config', {}))
         mapping_result, answer_config, tbl_img_config, list_config, remove_chapter_label = dialog.show()
         
         if mapping_result is not None:
             # 保存清除章节标题编号配置
             self.remove_chapter_label = remove_chapter_label
             
-            # 保存映射配置到对应文件
-            if target_file in self.file_style_maps:
-                self.file_style_maps[target_file]['mapping'] = mapping_result
-                self.file_style_maps[target_file]['tbl_img_config'] = tbl_img_config
-                self.file_style_maps[target_file]['remove_chapter_label'] = remove_chapter_label
-                self.file_style_maps[target_file]['answer_config'] = answer_config
-                self.file_style_maps[target_file]['list_config'] = list_config
-            else:
-                self.custom_style_map = mapping_result
-                self.custom_tbl_img_config = tbl_img_config or {}
-                self.custom_remove_chapter_label = remove_chapter_label
-                self.custom_answer_config = answer_config or {}
-                self.custom_list_config = list_config or {}
+            # 统一保存映射配置和所有辅助配置到对应文件
+            self._save_dialog_config(target_file, mapping_result, answer_config,
+                                     tbl_img_config, list_config, remove_chapter_label)
             
             configured_count = sum(1 for v in mapping_result.values() if v)
             filename = os.path.basename(target_file) if target_file else "当前文件"
@@ -1787,6 +1734,146 @@ class DocumentConverterGUI:
             self.log(f"  应答句: {'已启用(' + answer_mode + ')' if do_answer else '未启用'}")
             self.log(f"  列表段落兜底: {list_config.get('method', 'bullet') if list_config else 'bullet'}")
             messagebox.showinfo("成功", f"样式映射配置完成！\n\n文件: {filename}\n共 {configured_count} 个样式映射关系\n清除章节标题编号: {ch_label_info}")
+    
+    # ------------------------------------------------------------------ #
+    #  统一配置持久化：辅助配置（应答句、表格/图片、列表、清除章节标签等）
+    #  所有配置保存在 file_style_maps[file]['dialog_aux_config'] 中
+    #  新增配置项只需在 Dialog 中处理，此处自动保持
+    # ------------------------------------------------------------------ #
+    def _load_dialog_aux_config(self, target_file):
+        """加载对话框辅助配置，统一从 file_style_maps 恢复：
+        1. 优先从文件级 dialog_aux_config 恢复（现在单文件/多文件模式都会保存到此）
+        2. 兜底从 custom_* 变量读取（单文件模式第一次打开时使用）
+        3. 最后兜底从 default_config 读取
+        4. 所有缺失字段用硬编码默认值补充
+        """
+        # 默认值定义（硬编码兜底）
+        HARDCODED_TBL_IMG = {
+            'enable_table_style': 0,
+            'table_style': 'Body Text',
+            'table_answer_style': 'Body Text',
+            'enable_image_style': 0,
+            'image_style': 'Body Text',
+            'image_answer_style': 'Body Text',
+        }
+        HARDCODED_ANSWER = {
+            'do_answer': 0,
+            'answer_text': '应答：本投标人理解并满足要求。',
+            'answer_style': '应答句',
+            'answer_mode': '章节标题后插入',
+            'answer_source_style': '',
+            'answer_copy_style': '',
+        }
+        HARDCODED_LIST = {
+            'method': 'bullet',
+            'bullet': '\u25cf ',
+            'style': 'Body Text',
+            'answer_method': 'bullet',
+            'answer_bullet': '\u25cf ',
+            'answer_style': 'Body Text',
+        }
+        
+        # ----- 构建三级兜底基础值 -----
+        # 从 default_config 读取
+        def _from_default(key, fallback):
+            return self.default_config.get(key, fallback)
+        
+        base_tbl_img = {
+            k: _from_default(k, HARDCODED_TBL_IMG[k]) for k in HARDCODED_TBL_IMG
+        }
+        base_answer = {
+            k: _from_default(k, HARDCODED_ANSWER[k]) for k in HARDCODED_ANSWER
+        }
+        base_list = {
+            k: _from_default(k, HARDCODED_LIST[k]) for k in HARDCODED_LIST
+        }
+        base_remove = _from_default('remove_chapter_label', 0)
+        
+        # 候选配置列表，按优先级从高到低
+        candidate_answer = None
+        candidate_tbl_img = None
+        candidate_list = None
+        candidate_remove = None
+        
+        # ---- Step 1: 从文件级 dialog_aux_config 恢复 ----
+        if target_file in self.file_style_maps:
+            saved = self.file_style_maps[target_file].get('dialog_aux_config')
+            if saved and isinstance(saved, dict):
+                candidate_answer = saved.get('answer_config')
+                candidate_tbl_img = saved.get('tbl_img_config')
+                candidate_list = saved.get('list_config')
+                candidate_remove = saved.get('remove_chapter_label')
+        
+        # ---- Step 2: 如果文件级没有，从 custom_* 变量恢复 ----
+        if candidate_answer is None and hasattr(self, 'custom_answer_config') and self.custom_answer_config:
+            candidate_answer = self.custom_answer_config
+        if candidate_tbl_img is None and hasattr(self, 'custom_tbl_img_config') and self.custom_tbl_img_config:
+            candidate_tbl_img = self.custom_tbl_img_config
+        if candidate_list is None and hasattr(self, 'custom_list_config') and self.custom_list_config:
+            candidate_list = self.custom_list_config
+        if candidate_remove is None and hasattr(self, 'custom_remove_chapter_label'):
+            candidate_remove = self.custom_remove_chapter_label
+        
+        # ---- 合并结果：候选值优先，缺失字段用基础值补充 ----
+        result = {}
+        
+        # answer_config
+        if candidate_answer and isinstance(candidate_answer, dict):
+            result['answer_config'] = dict(base_answer)
+            result['answer_config'].update(candidate_answer)
+        else:
+            result['answer_config'] = dict(base_answer)
+        
+        # tbl_img_config
+        if candidate_tbl_img and isinstance(candidate_tbl_img, dict):
+            result['tbl_img_config'] = dict(base_tbl_img)
+            result['tbl_img_config'].update(candidate_tbl_img)
+        else:
+            result['tbl_img_config'] = dict(base_tbl_img)
+        
+        # list_config
+        if candidate_list and isinstance(candidate_list, dict):
+            result['list_config'] = dict(base_list)
+            result['list_config'].update(candidate_list)
+        else:
+            result['list_config'] = dict(base_list)
+        
+        # remove_chapter_label
+        result['remove_chapter_label'] = candidate_remove if candidate_remove is not None else base_remove
+        
+        return result
+    
+    def _save_dialog_config(self, target_file, mapping_result, answer_config,
+                            tbl_img_config, list_config, remove_chapter_label):
+        """统一保存样式映射和所有辅助配置（优先保存到 file_style_maps，兜底到 custom_*）"""
+        aux_config = {
+            'tbl_img_config': tbl_img_config or {},
+            'answer_config': answer_config or {},
+            'list_config': list_config or {},
+            'remove_chapter_label': remove_chapter_label,
+        }
+        
+        # 始终尝试保存到 file_style_maps（单文件模式也主动加入）
+        if target_file not in self.file_style_maps:
+            self.file_style_maps[target_file] = {
+                'styles': set(self.source_styles) if self.source_styles else set(),
+                'mapping': mapping_result or {},
+            }
+        
+        self.file_style_maps[target_file]['mapping'] = mapping_result
+        self.file_style_maps[target_file]['dialog_aux_config'] = aux_config
+        # 兼容旧版：保留旧的独立 key，便于转换逻辑读取
+        self.file_style_maps[target_file]['tbl_img_config'] = tbl_img_config or {}
+        self.file_style_maps[target_file]['answer_config'] = answer_config or {}
+        self.file_style_maps[target_file]['list_config'] = list_config or {}
+        self.file_style_maps[target_file]['remove_chapter_label'] = remove_chapter_label
+        
+        # 同时保持 custom_* 变量的向后兼容性
+        self.custom_style_map = mapping_result
+        self.custom_tbl_img_config = tbl_img_config or {}
+        self.custom_remove_chapter_label = remove_chapter_label
+        self.custom_answer_config = answer_config or {}
+        self.custom_list_config = list_config or {}
     
     def log(self, message, detailed=False):
         """添加日志"""
