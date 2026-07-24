@@ -319,6 +319,114 @@ class AppState:
     def set_list_bullet_config(bullet: str):
         """设置列表符号配置"""
         st.session_state.list_bullet_config = bullet
+
+    # ========== 应答原文/副本样式配置（copy_chapter模式） ==========
+
+    @staticmethod
+    def get_answer_source_style_config() -> str:
+        """获取应答原文样式（copy_chapter模式）"""
+        return st.session_state.get('answer_source_style_config', '')
+
+    @staticmethod
+    def set_answer_source_style_config(style: str):
+        """设置应答原文样式"""
+        st.session_state.answer_source_style_config = style
+
+    @staticmethod
+    def get_answer_copy_style_config() -> str:
+        """获取应答副本样式（copy_chapter模式）"""
+        return st.session_state.get('answer_copy_style_config', '')
+
+    @staticmethod
+    def set_answer_copy_style_config(style: str):
+        """设置应答副本样式"""
+        st.session_state.answer_copy_style_config = style
+
+    # ========== 列表段落兜底配置（原文+应答原文） ==========
+
+    @staticmethod
+    def get_list_method_config() -> str:
+        """获取列表段落原文处理方式"""
+        return st.session_state.get('list_method_config', 'bullet')
+
+    @staticmethod
+    def set_list_method_config(method: str):
+        """设置列表段落原文处理方式"""
+        st.session_state.list_method_config = method
+
+    @staticmethod
+    def get_list_style_config() -> str:
+        """获取列表段落原文目标样式"""
+        return st.session_state.get('list_style_config', 'Body Text')
+
+    @staticmethod
+    def set_list_style_config(style: str):
+        """设置列表段落原文目标样式"""
+        st.session_state.list_style_config = style
+
+    @staticmethod
+    def get_list_answer_method_config() -> str:
+        """获取列表段落应答原文处理方式"""
+        return st.session_state.get('list_answer_method_config', 'bullet')
+
+    @staticmethod
+    def set_list_answer_method_config(method: str):
+        """设置列表段落应答原文处理方式"""
+        st.session_state.list_answer_method_config = method
+
+    @staticmethod
+    def get_list_answer_style_config() -> str:
+        """获取列表段落应答原文目标样式"""
+        return st.session_state.get('list_answer_style_config', 'Body Text')
+
+    @staticmethod
+    def set_list_answer_style_config(style: str):
+        """设置列表段落应答原文目标样式"""
+        st.session_state.list_answer_style_config = style
+
+    @staticmethod
+    def get_list_answer_bullet_config() -> str:
+        """获取列表段落应答原文符号"""
+        return st.session_state.get('list_answer_bullet_config', '•')
+
+    @staticmethod
+    def set_list_answer_bullet_config(bullet: str):
+        """设置列表段落应答原文符号"""
+        st.session_state.list_answer_bullet_config = bullet
+
+    # ========== 清除章/节/篇标签 ==========
+
+    @staticmethod
+    def get_remove_chapter_label_config() -> bool:
+        """获取是否清除章/节/篇标签"""
+        return st.session_state.get('remove_chapter_label_config', False)
+
+    @staticmethod
+    def set_remove_chapter_label_config(enabled: bool):
+        """设置是否清除章/节/篇标签"""
+        st.session_state.remove_chapter_label_config = enabled
+
+    # ========== 表格/图片应答样式（copy_chapter模式） ==========
+
+    @staticmethod
+    def get_table_answer_style_config() -> str:
+        """获取表格应答原文目标样式"""
+        return st.session_state.get('table_answer_style_config', '')
+
+    @staticmethod
+    def set_table_answer_style_config(style: str):
+        """设置表格应答原文目标样式"""
+        st.session_state.table_answer_style_config = style
+
+    @staticmethod
+    def get_image_answer_style_config() -> str:
+        """获取图片应答原文目标样式"""
+        return st.session_state.get('image_answer_style_config', '')
+
+    @staticmethod
+    def set_image_answer_style_config(style: str):
+        """设置图片应答原文目标样式"""
+        st.session_state.image_answer_style_config = style
     
     # ==================== 转换执行相关 ====================
     
@@ -508,6 +616,17 @@ class AppState:
             'feedback_form_reset': 0,
             'comment_refresh_needed': False,
             'has_seen_guide': False,
+            # 新增配置键（与桌面版同步）
+            'answer_source_style_config': '',
+            'answer_copy_style_config': '',
+            'list_method_config': 'bullet',
+            'list_style_config': 'Body Text',
+            'list_answer_method_config': 'bullet',
+            'list_answer_style_config': 'Body Text',
+            'list_answer_bullet_config': '•',
+            'remove_chapter_label_config': False,
+            'table_answer_style_config': '',
+            'image_answer_style_config': '',
         }
         
         for key, value in defaults.items():

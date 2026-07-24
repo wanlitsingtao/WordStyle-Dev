@@ -1056,18 +1056,48 @@ if 'hint_text_config' not in st.session_state:
 if 'hint_style_config' not in st.session_state:
     app_state.set_hint_style_config('Normal')
 
+# ========== 新增配置键初始化（与桌面版同步） ==========
+if 'answer_source_style_config' not in st.session_state:
+    app_state.set_answer_source_style_config('')
+if 'answer_copy_style_config' not in st.session_state:
+    app_state.set_answer_copy_style_config('')
+if 'list_method_config' not in st.session_state:
+    app_state.set_list_method_config('bullet')
+if 'list_style_config' not in st.session_state:
+    app_state.set_list_style_config('Body Text')
+if 'list_answer_method_config' not in st.session_state:
+    app_state.set_list_answer_method_config('bullet')
+if 'list_answer_style_config' not in st.session_state:
+    app_state.set_list_answer_style_config('Body Text')
+if 'list_answer_bullet_config' not in st.session_state:
+    app_state.set_list_answer_bullet_config('•')
+if 'remove_chapter_label_config' not in st.session_state:
+    app_state.set_remove_chapter_label_config(False)
+if 'table_answer_style_config' not in st.session_state:
+    app_state.set_table_answer_style_config('')
+if 'image_answer_style_config' not in st.session_state:
+    app_state.set_image_answer_style_config('')
+
 
 # ==================== [FIX] 调用配置区组件渲染实际的UI控件 ====================
 # render_conversion_config() 来自 components/config_panel.py
 # 包含：样式映射按钮、祈使语气转换checkbox、插入应答句checkbox、
 #       列表符号text_input、应答句文本、应答句样式selectbox、插入模式selectbox
-do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode, do_hint, hint_type, hint_text, hint_image_path, hint_style = render_conversion_config()
+# 新增：原文样式、应答原文样式、列表段落兜底配置、清除章节编号
+result = render_conversion_config()
+do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode = result[0:6]
+do_hint, hint_type, hint_text, hint_image_path, hint_style = result[6:11]
+answer_source_style, answer_copy_style = result[11:13]
+list_method, list_style, list_answer_method, list_answer_style, list_answer_bullet = result[13:18]
+remove_chapter_label = result[18]
 
 # 不插入应答句时使用默认值（确保变量存在）
 if not do_answer:
     answer_text = app_state.get_answer_text_config()
     answer_style = app_state.get_answer_style_config()
     answer_mode = app_state.get_answer_mode_config()
+    answer_source_style = app_state.get_answer_source_style_config()
+    answer_copy_style = app_state.get_answer_copy_style_config()
 
 
 # 开始转换按钀
@@ -1149,6 +1179,14 @@ else:
                 'list_bullet': list_bullet if list_bullet else "—",
                 'do_answer_insertion': do_answer,
                 'answer_mode': answer_mode,
+                'answer_source_style': answer_source_style,
+                'answer_copy_style': answer_copy_style,
+                'list_method': list_method,
+                'list_style': list_style,
+                'list_answer_method': list_answer_method,
+                'list_answer_style': list_answer_style,
+                'list_answer_bullet': list_answer_bullet,
+                'remove_chapter_label': remove_chapter_label,
                 'custom_style_map': st.session_state.get('style_mapping', None)  # 用户配置的样式映尀
             }
                         
@@ -1237,6 +1275,10 @@ else:
                     # [HIGH_VOLTAGE] 性能优化：传递缓存的样式列表，避免重复分枀
                     source_styles_for_file = st.session_state.file_styles_map.get(source_file_obj.name, None)
                     
+                    # 获取该文件的表格/图片应答样式配置
+                    file_table_answer_style = file_tbl_img_config.get('table_answer_style', '')
+                    file_image_answer_style = file_tbl_img_config.get('image_answer_style', '')
+                    
                     # 执行转换
                     success, actual_file, msg = converter.full_convert(
                         source_file=temp_source,
@@ -1246,7 +1288,15 @@ else:
                         do_mood=do_mood,
                         answer_text=answer_text,
                         answer_style=answer_style,
+                        answer_source_style=answer_source_style,
+                        answer_copy_style=answer_copy_style,
+                        table_answer_style=file_table_answer_style,
                         list_bullet=list_bullet if list_bullet else "—",
+                        list_method=list_method,
+                        list_style=list_style,
+                        list_answer_method=list_answer_method,
+                        list_answer_style=list_answer_style,
+                        list_answer_bullet=list_answer_bullet,
                         do_answer_insertion=do_answer,
                         answer_mode=answer_mode,
                         do_hint_insertion=do_hint,
@@ -1260,7 +1310,8 @@ else:
                         table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
                         enable_table_style=file_tbl_img_config.get('enable_table_style', False),
                         image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                        enable_image_style=file_tbl_img_config.get('enable_image_style', False)
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', False),
+                        remove_chapter_label=remove_chapter_label
                     )
                     
                     if success:

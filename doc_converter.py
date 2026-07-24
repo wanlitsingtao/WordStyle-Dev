@@ -3534,7 +3534,17 @@ class DocumentConverter:
                 )
             elif mode == 'copy_chapter':
                 insert_count, total_heading_count = self._insert_with_copy_chapter(
-                    children, new_children, answer_template, doc
+                    children, new_children, answer_template, doc,
+                    answer_source_style=answer_source_style,
+                    answer_copy_style=answer_copy_style,
+                    table_answer_style=table_answer_style,
+                    list_method=list_method,
+                    list_style=list_style,
+                    list_answer_method=list_answer_method,
+                    list_answer_style=list_answer_style,
+                    list_answer_bullet=list_answer_bullet,
+                    enable_image_style=enable_image_style,
+                    image_style_override=image_style_override
                 )
             elif mode == 'before_paragraph':
                 insert_count, total_heading_count = self._insert_before_paragraphs(

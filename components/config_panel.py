@@ -258,11 +258,61 @@ def render_conversion_config():
             # 仅在值改变时更新
             if answer_mode != st.session_state.get('answer_mode_config'):
                 st.session_state.answer_mode_config = answer_mode
+        
+        # ========== 第三行：原文/应答原文样式（仅当copy_chapter模式时显示） ==========
+        is_copy_chapter = (answer_mode == 'copy_chapter')
+        if is_copy_chapter:
+            st.markdown("---")
+            st.markdown("**📋 原文/应答原文样式配置（copy_chapter模式）**")
+            
+            src_col1, src_col2 = st.columns(2)
+            
+            with src_col1:
+                # 原文样式选择
+                src_style_index = 0
+                if st.session_state.answer_source_style_config in template_styles:
+                    try:
+                        src_style_index = template_styles.index(st.session_state.answer_source_style_config)
+                    except ValueError:
+                        src_style_index = 0
+                
+                answer_source_style = st.selectbox(
+                    "原文样式",
+                    options=template_styles,
+                    index=src_style_index,
+                    help="原文部分的段落样式",
+                    key="answer_source_style_select"
+                )
+                st.session_state.answer_source_style_config = answer_source_style
+            
+            with src_col2:
+                # 应答原文样式选择
+                copy_style_index = 0
+                if st.session_state.answer_copy_style_config in template_styles:
+                    try:
+                        copy_style_index = template_styles.index(st.session_state.answer_copy_style_config)
+                    except ValueError:
+                        copy_style_index = 0
+                
+                answer_copy_style = st.selectbox(
+                    "应答原文样式",
+                    options=template_styles,
+                    index=copy_style_index,
+                    help="应答原文（副本）部分的段落样式",
+                    key="answer_copy_style_select"
+                )
+                st.session_state.answer_copy_style_config = answer_copy_style
+        else:
+            # 非copy_chapter模式时，使用当前值或默认值
+            answer_source_style = st.session_state.get('answer_source_style_config', '')
+            answer_copy_style = st.session_state.get('answer_copy_style_config', '')
     else:
         # 未勾选时设置默认值
         answer_text = st.session_state.get('answer_text_config', '')
         answer_style = st.session_state.get('answer_style_config', 'Normal')
         answer_mode = st.session_state.get('answer_mode_config', 'before_heading')
+        answer_source_style = st.session_state.get('answer_source_style_config', '')
+        answer_copy_style = st.session_state.get('answer_copy_style_config', '')
     
     # ========== 章节提示语配置（第三行） ==========
     st.markdown("---")
@@ -416,5 +466,114 @@ def render_conversion_config():
                 else:
                     st.error("❌ 保存默认配置失败")
     
-    # 返回配置值供后续使用（表格/图片样式从样式映射对话框按文件配置，不再全局返回）
-    return do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode, do_hint, hint_type, hint_text, hint_image_path, hint_style
+    # ========== 列表段落兜底配置（第四部分） ==========
+    st.markdown("---")
+    st.markdown("**📋 列表段落（未映射）兜底配置**")
+    st.markdown("_（配置源文档中未在样式映射中配置的列表段落的处理方式）_")
+    
+    list_cols = st.columns([1, 3, 1, 3])
+    
+    with list_cols[0]:
+        st.caption("**原文**")
+        # 原文处理方式：符号/样式
+        list_method = st.radio(
+            "原文处理方式",
+            options=["bullet", "style"],
+            format_func=lambda x: "符号" if x == "bullet" else "样式",
+            index=0 if st.session_state.list_method_config == "bullet" else 1,
+            horizontal=True,
+            key="list_method_radio",
+            label_visibility="collapsed"
+        )
+        if list_method != st.session_state.get('list_method_config'):
+            st.session_state.list_method_config = list_method
+    
+    with list_cols[1]:
+        if list_method == "bullet":
+            list_style_input = st.text_input(
+                "原文符号",
+                value=st.session_state.list_bullet_config,
+                help="列表段落的符号",
+                key="list_bullet_input"
+            )
+            if list_style_input != st.session_state.get('list_bullet_config'):
+                st.session_state.list_bullet_config = list_style_input
+            list_style = st.session_state.get('list_style_config', 'Body Text')
+        else:
+            template_styles = st.session_state.get('template_styles', ["Normal"])
+            list_style_idx = 0
+            if st.session_state.list_style_config in template_styles:
+                try:
+                    list_style_idx = template_styles.index(st.session_state.list_style_config)
+                except ValueError:
+                    list_style_idx = 0
+            list_style = st.selectbox(
+                "原文目标样式",
+                options=template_styles,
+                index=list_style_idx,
+                key="list_style_select"
+            )
+            st.session_state.list_style_config = list_style
+            list_style_input = st.session_state.get('list_bullet_config', '•')
+    
+    with list_cols[2]:
+        st.caption("**答原文**")
+        # 应答原文处理方式
+        list_answer_method = st.radio(
+            "答原文处理方式",
+            options=["bullet", "style"],
+            format_func=lambda x: "符号" if x == "bullet" else "样式",
+            index=0 if st.session_state.list_answer_method_config == "bullet" else 1,
+            horizontal=True,
+            key="list_answer_method_radio",
+            label_visibility="collapsed"
+        )
+        if list_answer_method != st.session_state.get('list_answer_method_config'):
+            st.session_state.list_answer_method_config = list_answer_method
+    
+    with list_cols[3]:
+        if list_answer_method == "bullet":
+            list_answer_bullet = st.text_input(
+                "答原文符号",
+                value=st.session_state.list_answer_bullet_config,
+                help="列表段落的应答原文符号",
+                key="list_answer_bullet_input"
+            )
+            if list_answer_bullet != st.session_state.get('list_answer_bullet_config'):
+                st.session_state.list_answer_bullet_config = list_answer_bullet
+            list_answer_style = st.session_state.get('list_answer_style_config', 'Body Text')
+        else:
+            template_styles = st.session_state.get('template_styles', ["Normal"])
+            list_answer_style_idx = 0
+            if st.session_state.list_answer_style_config in template_styles:
+                try:
+                    list_answer_style_idx = template_styles.index(st.session_state.list_answer_style_config)
+                except ValueError:
+                    list_answer_style_idx = 0
+            list_answer_style = st.selectbox(
+                "答原文目标样式",
+                options=template_styles,
+                index=list_answer_style_idx,
+                key="list_answer_style_select"
+            )
+            st.session_state.list_answer_style_config = list_answer_style
+            list_answer_bullet = st.session_state.get('list_answer_bullet_config', '•')
+    
+    # ========== 清除章节编号 ==========
+    st.markdown("---")
+    remove_chapter_label = st.checkbox(
+        '清除标题中的"第X章/第X节"等字样',
+        value=st.session_state.remove_chapter_label_config,
+        help="选中后，自动清除标题开头的'第一章'、'第二节'、'第三篇'等章节编号字样",
+        key="remove_chapter_label_checkbox"
+    )
+    if remove_chapter_label != st.session_state.get('remove_chapter_label_config'):
+        st.session_state.remove_chapter_label_config = remove_chapter_label
+    
+    # 返回配置值供后续使用
+    # 注意：answer_source_style 和 answer_copy_style 在 copy_chapter 模式下有效
+    return (do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode, 
+            do_hint, hint_type, hint_text, hint_image_path, hint_style, 
+            answer_source_style, answer_copy_style,
+            list_method, list_style, list_answer_method, list_answer_style, list_answer_bullet,
+            remove_chapter_label)
