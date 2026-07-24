@@ -1035,10 +1035,13 @@ st.markdown("---")
 st.subheader("⚙️ 转换配置")
 
 # 使用 session_state 保存配置，避免每次页面刷新都重置
+# 注意：应答句配置、列表段落配置、清除章节标签等现在由样式映射对话框管理
+# 这里只初始化未设置的键
+
 if 'do_mood_config' not in st.session_state:
     app_state.set_do_mood_config(True)
 if 'do_answer_config' not in st.session_state:
-    st.session_state.do_answer_config = True
+    st.session_state.do_answer_config = False  # 默认不勾选，与桌面版一致
 if 'list_bullet_config' not in st.session_state:
     app_state.set_list_bullet_config("•")
 if 'answer_text_config' not in st.session_state:
@@ -1046,7 +1049,7 @@ if 'answer_text_config' not in st.session_state:
 if 'answer_style_config' not in st.session_state:
     app_state.set_answer_style_config("Normal")
 if 'answer_mode_config' not in st.session_state:
-    app_state.set_answer_mode_config('before_heading')
+    app_state.set_answer_mode_config('copy_chapter')  # 默认"原文+应答句+应答原文"模式，与桌面版一致
 if 'do_hint_config' not in st.session_state:
     app_state.set_do_hint_config(False)
 if 'hint_type_config' not in st.session_state:
@@ -1081,9 +1084,10 @@ if 'image_answer_style_config' not in st.session_state:
 
 # ==================== [FIX] 调用配置区组件渲染实际的UI控件 ====================
 # render_conversion_config() 来自 components/config_panel.py
-# 包含：样式映射按钮、祈使语气转换checkbox、插入应答句checkbox、
-#       列表符号text_input、应答句文本、应答句样式selectbox、插入模式selectbox
-# 新增：原文样式、应答原文样式、列表段落兜底配置、清除章节编号
+# 完全参照桌面版布局：
+# 转换选项区：配置样式映射按钮 + 祈使语气转换checkbox
+# 章节提示语区：插入提示语checkbox + 类型/样式/内容配置
+# 所有其他配置（应答句、列表段落、表格/图片兜底、清除章节标签）均在样式映射对话框中管理
 result = render_conversion_config()
 do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode = result[0:6]
 do_hint, hint_type, hint_text, hint_image_path, hint_style = result[6:11]
