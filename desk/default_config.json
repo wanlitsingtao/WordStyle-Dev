@@ -43,5 +43,6 @@
   "list_style": "BN_原文引用列表项目符号",
   "list_answer_method": "style",
   "list_answer_bullet": "● ",
-  "list_answer_style": "BN_列表项目符号"
+  "list_answer_style": "BN_列表项目符号",
+  "enable_list_style": 0
 }

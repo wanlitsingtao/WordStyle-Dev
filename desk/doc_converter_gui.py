@@ -301,8 +301,11 @@ class StyleMappingDialog:
         # --- 第2行：列表段落（原文+应答 同一行，标签+控件全部在同一行） ---
         lf = Frame(step4_frame)
         lf.pack(fill=X, pady=(1, 0))
-        # 标签：列表段落（未映射）
-        Label(lf, text="列表段落（未映射）", font=("微软雅黑", 9, "bold"), fg="black", width=14, anchor=W).pack(side=LEFT)
+        # Checkbox: 启用列表段落兜底
+        saved_enable_list = self.current_list_config.get('enable_list', 1)
+        self.enable_list_var = IntVar(value=saved_enable_list)
+        Checkbutton(lf, text="列表段落（未映射）", variable=self.enable_list_var,
+                    font=("微软雅黑", 9, "bold"), fg="black", command=self.toggle_list_enable).pack(side=LEFT, padx=(0, 3))
         # 原文标签 + 控件
         Label(lf, text="原文:", font=("微软雅黑", 9), fg="black", width=4, anchor=E).pack(side=LEFT, padx=(2, 1))
         self.list_method_var = StringVar(value=self.current_list_config.get('method', 'bullet'))
@@ -419,12 +422,15 @@ class StyleMappingDialog:
 
     def _set_list_answer_state(self, state):
         """设置列表段落应答控件的可用状态"""
+        if not hasattr(self, 'enable_list_var'):
+            return
+        enabled = self.enable_list_var.get() == 1
         if hasattr(self, 'list_style_combo2') and self.list_style_combo2:
             is_style = self.list_method_var2.get() == "style"
-            self.list_style_combo2.config(state="normal" if (state == "normal" and is_style) else "disabled")
+            self.list_style_combo2.config(state="normal" if (enabled and state == "normal" and is_style) else "disabled")
         if hasattr(self, 'list_bullet_entry2') and self.list_bullet_entry2:
             is_bullet = self.list_method_var2.get() == "bullet"
-            self.list_bullet_entry2.config(state="normal" if (state == "normal" and is_bullet) else "disabled")
+            self.list_bullet_entry2.config(state="normal" if (enabled and state == "normal" and is_bullet) else "disabled")
         # RadioButton 本身不做 disabled，因为 value 仍然需要可读，但它们的容器状态由外部控制
 
     def rebuild_style_mapping(self):
@@ -502,18 +508,31 @@ class StyleMappingDialog:
             is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
             self.image_style_combo2.config(state="normal" if (enabled and is_dual) else "disabled")
 
+    def toggle_list_enable(self):
+        """切换列表段落兜底配置的启用状态"""
+        enabled = self.enable_list_var.get() == 1
+        # 原文控件
+        self.list_bullet_entry.config(state="normal" if (enabled and self.list_method_var.get() == "bullet") else "disabled")
+        self.list_style_combo.config(state="normal" if (enabled and self.list_method_var.get() == "style") else "disabled")
+        # 应答原文控件
+        is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
+        self.list_bullet_entry2.config(state="normal" if (enabled and is_dual and self.list_method_var2.get() == "bullet") else "disabled")
+        self.list_style_combo2.config(state="normal" if (enabled and is_dual and self.list_method_var2.get() == "style") else "disabled")
+
     def toggle_list_method(self):
         """切换原文列表段落处理方式（默认符号/指定样式）"""
+        enabled = self.enable_list_var.get() == 1
         is_style = self.list_method_var.get() == "style"
-        self.list_style_combo.config(state="normal" if is_style else "disabled")
-        self.list_bullet_entry.config(state="normal" if not is_style else "disabled")
+        self.list_style_combo.config(state="normal" if (enabled and is_style) else "disabled")
+        self.list_bullet_entry.config(state="normal" if (enabled and not is_style) else "disabled")
 
     def toggle_list_method2(self):
         """切换应答句列表段落处理方式（默认符号/指定样式）"""
+        enabled = self.enable_list_var.get() == 1
         is_style = self.list_method_var2.get() == "style"
         is_dual = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
-        self.list_style_combo2.config(state="normal" if (is_style and is_dual) else "disabled")
-        self.list_bullet_entry2.config(state="normal" if (not is_style and is_dual) else "disabled")
+        self.list_style_combo2.config(state="normal" if (enabled and is_style and is_dual) else "disabled")
+        self.list_bullet_entry2.config(state="normal" if (enabled and not is_style and is_dual) else "disabled")
 
     def save_as_default(self):
         """保存当前配置为默认"""
@@ -598,6 +617,7 @@ class StyleMappingDialog:
         """收集列表段落兜底配置"""
         do_answer = (self.do_answer_var.get() == 1 and self.answer_mode_var.get() == "原文+应答句+应答原文")
         cfg = {
+            'enable_list': self.enable_list_var.get(),
             'method': self.list_method_var.get(),
             'bullet': self.list_bullet_var.get(),
             'style': self.list_style_var.get(),
@@ -669,7 +689,7 @@ class DocumentConverterGUI:
         self.template_styles = set()
         self.custom_style_map = {}  # 用户自定义的样式映射（全局）
         self.custom_tbl_img_config = {}  # 用户自定义的表格/图片样式配置（全局，当file_style_maps中没有时使用）
-        self.custom_remove_chapter_label = 0  # 用户自定义的清除章节编号配置（全局）
+        self.custom_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)  # 从默认配置初始化
         self.custom_answer_config = {}  # 用户自定义的应答句配置（全局）
         self.custom_list_config = {}  # 用户自定义的列表配置（全局）
         self.remove_chapter_label = self.default_config.get('remove_chapter_label', 0)  # 当前清除章节编号配置
@@ -1329,7 +1349,7 @@ class DocumentConverterGUI:
         # 重置自定义映射
         self.custom_style_map = {}
         self.custom_tbl_img_config = {}
-        self.custom_remove_chapter_label = 0
+        self.custom_remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
         self.custom_answer_config = {}
         self.custom_list_config = {}
         self.remove_chapter_label = self.default_config.get('remove_chapter_label', 0)
@@ -1389,6 +1409,7 @@ class DocumentConverterGUI:
             self.default_config["image_answer_style"] = tbl_img_config.get('image_answer_style', 'Body Text')
         # 保存列表段落兜底配置
         if list_config:
+            self.default_config["enable_list_style"] = list_config.get('enable_list', 1)
             self.default_config["list_method"] = list_config.get('method', 'bullet')
             self.default_config["list_bullet"] = list_config.get('bullet', '● ')
             self.default_config["list_style"] = list_config.get('style', 'Body Text')
@@ -1760,6 +1781,7 @@ class DocumentConverterGUI:
             'answer_copy_style': '',
         }
         HARDCODED_LIST = {
+            'enable_list': 1,
             'method': 'bullet',
             'bullet': '\u25cf ',
             'style': 'Body Text',
@@ -1779,8 +1801,18 @@ class DocumentConverterGUI:
         base_answer = {
             k: _from_default(k, HARDCODED_ANSWER[k]) for k in HARDCODED_ANSWER
         }
+        # ★ 修复：列表配置在 default_config 中的键名与 HARDCODED_LIST 不一致
+        # save_default_style_map 保存为 enable_list_style/list_method/... 
+        # 但 HARDCODED_LIST 使用 enable_list/method/...，需显式映射
+        _dc = self.default_config
         base_list = {
-            k: _from_default(k, HARDCODED_LIST[k]) for k in HARDCODED_LIST
+            'enable_list':     _dc.get('enable_list_style', HARDCODED_LIST['enable_list']),
+            'method':          _dc.get('list_method', HARDCODED_LIST['method']),
+            'bullet':          _dc.get('list_bullet', HARDCODED_LIST['bullet']),
+            'style':           _dc.get('list_style', HARDCODED_LIST['style']),
+            'answer_method':   _dc.get('list_answer_method', HARDCODED_LIST['answer_method']),
+            'answer_bullet':   _dc.get('list_answer_bullet', HARDCODED_LIST['answer_bullet']),
+            'answer_style':    _dc.get('list_answer_style', HARDCODED_LIST['answer_style']),
         }
         base_remove = _from_default('remove_chapter_label', 0)
         
@@ -1800,34 +1832,34 @@ class DocumentConverterGUI:
                 candidate_remove = saved.get('remove_chapter_label')
         
         # ---- Step 2: 如果文件级没有，从 custom_* 变量恢复 ----
-        if candidate_answer is None and hasattr(self, 'custom_answer_config') and self.custom_answer_config:
+        if candidate_answer is None and hasattr(self, 'custom_answer_config') and isinstance(self.custom_answer_config, dict):
             candidate_answer = self.custom_answer_config
-        if candidate_tbl_img is None and hasattr(self, 'custom_tbl_img_config') and self.custom_tbl_img_config:
+        if candidate_tbl_img is None and hasattr(self, 'custom_tbl_img_config') and isinstance(self.custom_tbl_img_config, dict):
             candidate_tbl_img = self.custom_tbl_img_config
-        if candidate_list is None and hasattr(self, 'custom_list_config') and self.custom_list_config:
+        if candidate_list is None and hasattr(self, 'custom_list_config') and isinstance(self.custom_list_config, dict):
             candidate_list = self.custom_list_config
-        if candidate_remove is None and hasattr(self, 'custom_remove_chapter_label'):
+        if candidate_remove is None and hasattr(self, 'custom_remove_chapter_label') and self.custom_remove_chapter_label is not None:
             candidate_remove = self.custom_remove_chapter_label
         
         # ---- 合并结果：候选值优先，缺失字段用基础值补充 ----
         result = {}
         
         # answer_config
-        if candidate_answer and isinstance(candidate_answer, dict):
+        if isinstance(candidate_answer, dict):
             result['answer_config'] = dict(base_answer)
             result['answer_config'].update(candidate_answer)
         else:
             result['answer_config'] = dict(base_answer)
         
         # tbl_img_config
-        if candidate_tbl_img and isinstance(candidate_tbl_img, dict):
+        if isinstance(candidate_tbl_img, dict):
             result['tbl_img_config'] = dict(base_tbl_img)
             result['tbl_img_config'].update(candidate_tbl_img)
         else:
             result['tbl_img_config'] = dict(base_tbl_img)
         
         # list_config
-        if candidate_list and isinstance(candidate_list, dict):
+        if isinstance(candidate_list, dict):
             result['list_config'] = dict(base_list)
             result['list_config'].update(candidate_list)
         else:
@@ -2073,6 +2105,7 @@ class DocumentConverterGUI:
                         'answer_copy_style': self.default_config.get('answer_copy_style', ''),
                     }
                     file_list_config = {
+                        'enable_list': self.default_config.get('enable_list_style', 1),
                         'method': self.default_config.get('list_method', 'bullet'),
                         'bullet': self.default_config.get('list_bullet', '● '),
                         'style': self.default_config.get('list_style', 'Body Text'),
@@ -2125,6 +2158,7 @@ class DocumentConverterGUI:
                 _list_method = file_list_config.get('method', 'bullet') if file_list_config else 'bullet'
                 _list_bullet = file_list_config.get('bullet', '● ') if file_list_config else '● '
                 _list_style = file_list_config.get('style', 'Body Text') if file_list_config else 'Body Text'
+                _enable_list = file_list_config.get('enable_list', 1) if file_list_config else 1
                 # 当 do_answer=0 时，应答原文的列表配置不应生效
                 if _do_answer:
                     _list_answer_method = file_list_config.get('answer_method', 'bullet') if file_list_config else 'bullet'
@@ -2153,6 +2187,7 @@ class DocumentConverterGUI:
                     list_answer_method=_list_answer_method,
                     list_answer_style=_list_answer_style,
                     list_answer_bullet=_list_answer_bullet,
+                    enable_list_style=_enable_list,
                     do_answer_insertion=_do_answer,
                     answer_mode=_answer_mode,
                     do_hint_insertion=self.do_hint_insertion.get(),
@@ -2229,6 +2264,7 @@ class DocumentConverterGUI:
                             'answer_copy_style': self.default_config.get('answer_copy_style', ''),
                         }
                         file_list_config = {
+                            'enable_list': self.default_config.get('enable_list_style', 1),
                             'method': self.default_config.get('list_method', 'bullet'),
                             'bullet': self.default_config.get('list_bullet', '● '),
                             'style': self.default_config.get('list_style', 'Body Text'),
@@ -2275,6 +2311,7 @@ class DocumentConverterGUI:
                     _list_method = file_list_config.get('method', 'bullet') if file_list_config else 'bullet'
                     _list_bullet = file_list_config.get('bullet', '● ') if file_list_config else '● '
                     _list_style = file_list_config.get('style', 'Body Text') if file_list_config else 'Body Text'
+                    _enable_list = file_list_config.get('enable_list', 1) if file_list_config else 1
                     _list_answer_method = file_list_config.get('answer_method', 'bullet') if file_list_config else 'bullet'
                     _list_answer_bullet = file_list_config.get('answer_bullet', '● ') if file_list_config else '● '
                     _list_answer_style = file_list_config.get('answer_style', 'Body Text') if file_list_config else 'Body Text'
@@ -2296,6 +2333,7 @@ class DocumentConverterGUI:
                         list_answer_method=_list_answer_method,
                         list_answer_style=_list_answer_style,
                         list_answer_bullet=_list_answer_bullet,
+                        enable_list_style=_enable_list,
                         do_answer_insertion=_do_answer,
                         answer_mode=_answer_mode,
                         do_hint_insertion=self.do_hint_insertion.get(),
