@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-转换配置区组件（简化版 - 完全参照桌面版）
+转换配置区组件（完全参照桌面版）
 
-桌面版在主界面仅保留：
-1. "配置样式映射"按钮 + 提示
-2. "进行祈使语气转换" checkbox
-3. 章节提示语配置（独立配置区）
+桌面版在主界面"转换选项"区域仅保留：
+1. "进行祈使语气转换" checkbox
+2. 章节提示语配置（独立配置区）
 
+样式映射配置通过样式信息区域的按钮打开对话框管理。
 所有其他配置（应答句、列表段落、清除章节标签等）均在样式映射对话框中管理。
 """
 import streamlit as st
@@ -17,9 +17,10 @@ def render_conversion_config():
     渲染转换配置区（完全参照桌面版）
     
     仅包含：
-    1. 样式映射按钮（打开完整四步配置对话框）
-    2. 祈使语气转换 checkbox
-    3. 章节提示语配置（独立于样式映射四步流程，与桌面版一致）
+    1. 祈使语气转换 checkbox
+    2. 章节提示语配置（独立于样式映射四步流程，与桌面版一致）
+    
+    注意：样式映射按钮已移至样式信息区域（app.py），参照桌面版布局。
     """
     # CSS：统一控件高度
     st.markdown("""
@@ -49,31 +50,17 @@ def render_conversion_config():
     </style>
     """, unsafe_allow_html=True)
     
-    # ========== 样式映射按钮 + 祈使语气转换（与桌面版"转换选项"区域一致） ==========
+    # ========== 转换选项（与桌面版"转换选项"区域一致：仅祈使语气转换） ==========
     st.markdown("**转换选项**")
     
-    # 第一行：样式映射按钮 + 祈使语气转换
-    col1, col2, col3 = st.columns([2, 2, 6])
-    
-    with col1:
-        if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
-                     help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
-            from components.dialogs.style_mapping import show_style_mapping_dialog
-            show_style_mapping_dialog()
-
-    with col2:
-        do_mood = st.checkbox(
-            "祈使语气转换", 
-            value=st.session_state.get('do_mood_config', True),
-            help="将文档中的祈使语气转换为投标人语气",
-            key="mood_checkbox"
-        )
-        if do_mood != st.session_state.get('do_mood_config'):
-            st.session_state.do_mood_config = do_mood
-
-    with col3:
-        # 与桌面版一致的提示文字
-        st.caption("选择源文件后点击按钮配置该文件的样式映射")
+    do_mood = st.checkbox(
+        "进行祈使语气转换", 
+        value=st.session_state.get('do_mood_config', True),
+        help="将文档中的祈使语气转换为投标人语气",
+        key="mood_checkbox"
+    )
+    if do_mood != st.session_state.get('do_mood_config'):
+        st.session_state.do_mood_config = do_mood
 
     # ========== 章节提示语配置（独立配置区，与桌面版一致） ==========
     st.markdown("---")
