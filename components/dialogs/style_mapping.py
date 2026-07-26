@@ -378,21 +378,22 @@ def show_style_mapping_dialog():
     list_answer_bullet_val = list_config.get('answer_bullet', st.session_state.get('list_answer_bullet_config', '•'))
     list_answer_style_val = list_config.get('answer_style', st.session_state.get('list_answer_style_config', 'Body Text'))
 
-    # 与桌面版完全一致：复选框 + 原文标签+控件 | 答原文标签+控件 在同一行
-    list_row = st.columns([1, 4, 4, 1, 4, 4])
+    # 列表段落兜底：3列布局，复选框 / 原文 / 答原文
+    # 3列比例 3:5:5，复选框占23%，原文和答原文各占38%，避免文字被挤占
+    list_row = st.columns([3, 5, 5])
     with list_row[0]:
         list_enable = st.checkbox("列表段落\n（未映射）", value=enable_list_val,
             key=f"enable_list_{selected_file.name}",
             help="勾选后，未映射的列表段落将按照下方配置的方式处理")
     with list_row[1]:
         st.markdown("**原文**")
-    with list_row[4]:
+    with list_row[2]:
         st.markdown("**答原文**")
 
-    # 第二行：原文设置
-    list_cols = st.columns([1, 4, 4, 1, 4, 4])
+    # 第二行：原文设置 + 答原文设置
+    list_cols = st.columns([3, 5, 5])
     with list_cols[0]:
-        st.text("")  # 占位，对齐
+        st.text("")  # 占位，对齐复选框列
     with list_cols[1]:
         l_method = st.radio("原文方式",
             options=["bullet", "style"],
@@ -414,7 +415,7 @@ def show_style_mapping_dialog():
                 disabled=not list_enable)
             l_bullet = st.session_state.get('list_bullet_config', '•')
 
-    with list_cols[4]:
+    with list_cols[2]:
         la_method = st.radio("答原文方式",
             options=["bullet", "style"],
             format_func=lambda x: "符号" if x == "bullet" else "样式",
@@ -551,7 +552,7 @@ def show_style_mapping_dialog():
                 return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
-            configured_count = sum(1 for v in updated_mapping.values() if v and not v.startswith('_'))
+            configured_count = sum(1 for v in updated_mapping.values() if isinstance(v, str) and v)
             st.success(f"⭐ 已设为默认！共 {configured_count} 个样式映射。新文件将自动使用此配置。")
 
     with btn_cols[2]:

@@ -1030,17 +1030,19 @@ if current_temp_template:
         st.markdown(f"**✅ 已上传:** {os.path.basename(current_temp_template)}")
         st.markdown(f"**📋 检测到样式:** {len(app_state.get_template_styles())} 种 - {', '.join(app_state.get_template_styles()[:10])}{'...' if len(app_state.get_template_styles()) > 10 else ''}")
 
-# ========== 样式映射按钮（参照桌面版：放在样式信息区域，源文档和模板文档信息之后） ==========
-if current_source_files and st.session_state.get('template_styles'):
-    st.markdown("---")
-    map_col1, map_col2 = st.columns([2, 8])
-    with map_col1:
-        if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
-                     help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
-            from components.dialogs.style_mapping import show_style_mapping_dialog
-            show_style_mapping_dialog()
-    with map_col2:
-        st.caption("选择源文件后点击按钮配置该文件的样式映射")
+# ========== 样式映射按钮（参照桌面版：始终显示，允许无文档时打开配置空窗口） ==========
+st.markdown("---")
+map_col1, map_col2 = st.columns([2, 8])
+with map_col1:
+    if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
+                 help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
+        from components.dialogs.style_mapping import show_style_mapping_dialog
+        show_style_mapping_dialog()
+with map_col2:
+    if current_source_files and st.session_state.get('template_styles'):
+        st.caption("点击按钮配置当前文件的样式映射")
+    else:
+        st.caption("上传源文档和模板文档后即可配置样式映射")
 
 # 转换配置
 st.markdown("---")
