@@ -137,6 +137,9 @@ def render_conversion_config():
             if hint_type != st.session_state.get('hint_type_config'):
                 st.session_state.hint_type_config = hint_type
         with row[1]:
+            # 当处于图片模式时，为下拉添加少量顶部间距以与文件上传控件底端对齐
+            if hint_type == "image":
+                st.markdown("<div style='padding-top:0.5em'></div>", unsafe_allow_html=True)
             hint_style = st.selectbox(
                 "提示语样式",
                 options=template_styles,
