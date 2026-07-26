@@ -110,7 +110,8 @@ if DATA_SOURCE == "local":
                 'is_active': True,
                 'created_at': datetime.now().isoformat(),
                 'last_login': datetime.now().isoformat(),
-                'conversion_history': [],  # [OK] 添加转换历史字段
+                'conversion_history': [],
+                'style_mappings': {},
             }
             
             # 保存用户数据
@@ -142,11 +143,18 @@ elif DATA_SOURCE == "supabase":
             """从 Supabase 加载用户数据
             
             防御性编程：失败时返回默认用户数据，而不是None
+            
+            [FIX] 修复：正确读取 style_mappings、conversion_history 等 JSONB 字段
             """
             db = SessionLocal()
             try:
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
+                    # [FIX] 安全读取 JSONB 字段（可能为 None、dict、list）
+                    raw_style_mappings = getattr(user, 'style_mappings', None)
+                    style_mappings = raw_style_mappings if isinstance(raw_style_mappings, dict) else {}
+                    raw_conv_history = getattr(user, 'conversion_history', None)
+                    conversion_history = raw_conv_history if isinstance(raw_conv_history, list) else []
                     return {
                         'user_id': user.id,
                         'balance': float(user.balance or 0),
@@ -156,8 +164,8 @@ elif DATA_SOURCE == "supabase":
                         'is_active': bool(user.is_active),
                         'created_at': user.created_at.isoformat() if user.created_at else '',
                         'last_login': user.last_login.isoformat() if user.last_login else '',
-                        'conversion_history': [],  # 添加默认值
-                        'style_mappings': {},  # 添加默认值
+                        'conversion_history': conversion_history,
+                        'style_mappings': style_mappings,
                     }
                 # 用户不存在时返回默认数据而不是None
                 logger.warning(f" 用户不存在: {user_id}，返回默认用户数据")
@@ -191,18 +199,49 @@ elif DATA_SOURCE == "supabase":
                 db.close()
         
         def _save_user(user_data: Dict[str, Any], user_id: str = None):
-            """保存用户数据到 Supabase"""
-            # Supabase 模式下，用户数据通过 ORM 管理
-            # 此函数主要用于兼容性，实际保存在其他地方处理
-            pass
+            """保存用户数据到 Supabase
+            
+            [FIX] 修复：将 style_mappings 等 JSONB 字段真正写入数据库，
+            而非空操作。保存范围限定为可持久化的配置字段。
+            """
+            if not user_id:
+                logger.warning("⚠ _save_user 缺少 user_id，跳过保存")
+                return
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    # 仅更新可持久化的配置字段（不覆盖计费/任务字段）
+                    if 'style_mappings' in user_data:
+                        user.style_mappings = user_data['style_mappings']
+                    if 'conversion_history' in user_data:
+                        user.conversion_history = user_data['conversion_history']
+                    user.updated_at = datetime.now()
+                    db.commit()
+                    logger.info(f"[OK] 用户 {user_id} 的配置已保存到数据库")
+                else:
+                    logger.warning(f"⚠ 用户 {user_id} 不存在于数据库，无法保存")
+            except Exception as e:
+                db.rollback()
+                logger.error(f" Supabase保存用户数据异常: {e}")
+            finally:
+                db.close()
         
         def _load_all_users() -> List[Dict[str, Any]]:
-            """从 Supabase 加载所有用户"""
+            """从 Supabase 加载所有用户
+            
+            [FIX] 修复：正确读取 style_mappings、conversion_history 等 JSONB 字段
+            """
             db = SessionLocal()
             try:
                 users = db.query(User).all()
-                return [
-                    {
+                result = []
+                for u in users:
+                    raw_style_mappings = getattr(u, 'style_mappings', None)
+                    style_mappings = raw_style_mappings if isinstance(raw_style_mappings, dict) else {}
+                    raw_conv_history = getattr(u, 'conversion_history', None)
+                    conversion_history = raw_conv_history if isinstance(raw_conv_history, list) else []
+                    result.append({
                         'user_id': u.id,
                         'balance': float(u.balance or 0),
                         'paragraphs_remaining': int(u.paragraphs_remaining or 0),
@@ -211,14 +250,18 @@ elif DATA_SOURCE == "supabase":
                         'is_active': bool(u.is_active),
                         'created_at': u.created_at.isoformat() if u.created_at else '',
                         'last_login': u.last_login.isoformat() if u.last_login else '',
-                    }
-                    for u in users
-                ]
+                        'conversion_history': conversion_history,
+                        'style_mappings': style_mappings,
+                    })
+                return result
             finally:
                 db.close()
         
         def _register_user(user_id: str, user_data: Dict[str, Any]):
-            """注册或更新用户到 Supabase"""
+            """注册或更新用户到 Supabase
+            
+            [FIX] 修复：创建/更新用户时同步携带 style_mappings
+            """
             db = SessionLocal()
             try:
                 user = db.query(User).filter(User.id == user_id).first()
@@ -228,6 +271,8 @@ elif DATA_SOURCE == "supabase":
                     user.paragraphs_remaining = user_data.get('paragraphs_remaining', 0)
                     user.total_paragraphs_used = user_data.get('total_paragraphs_used', 0)
                     user.total_converted = user_data.get('total_converted', 0)
+                    if 'style_mappings' in user_data:
+                        user.style_mappings = user_data['style_mappings']
                     user.last_login = datetime.now()
                 else:
                     # 创建新用户
@@ -238,6 +283,7 @@ elif DATA_SOURCE == "supabase":
                         total_paragraphs_used=user_data.get('total_paragraphs_used', 0),
                         total_converted=user_data.get('total_converted', 0),
                         is_active=True,
+                        style_mappings=user_data.get('style_mappings', {}),
                         created_at=datetime.now(),
                         last_login=datetime.now(),
                     )
@@ -729,8 +775,8 @@ elif DATA_SOURCE == "api":
                         'is_active': True,
                         'created_at': result.get('created_at', ''),
                         'last_login': result.get('last_login', ''),
-                        'conversion_history': [],
-                        'style_mappings': {},
+                        'conversion_history': result.get('conversion_history', []),
+                        'style_mappings': result.get('style_mappings', {}),
                     }
             
             # [OK] API请求失败时返回默认用户数据
@@ -1040,6 +1086,10 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 user.last_login = datetime.now()
                 db.commit()
                 
+                raw_style_mappings = getattr(user, 'style_mappings', None)
+                style_mappings = raw_style_mappings if isinstance(raw_style_mappings, dict) else {}
+                raw_conv_history = getattr(user, 'conversion_history', None)
+                conversion_history = raw_conv_history if isinstance(raw_conv_history, list) else []
                 user_data = {
                     'user_id': user.id,
                     'balance': float(user.balance or 0),
@@ -1049,7 +1099,8 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                     'is_active': bool(user.is_active),
                     'created_at': user.created_at.isoformat() if user.created_at else '',
                     'last_login': user.last_login.isoformat() if user.last_login else '',
-                    'conversion_history': [],  # [OK] 添加转换历史字段
+                    'conversion_history': conversion_history,
+                    'style_mappings': style_mappings,
                 }
                 
                 return user_data
@@ -1065,6 +1116,7 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 total_paragraphs_used=0,
                 total_converted=0,
                 is_active=True,
+                style_mappings={},
                 created_at=datetime.now(),
                 last_login=datetime.now(),
             )
@@ -1081,7 +1133,8 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 'is_active': True,
                 'created_at': datetime.now().isoformat(),
                 'last_login': datetime.now().isoformat(),
-                'conversion_history': [],  # [OK] 添加转换历史字段
+                'conversion_history': [],
+                'style_mappings': {},
             }
         finally:
             db.close()
