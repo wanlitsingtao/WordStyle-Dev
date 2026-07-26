@@ -49,41 +49,48 @@ def render_conversion_config():
     返回与 `app.py` 兼容的配置元组。
     """
     # CSS：统一控件高度（提示语配置区）
+    # 使用固定的 42px 高度避免 em 计算差异
     st.markdown("""
     <style>
-        /* 所有按钮统一 3em 高度 */
-        div[data-testid="column"] button[kind="secondary"],
-        div[data-testid="column"] button[kind="primary"] {
-            height: 3em !important;
+        /* === 统一按钮高度 42px === */
+        div[data-testid="column"] button {
+            height: 42px !important;
+            min-height: 42px !important;
             line-height: 1 !important;
-            font-size: 0.9em !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
-        div[data-testid="column"] .stCheckbox > label {
-            min-height: 2.5em;
-            display: flex;
-            align-items: center;
-            padding-top: 0.25em;
+        /* === selectbox 输入框 42px === */
+        div[data-testid="column"] [data-baseweb="select"] > div {
+            height: 42px !important;
+            min-height: 42px !important;
         }
-        /* 文本框、下拉框：统一 3em 高度 */
-        div[data-testid="column"] .stTextInput [data-baseweb="input"],
-        div[data-testid="column"] .stSelectbox [data-baseweb="select"] {
-            height: 3em !important;
+        /* === text_input 输入框 42px === */
+        div[data-testid="column"] [data-testid="stTextInput"] input {
+            height: 42px !important;
+            min-height: 42px !important;
         }
-        /* 文件上传器：inner 容器 3em */
-        div[data-testid="column"] [data-testid="stFileUploader"] {
-            min-height: 3em !important;
-        }
+        /* === file_uploader 整体区域 42px，垂直居中 === */
         div[data-testid="column"] [data-testid="stFileUploader"] section {
-            padding: 0 0.5em !important;
+            height: 42px !important;
+            min-height: 42px !important;
+            display: flex !important;
+            align-items: center !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
-        div[data-testid="column"] [data-testid="stFileUploader"] button {
-            height: 2.4em !important;
-            font-size: 0.85em !important;
+        /* file_uploader 内部按钮也 42px */
+        div[data-testid="column"] [data-testid="stFileUploader"] section button {
+            height: 34px !important;
+            min-height: 34px !important;
+            padding: 0 0.75em !important;
         }
+        /* === checkbox/radio 容器垂直居中 === */
+        div[data-testid="column"] .stCheckbox > label,
         div[data-testid="column"] .stRadio > div {
-            display: flex;
-            align-items: center;
-            min-height: 2.5em;
+            min-height: 42px !important;
+            display: flex !important;
+            align-items: center !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -203,21 +210,22 @@ def render_conversion_config():
                 else:
                     st.caption("请选择提示语图片文件")
         with ctrl[3]:
-            # 清除图片按钮：始终显示，无图片时禁用
-            has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
-            is_image_mode = (hint_type == "image")
-            if st.button("🗑️ 清除", key="clear_hint_img_btn", use_container_width=True,
-                        disabled=not (is_image_mode and has_image),
-                        help="清除已上传的提示语图片"):
-                if hint_image_path and os.path.exists(hint_image_path):
-                    try:
-                        os.remove(hint_image_path)
-                    except Exception:
-                        pass
-                st.session_state.hint_image_config = None
-                st.session_state.hint_image_uploaded = None
-                st.rerun()
+            # 清除按钮：仅图片模式显示
+            if hint_type == "image":
+                has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
+                if st.button("🗑️ 清除", key="clear_hint_img_btn", use_container_width=True,
+                            disabled=not has_image,
+                            help="清除已上传的提示语图片"):
+                    if hint_image_path and os.path.exists(hint_image_path):
+                        try:
+                            os.remove(hint_image_path)
+                        except Exception:
+                            pass
+                    st.session_state.hint_image_config = None
+                    st.session_state.hint_image_uploaded = None
+                    st.rerun()
         with ctrl[4]:
+            # 设为默认：始终在最后一列
             if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
                 _save_hint_defaults(do_hint, hint_type, hint_text, hint_image_path, hint_style)
 
