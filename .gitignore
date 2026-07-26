@@ -67,3 +67,7 @@ htmlcov/
 backend/*.db
 backend/uploads/
 backend/conversion_results/
+
+# Conversion outputs
+test/*converted*.docx
+conversion_results/
