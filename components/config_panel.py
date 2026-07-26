@@ -48,11 +48,12 @@ def render_conversion_config():
 
     返回与 `app.py` 兼容的配置元组。
     """
-    # CSS：统一控件高度
+    # CSS：统一控件高度（提示语配置区）
     st.markdown("""
     <style>
+        /* 按钮：与下拉框/文本框等高 */
         div[data-testid="column"] .stButton > button {
-            height: 2.5em;
+            height: 3em;
             line-height: 1;
             font-size: 0.9em;
         }
@@ -62,16 +63,19 @@ def render_conversion_config():
             align-items: center;
             padding-top: 0.25em;
         }
+        /* 文本框、下拉框、文件上传器：统一3em高度 */
         div[data-testid="column"] .stTextInput > div > div,
         div[data-testid="column"] .stSelectbox > div > div > div,
-        div[data-testid="column"] .stFileUploader > div,
-        div[data-testid="column"] .stButton > button {
-            min-height: 3em;
+        div[data-testid="column"] section[data-testid="stFileUploader"] {
+            height: 3em;
             display: flex;
             align-items: center;
         }
-        div[data-testid="column"] .stFileUploader > div {
-            padding-bottom: 0.05em;
+        /* 文件上传器内部dropzone高度填满 */
+        div[data-testid="column"] section[data-testid="stFileUploader"] > div {
+            height: 100%;
+            display: flex;
+            align-items: center;
         }
         .hint-label {
             height: 3em;
@@ -142,7 +146,7 @@ def render_conversion_config():
         with lbl[1]:
             st.markdown("**提示语样式**")
         with lbl[2]:
-            st.markdown("**提示语文本**" if hint_type == "text" else "**上传提示语图片**")
+            st.markdown("**上传提示语图片**" if hint_type == "text" else "**提示语文本**")
         with lbl[3]:
             st.markdown("&nbsp;", unsafe_allow_html=True)
         with lbl[4]:
