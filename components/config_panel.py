@@ -67,6 +67,15 @@ def render_conversion_config():
         }
         div[data-testid="column"] .stSelectbox > div > div > div {
             min-height: 2.5em;
+            display: flex;
+            align-items: flex-end;
+        }
+        /* 文件上传控件与输入/下拉使用相同底端对齐规则 */
+        div[data-testid="column"] .stFileUploader > div {
+            min-height: 2.5em;
+            display: flex;
+            align-items: flex-end;
+            padding-bottom: 0.05em;
         }
         /* 标签容器，确保与输入/下拉底端对齐 */
         .hint-label {
