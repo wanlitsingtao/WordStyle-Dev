@@ -44,92 +44,87 @@ def render_conversion_config():
     
     仅包含：
     1. 祈使语气转换 checkbox
-    2. 章节提示语配置（独立于样式映射四步流程，与桌面版一致）
-    
-    注意：样式映射按钮已移至样式信息区域（app.py），参照桌面版布局。
-    
-    提示语布局完全参照桌面版：
-    - 第1行：复选框 + 类型选择（文本/图片）横向排列
-    - 第2行：提示语文本输入框（始终显示，图片模式灰显）
-    - 第3行：图片文件选择（始终显示，文本模式灰显）
-    - 第4行：提示语样式 + 设为默认按钮
-    - 未勾选时：仅显示复选框，不显示设为默认按钮
-    """
-    # CSS：统一控件高度
-    st.markdown("""
-    <style>
-        div[data-testid="column"] .stButton > button {
-            height: 2.5em;
-            line-height: 1;
-            font-size: 0.9em;
-        }
-        div[data-testid="column"] .stCheckbox > label {
-            min-height: 2.5em;
-            display: flex;
-            align-items: center;
-            padding-top: 0.25em;
-        }
-        div[data-testid="column"] .stTextInput > div > div > input {
-            min-height: 2.5em;
-        }
-        div[data-testid="column"] .stSelectbox > div > div > div {
-            min-height: 2.5em;
-        }
-        div[data-testid="column"] .stRadio > div {
-            display: flex;
-            align-items: center;
-            min-height: 2.5em;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # ========== 转换选项（与桌面版"转换选项"区域一致：仅祈使语气转换） ==========
-    st.markdown("**转换选项**")
-    
-    do_mood = st.checkbox(
-        "进行祈使语气转换", 
-        value=st.session_state.get('do_mood_config', True),
-        help="将文档中的祈使语气转换为投标人语气",
-        key="mood_checkbox"
-    )
-    if do_mood != st.session_state.get('do_mood_config'):
-        st.session_state.do_mood_config = do_mood
-
-    # ========== 章节提示语配置（独立配置区，完全参照桌面版布局） ==========
-    st.markdown("---")
-    st.markdown("**章节提示语**")
-    
-    # 模板样式列表
-    template_styles = st.session_state.get('template_styles', ["Normal"])
-    hint_style_idx = 0
-    if st.session_state.get('hint_style_config', 'Normal') in template_styles:
-        try:
-            hint_style_idx = template_styles.index(st.session_state.hint_style_config)
-        except ValueError:
-            hint_style_idx = 0
-    
-    # 读取当前类型（保持选择状态）
-    hint_type = st.session_state.get('hint_type_config', 'text')
-    hint_text = st.session_state.get('hint_text_config', '招标文件原文')
-    hint_image_path = st.session_state.get('hint_image_config', None)
-    hint_style = st.session_state.get('hint_style_config', 'Normal')
-
-    # 当未勾选时：不显示任何与提示语相关的控件
-    do_hint = st.checkbox(
-        "插入提示语",
-        value=st.session_state.get('do_hint_config', False),
-        help="在每个章节标题后插入提示语（如'招标文件原文'）",
-        key="hint_checkbox"
-    )
-    if do_hint != st.session_state.get('do_hint_config'):
-        st.session_state.do_hint_config = do_hint
-
     if not do_hint:
         # 确保清理可能存在的临时图片路径变量
         if 'hint_image_config' not in st.session_state:
             hint_image_path = None
         # 不显示其他控件
         pass
+    else:
+        # 单行布局：类型、样式、文本/图片上传、清除按钮 在同一行
+        row = st.columns([2, 2, 6, 1])
+        with row[0]:
+            hint_type = st.radio(
+                "类型",
+                options=["text", "image"],
+                format_func=lambda x: "文本提示语" if x == "text" else "图片提示语",
+                index=0 if hint_type == "text" else 1,
+                horizontal=True,
+                key="hint_type_radio"
+            )
+            if hint_type != st.session_state.get('hint_type_config'):
+                st.session_state.hint_type_config = hint_type
+        with row[1]:
+            hint_style = st.selectbox(
+                "提示语样式",
+                options=template_styles,
+                index=hint_style_idx,
+                key="hint_style_select",
+            )
+            st.session_state.hint_style_config = hint_style
+        with row[2]:
+            # 动态标签
+            label_text = "提示语文本:" if hint_type == "text" else "上传提示语图片:"
+            st.markdown(label_text)
+            if hint_type == "text":
+                hint_text = st.text_input(
+                    "提示语文本",
+                    value=hint_text,
+                    help="提示语文本内容（图片模式下作为alt文本）",
+                    key="hint_text_input",
+                    label_visibility="collapsed",
+                )
+                if hint_text != st.session_state.get('hint_text_config'):
+                    st.session_state.hint_text_config = hint_text
+            else:
+                hint_uploaded = st.file_uploader(
+                    "上传提示语图片",
+                    type=['png', 'jpg', 'jpeg', 'bmp', 'gif'],
+                    help="上传要作为提示语的图片文件",
+                    key="hint_image_uploader",
+                    label_visibility="collapsed"
+                )
+                if hint_uploaded is not None:
+                    user_id = st.session_state.get('user_id', 'default')
+                    img_ext = os.path.splitext(hint_uploaded.name)[1] or '.png'
+                    img_temp_path = f"temp_hint_image_{user_id}{img_ext}"
+                    with open(img_temp_path, 'wb') as f:
+                        f.write(hint_uploaded.getbuffer())
+                    st.session_state.hint_image_config = img_temp_path
+                    st.session_state.hint_image_uploaded = hint_uploaded.name
+                    st.success(f"✅ 已上传: {hint_uploaded.name}")
+                    hint_image_path = img_temp_path
+                elif hint_image_path and os.path.exists(hint_image_path):
+                    st.info(f"📎 当前图片: {os.path.basename(hint_image_path)}")
+                else:
+                    st.caption("请选择提示语图片文件")
+        with row[3]:
+            # 仅在图片模式下显示清除图片按钮
+            if hint_type == "image":
+                has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
+                if st.button("清除图片", key="clear_hint_img_btn", use_container_width=True, disabled=not has_image):
+                    if hint_image_path and os.path.exists(hint_image_path):
+                        try:
+                            os.remove(hint_image_path)
+                        except Exception:
+                            pass
+                    st.session_state.hint_image_config = None
+                    st.session_state.hint_image_uploaded = None
+                    st.rerun()
+
+        # 设为默认按钮：在启用时以全宽显示，便于与页面其他主操作按钮一致
+        if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
+            _save_hint_defaults(do_hint, hint_type, hint_text, hint_image_path, hint_style)
     else:
         # 显示提示语控件（两行布局以提高对齐和可读性）
         top_row = st.columns([1, 2, 2])
