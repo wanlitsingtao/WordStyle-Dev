@@ -62,27 +62,22 @@ def render_conversion_config():
             align-items: center;
             padding-top: 0.25em;
         }
-        div[data-testid="column"] .stTextInput > div > div > input {
-            min-height: 2.5em;
-        }
-        div[data-testid="column"] .stSelectbox > div > div > div {
-            min-height: 2.5em;
+        div[data-testid="column"] .stTextInput > div > div,
+        div[data-testid="column"] .stSelectbox > div > div > div,
+        div[data-testid="column"] .stFileUploader > div,
+        div[data-testid="column"] .stButton > button {
+            min-height: 3em;
             display: flex;
-            align-items: flex-end;
+            align-items: center;
         }
-        /* 文件上传控件与输入/下拉使用相同底端对齐规则 */
         div[data-testid="column"] .stFileUploader > div {
-            min-height: 2.5em;
-            display: flex;
-            align-items: flex-end;
             padding-bottom: 0.05em;
         }
-        /* 标签容器，确保与输入/下拉底端对齐 */
         .hint-label {
-            height: 2.5em;
+            height: 3em;
             display: flex;
-            align-items: flex-end;
-            padding-bottom: 0.15em;
+            align-items: center;
+            padding-bottom: 0.1em;
             font-size: 0.95em;
         }
         div[data-testid="column"] .stRadio > div {
@@ -154,9 +149,6 @@ def render_conversion_config():
             if hint_type != st.session_state.get('hint_type_config'):
                 st.session_state.hint_type_config = hint_type
         with row[1]:
-            # 当处于图片模式时，为下拉添加少量顶部间距以与文件上传控件底端对齐
-            if hint_type == "image":
-                st.markdown("<div style='padding-top:0.5em'></div>", unsafe_allow_html=True)
             hint_style = st.selectbox(
                 "提示语样式",
                 options=template_styles,
