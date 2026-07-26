@@ -293,11 +293,19 @@ class DocumentConverter:
         return False
     
     def has_numbering(self, paragraph):
-        """检查段落是否有编号"""
+        """检查段落是否有编号
+        numId=0 表示无编号（Word 中的特殊值），应视为没有编号。
+        """
         pPr = paragraph._element.find(qn('w:pPr'))
         if pPr is not None:
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
+                # 检查 numId 是否为 0（0 表示无编号）
+                numId = numPr.find(qn('w:numId'))
+                if numId is not None:
+                    val = numId.get(qn('w:val'))
+                    if val == '0':
+                        return False
                 return True
         return False
     
@@ -955,7 +963,8 @@ class DocumentConverter:
                                    page_width_emu, available_width_emu, para_idx, source_file="",
                                    warning_callback=None, image_style_override=None, enable_image_style=False,
                                    remove_chapter_label=False,
-                                   list_method='bullet', list_style='Body Text'):
+                                   list_method='bullet', list_style='Body Text',
+                                   enable_list_style=True):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
@@ -1203,7 +1212,7 @@ class DocumentConverter:
             self.extract_and_add_images(source_para, new_para, page_width_emu, available_width_emu)
             return new_para
         
-        if self.has_numbering(source_para):
+        if self.has_numbering(source_para) and enable_list_style:
             if list_method == 'style':
                 # "样式"模式：使用 Step 4 的 list_style 作为列表段落的样式。
                 # 列表段落的样式由 Step 4 的"列表段落"配置区独立控制，不使用 Step 3 的样式映射结果。
@@ -1630,7 +1639,8 @@ class DocumentConverter:
                         enable_image_style=enable_image_style,
                         remove_chapter_label=remove_chapter_label,
                         list_method=list_method,
-                        list_style=list_style
+                        list_style=list_style,
+                        enable_list_style=enable_list_style
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
@@ -2119,7 +2129,8 @@ class DocumentConverter:
                                    list_answer_style='Body Text',
                                    list_answer_bullet='● ',
                                    enable_image_style=False,
-                                   image_style_override=None):
+                                   image_style_override=None,
+                                   enable_list_style=True):
         """
         原文+应答句+应答原文（需求3：copy_chapter）
         最终效果：标题 → 提示语 → 原文（未转换，标记为 keepOriginal）→ 应答句 → 原文（语气转换后）
@@ -2280,26 +2291,44 @@ class DocumentConverter:
                                         _apply_paragraph_style(source_elem, list_sid)
                                 new_children.append(source_elem)
                             else:
-                                # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
-                                source_elem = deep_copy(copy_template)
-                                source_runs = source_elem.findall('.//' + qn('w:r'))
-                                orig_runs = elem.findall('.//' + qn('w:r'))
-                                for r in source_runs:
-                                    source_elem.remove(r)
-                                for r in orig_runs:
-                                    source_elem.append(deep_copy(r))
-                                remove_keep_original_from_element(source_elem)
-                                # 应答原文副本图片段落应用图片兜底样式
-                                if enable_image_style and image_style_override:
-                                    has_img = (elem.find('.//' + qn('w:drawing')) is not None or
-                                               elem.find('.//' + qn('w:pict')) is not None or
-                                               elem.find('.//' + qn('pic:pic')) is not None or
-                                               elem.find('.//' + qn('wp:inline')) is not None or
-                                               elem.find('.//' + qn('wp:anchor')) is not None)
-                                    if has_img:
-                                        img_sid = self.get_style_id_by_name(doc, image_style_override)
-                                        if img_sid:
-                                            _apply_paragraph_style(source_elem, img_sid)
+                                # ★ 修复：OLE占位段落应用图片兜底样式
+                                is_ole_placeholder = self._is_ole_placeholder_paragraph(elem)
+                                if is_ole_placeholder and enable_image_style and image_style_override:
+                                    img_sid = self.get_style_id_by_name(doc, image_style_override)
+                                    if img_sid:
+                                        source_elem = deep_copy(elem)
+                                        _apply_paragraph_style(source_elem, img_sid)
+                                        remove_keep_original_from_element(source_elem)
+                                    else:
+                                        source_elem = deep_copy(copy_template)
+                                        source_runs = source_elem.findall('.//' + qn('w:r'))
+                                        orig_runs = elem.findall('.//' + qn('w:r'))
+                                        for r in source_runs:
+                                            source_elem.remove(r)
+                                        for r in orig_runs:
+                                            source_elem.append(deep_copy(r))
+                                        remove_keep_original_from_element(source_elem)
+                                else:
+                                    # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
+                                    source_elem = deep_copy(copy_template)
+                                    source_runs = source_elem.findall('.//' + qn('w:r'))
+                                    orig_runs = elem.findall('.//' + qn('w:r'))
+                                    for r in source_runs:
+                                        source_elem.remove(r)
+                                    for r in orig_runs:
+                                        source_elem.append(deep_copy(r))
+                                    remove_keep_original_from_element(source_elem)
+                                    # 应答原文副本图片段落应用图片兜底样式
+                                    if enable_image_style and image_style_override:
+                                        has_img = (elem.find('.//' + qn('w:drawing')) is not None or
+                                                   elem.find('.//' + qn('w:pict')) is not None or
+                                                   elem.find('.//' + qn('pic:pic')) is not None or
+                                                   elem.find('.//' + qn('wp:inline')) is not None or
+                                                   elem.find('.//' + qn('wp:anchor')) is not None)
+                                        if has_img:
+                                            img_sid = self.get_style_id_by_name(doc, image_style_override)
+                                            if img_sid:
+                                                _apply_paragraph_style(source_elem, img_sid)
                                 new_children.append(source_elem)
                 
                 chapter_buffer.clear()
@@ -2340,7 +2369,7 @@ class DocumentConverter:
                                         if _list_sid and _pStyle_val == _list_sid:
                                             _is_list_para = True
                         
-                        if _is_list_para:
+                        if _is_list_para and enable_list_style:
                             source_elem = deep_copy(child)
                             bookmark_start = OxmlElement('w:bookmarkStart')
                             bookmark_start.set(qn('w:id'), str(bookmark_id))
@@ -2375,13 +2404,29 @@ class DocumentConverter:
                             i += 1
                             continue
                         
-                        source_elem = deep_copy(source_template)
-                        source_runs = source_elem.findall('.//' + qn('w:r'))
-                        orig_runs = child.findall('.//' + qn('w:r'))
-                        for r in source_runs:
-                            source_elem.remove(r)
-                        for r in orig_runs:
-                            source_elem.append(deep_copy(r))
+                        # ★ 修复：OLE占位段落使用图片兜底样式，而非source_template样式
+                        is_ole_ph = self._is_ole_placeholder_paragraph(child)
+                        if is_ole_ph and enable_image_style and image_style_override:
+                            img_sid = self.get_style_id_by_name(doc, image_style_override)
+                            if img_sid:
+                                source_elem = deep_copy(child)
+                                _apply_paragraph_style(source_elem, img_sid)
+                            else:
+                                source_elem = deep_copy(source_template)
+                                source_runs = source_elem.findall('.//' + qn('w:r'))
+                                orig_runs = child.findall('.//' + qn('w:r'))
+                                for r in source_runs:
+                                    source_elem.remove(r)
+                                for r in orig_runs:
+                                    source_elem.append(deep_copy(r))
+                        else:
+                            source_elem = deep_copy(source_template)
+                            source_runs = source_elem.findall('.//' + qn('w:r'))
+                            orig_runs = child.findall('.//' + qn('w:r'))
+                            for r in source_runs:
+                                source_elem.remove(r)
+                            for r in orig_runs:
+                                source_elem.append(deep_copy(r))
                         bookmark_start = OxmlElement('w:bookmarkStart')
                         bookmark_start.set(qn('w:id'), str(bookmark_id))
                         bookmark_start.set(qn('w:name'), '_keepOriginal_')
@@ -2586,10 +2631,8 @@ class DocumentConverter:
         return insert_count, total_heading_count
     
     def _is_list_paragraph(self, elem):
-        """
-        判断段落是否是列表（有编号或项目符号）
-        :param elem: 段落元素
-        :return: True 如果是列表段落
+        """判断段落是否是列表（有编号或项目符号）
+        numId=0 表示无编号，应视为没有列表。
         """
         if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
             return False
@@ -2599,6 +2642,11 @@ class DocumentConverter:
             # 检查是否有编号（numPr）
             numPr = pPr.find(qn('w:numPr'))
             if numPr is not None:
+                numId = numPr.find(qn('w:numId'))
+                if numId is not None:
+                    val = numId.get(qn('w:val'))
+                    if val == '0':
+                        return False
                 return True
         
         return False
@@ -2954,7 +3002,8 @@ class DocumentConverter:
                      remove_chapter_label=False,
                      list_method='bullet', list_style='Body Text',
                      list_answer_method='bullet', list_answer_style='Body Text',
-                     list_answer_bullet='● '):
+                     list_answer_bullet='● ',
+                     enable_list_style=True):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
         [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
@@ -3000,7 +3049,8 @@ class DocumentConverter:
                                               image_style_override, enable_image_style,
                                               remove_chapter_label=remove_chapter_label,
                                               list_method=list_method,
-                                              list_style=list_style)
+                                              list_style=list_style,
+                                              enable_list_style=enable_list_style)
         if doc is None:
             elapsed = time.time() - start_time
             return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
@@ -3036,7 +3086,8 @@ class DocumentConverter:
                 list_answer_style=list_answer_style,
                 list_answer_bullet=list_answer_bullet,
                 enable_image_style=enable_image_style,
-                image_style_override=image_style_override
+                image_style_override=image_style_override,
+                enable_list_style=enable_list_style
             )
             if not insert_result:
                 elapsed = time.time() - start_time
@@ -3089,7 +3140,8 @@ class DocumentConverter:
                     list_answer_style=list_answer_style,
                     list_answer_bullet=list_answer_bullet,
                     enable_image_style=enable_image_style,
-                    image_style_override=image_style_override
+                    image_style_override=image_style_override,
+                    enable_list_style=enable_list_style
                 )
                 if not insert_result:
                     elapsed = time.time() - start_time
@@ -3199,7 +3251,8 @@ class DocumentConverter:
                                    table_style_override=None, enable_table_style=False,
                                    image_style_override=None, enable_image_style=False,
                                    remove_chapter_label=False,
-                                   list_method='bullet', list_style='Body Text'):
+                                   list_method='bullet', list_style='Body Text',
+                                   enable_list_style=True):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
         :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
@@ -3276,7 +3329,8 @@ class DocumentConverter:
                             enable_image_style=enable_image_style,
                             remove_chapter_label=remove_chapter_label,
                             list_method=list_method,
-                            list_style=list_style
+                            list_style=list_style,
+                            enable_list_style=enable_list_style
                         )
                         para_idx += 1
                 elif child.tag == qn('w:tbl'):
@@ -3377,6 +3431,16 @@ class DocumentConverter:
             if child.tag == qn('w:bookmarkStart'):
                 if child.get(qn('w:name')) == '_hint_':
                     return True
+        return False
+
+    def _is_ole_placeholder_paragraph(self, elem):
+        """检查段落是否包含OLE占位提示文本 [OLE对象，请手动复制]"""
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return False
+        for run in elem.findall('.//' + qn('w:r')):
+            text_elem = run.find(qn('w:t'))
+            if text_elem is not None and text_elem.text and '[OLE对象，请手动复制]' in text_elem.text:
+                return True
         return False
 
     def _remove_hint_markers(self, doc):
@@ -3518,7 +3582,8 @@ class DocumentConverter:
                                     list_method='bullet', list_style='Body Text',
                                     list_answer_method='bullet', list_answer_style='Body Text',
                                     list_answer_bullet='● ',
-                                    enable_image_style=False, image_style_override=None):
+                                    enable_image_style=False, image_style_override=None,
+                                    enable_list_style=True):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中插入应答句，不保存中间文件
         :param doc: Document对象
@@ -3569,7 +3634,8 @@ class DocumentConverter:
                     list_answer_style=list_answer_style,
                     list_answer_bullet=list_answer_bullet,
                     enable_image_style=enable_image_style,
-                    image_style_override=image_style_override
+                    image_style_override=image_style_override,
+                    enable_list_style=enable_list_style
                 )
             elif mode == 'before_paragraph':
                 insert_count, total_heading_count = self._insert_before_paragraphs(

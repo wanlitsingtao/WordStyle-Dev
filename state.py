@@ -365,6 +365,16 @@ class AppState:
         st.session_state.list_style_config = style
 
     @staticmethod
+    def get_enable_list_style_config() -> bool:
+        """获取是否启用列表段落兜底设置"""
+        return st.session_state.get('enable_list_style_config', True)
+
+    @staticmethod
+    def set_enable_list_style_config(enabled: bool):
+        """设置是否启用列表段落兜底设置"""
+        st.session_state.enable_list_style_config = enabled
+
+    @staticmethod
     def get_list_answer_method_config() -> str:
         """获取列表段落应答原文处理方式"""
         return st.session_state.get('list_answer_method_config', 'bullet')
@@ -624,6 +634,7 @@ class AppState:
             'list_answer_method_config': 'bullet',
             'list_answer_style_config': 'Body Text',
             'list_answer_bullet_config': '•',
+            'enable_list_style_config': True,
             'remove_chapter_label_config': False,
             'table_answer_style_config': '',
             'image_answer_style_config': '',

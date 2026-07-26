@@ -32,41 +32,39 @@ def get_answer_mode_options():
 @st.dialog("📊 样式映射配置", width="large")
 def show_style_mapping_dialog():
     """显示样式映射配置对话框（完整四步流程，完全参照桌面版）"""
-    # 从 session_state 获取配置
+    # 从 session_state 获取配置（允许空值，对话框仍可打开显示空内容）
     file_styles_map = st.session_state.get('file_styles_map', {})
     template_styles = st.session_state.get('template_styles', [])
     source_files = st.session_state.get('current_source_files', None)
 
-    if not file_styles_map or not source_files:
-        st.warning("⚠️ 请先上传源文档并等待样式分析完成")
-        return
-
-    if not template_styles:
-        st.warning("⚠️ 请先上传模板文档")
-        return
-
-    # 初始化或加载样式映射
+    # 初始化或加载样式映射（健壮处理：user_id 可能为空）
     if 'file_style_mappings' not in st.session_state:
-        user_data = load_user_data(st.session_state.user_id)
+        try:
+            uid = st.session_state.get('user_id', 'default')
+        except Exception:
+            uid = 'default'
+        try:
+            user_data = load_user_data(uid)
+        except Exception:
+            user_data = None
         if user_data is None:
-            st.warning("⚠️ 用户数据加载失败，请刷新页面重试")
-            return
-        st.session_state.file_style_mappings = user_data.get('style_mappings', {})
+            user_data = {}
+        st.session_state.file_style_mappings = user_data.get('style_mappings', {}) if user_data else {}
 
     # 选择当前配置的文件
     selected_file = None
-    if len(source_files) > 1:
-        file_options = [sf.name for sf in source_files]
-        selected_file_name = st.selectbox("选择要配置的文件", file_options, key="style_mapping_file_selector")
-        selected_file = next(sf for sf in source_files if sf.name == selected_file_name)
-    else:
-        selected_file = source_files[0]
+    if source_files:
+        if len(source_files) > 1:
+            file_options = [sf.name for sf in source_files]
+            selected_file_name = st.selectbox("选择要配置的文件", file_options, key="style_mapping_file_selector")
+            selected_file = next(sf for sf in source_files if sf.name == selected_file_name)
+        else:
+            selected_file = source_files[0]
 
     # 获取该文件的样式列表
-    source_styles = file_styles_map.get(selected_file.name, [])
-    if not source_styles:
-        st.warning(f"⚠️ 文件 {selected_file.name} 中没有检测到段落样式")
-        return
+    source_styles = []
+    if selected_file and selected_file.name in file_styles_map:
+        source_styles = file_styles_map.get(selected_file.name, [])
 
     # 分离标题样式和正文样式
     heading_styles = []
@@ -84,7 +82,43 @@ def show_style_mapping_dialog():
         else:
             body_styles.append(s)
 
-    # 获取当前文件映射
+    # 获取当前文件映射 — 未选择文件时显示完整引导界面
+    if not selected_file:
+        st.warning("⚠️ 未检测到源文档，无法配置样式映射")
+        st.markdown("""
+        **请先完成以下操作：**
+        
+        1. 📄 上传**源文档**（.docx 格式）
+        2. 📋 上传**模板文档**（.docx 格式）
+        3. 🔄 重新点击 **"📊 配置样式映射"** 按钮
+        
+        ---
+        💡 *源文档和模板文档上传后，系统自动分析样式，届时即可在此配置映射关系。*
+        """)
+        col_a, col_b, col_c = st.columns([1, 2, 1])
+        with col_b:
+            if st.button("🔙 关闭对话框", key="close_empty_style_map", use_container_width=True):
+                st.rerun()
+        return
+
+    # 保护：模板样式为空时无法配置映射
+    if not template_styles:
+        st.warning("⚠️ 未检测到模板文档样式，无法配置样式映射")
+        st.markdown("""
+        **请先完成以下操作：**
+        
+        1. 📋 上传**模板文档**（.docx 格式）
+        2. 🔄 重新点击 **"📊 配置样式映射"** 按钮
+        
+        ---
+        💡 *模板文档定义了目标样式，上传后系统自动提取所有段落样式。*
+        """)
+        col_a, col_b, col_c = st.columns([1, 2, 1])
+        with col_b:
+            if st.button("🔙 关闭对话框", key="close_no_template_style_map", use_container_width=True):
+                st.rerun()
+        return
+
     if selected_file.name not in st.session_state.file_style_mappings:
         st.session_state.file_style_mappings[selected_file.name] = {}
 
@@ -95,6 +129,13 @@ def show_style_mapping_dialog():
     default_tbl_img_config = st.session_state.file_style_mappings.get('_default_tbl_img_config', {})
     default_answer_config = st.session_state.file_style_mappings.get('_default_answer_config', {})
     default_list_config = st.session_state.file_style_mappings.get('_default_list_config', {})
+    # ★ 修复：remove_chapter_label 也需从默认配置中恢复
+    # _default_style_map 可能包含 _remove_chapter_label（与桌面版 default_config.json 一致）
+    default_remove_chapter_label = (
+        st.session_state.file_style_mappings.get('_default_remove_chapter_label')
+        if '_default_remove_chapter_label' in st.session_state.file_style_mappings
+        else default_style_map.get('_remove_chapter_label', False)
+    )
 
     # ====================================================================
     # Step 1: 标题样式映射（统一，不分原文/应答句）
@@ -329,6 +370,7 @@ def show_style_mapping_dialog():
 
     # 获取列表配置
     list_config = current_file_mapping.get('_list_config', default_list_config)
+    enable_list_val = list_config.get('enable_list', st.session_state.get('enable_list_style_config', True))
     list_method_val = list_config.get('method', st.session_state.get('list_method_config', 'bullet'))
     list_bullet_val = list_config.get('bullet', st.session_state.get('list_bullet_config', '•'))
     list_style_val = list_config.get('style', st.session_state.get('list_style_config', 'Body Text'))
@@ -336,10 +378,12 @@ def show_style_mapping_dialog():
     list_answer_bullet_val = list_config.get('answer_bullet', st.session_state.get('list_answer_bullet_config', '•'))
     list_answer_style_val = list_config.get('answer_style', st.session_state.get('list_answer_style_config', 'Body Text'))
 
-    # 与桌面版完全一致：原文标签+控件 | 答原文标签+控件 在同一行
+    # 与桌面版完全一致：复选框 + 原文标签+控件 | 答原文标签+控件 在同一行
     list_row = st.columns([1, 4, 4, 1, 4, 4])
     with list_row[0]:
-        st.markdown("**列表段落**")
+        list_enable = st.checkbox("列表段落\n（未映射）", value=enable_list_val,
+            key=f"enable_list_{selected_file.name}",
+            help="勾选后，未映射的列表段落将按照下方配置的方式处理")
     with list_row[1]:
         st.markdown("**原文**")
     with list_row[4]:
@@ -355,16 +399,19 @@ def show_style_mapping_dialog():
             format_func=lambda x: "符号" if x == "bullet" else "样式",
             index=0 if list_method_val == "bullet" else 1,
             horizontal=True, key=f"list_method_{selected_file.name}",
-            label_visibility="collapsed")
+            label_visibility="collapsed",
+            disabled=not list_enable)
         
         if l_method == "bullet":
             l_bullet = st.text_input("原文符号", value=list_bullet_val,
-                key=f"list_bullet_{selected_file.name}", label_visibility="collapsed")
+                key=f"list_bullet_{selected_file.name}", label_visibility="collapsed",
+                disabled=not list_enable)
             l_style = st.session_state.get('list_style_config', 'Body Text')
         else:
             lsi = template_styles.index(list_style_val) if list_style_val in template_styles else 0
             l_style = st.selectbox("原文目标样式", options=template_styles, index=lsi,
-                key=f"list_style_{selected_file.name}", label_visibility="collapsed")
+                key=f"list_style_{selected_file.name}", label_visibility="collapsed",
+                disabled=not list_enable)
             l_bullet = st.session_state.get('list_bullet_config', '•')
 
     with list_cols[4]:
@@ -374,18 +421,18 @@ def show_style_mapping_dialog():
             index=0 if list_answer_method_val == "bullet" else 1,
             horizontal=True, key=f"list_answer_method_{selected_file.name}",
             label_visibility="collapsed",
-            disabled=not is_dual)
+            disabled=not (list_enable and is_dual))
         
         if la_method == "bullet":
             la_bullet = st.text_input("答原文符号", value=list_answer_bullet_val,
                 key=f"list_answer_bullet_{selected_file.name}", label_visibility="collapsed",
-                disabled=not is_dual)
+                disabled=not (list_enable and is_dual))
             la_style = st.session_state.get('list_answer_style_config', 'Body Text')
         else:
             lasi = template_styles.index(list_answer_style_val) if list_answer_style_val in template_styles else 0
             la_style = st.selectbox("答原文目标样式", options=template_styles, index=lasi,
                 key=f"list_answer_style_{selected_file.name}", label_visibility="collapsed",
-                disabled=not is_dual)
+                disabled=not (list_enable and is_dual))
             la_bullet = st.session_state.get('list_answer_bullet_config', '•')
 
     # 清除章节标签 checkbox（放在Step 4内，与桌面版一致）
@@ -393,7 +440,8 @@ def show_style_mapping_dialog():
     remove_chapter_label = st.checkbox(
         '清除标题中的"第X章/第X节"等字样',
         value=current_file_mapping.get('_remove_chapter_label',
-               st.session_state.get('remove_chapter_label_config', False)),
+               default_remove_chapter_label if isinstance(default_remove_chapter_label, bool)
+               else st.session_state.get('remove_chapter_label_config', False)),
         key=f"remove_chapter_label_{selected_file.name}"
     )
 
@@ -433,6 +481,7 @@ def show_style_mapping_dialog():
 
     # 4. 保存列表段落兜底配置
     list_config_new = {
+        'enable_list': list_enable,
         'method': l_method,
         'bullet': l_bullet,
         'style': l_style,
@@ -462,6 +511,7 @@ def show_style_mapping_dialog():
     st.session_state.list_answer_method_config = la_method
     st.session_state.list_answer_bullet_config = la_bullet
     st.session_state.list_answer_style_config = la_style
+    st.session_state.enable_list_style_config = list_enable
     st.session_state.table_style_config = table_style
     st.session_state.table_answer_style_config = table_answer_style
     st.session_state.image_style_config = image_style
@@ -493,6 +543,8 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings['_default_tbl_img_config'] = dict(tbl_img_config_new)
             st.session_state.file_style_mappings['_default_answer_config'] = dict(answer_config)
             st.session_state.file_style_mappings['_default_list_config'] = dict(list_config_new)
+            # ★ 修复：显式保存 remove_chapter_label 默认值（与桌面版 default_config.json 一致）
+            st.session_state.file_style_mappings['_default_remove_chapter_label'] = remove_chapter_label
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")

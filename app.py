@@ -1074,6 +1074,8 @@ if 'list_answer_style_config' not in st.session_state:
     app_state.set_list_answer_style_config('Body Text')
 if 'list_answer_bullet_config' not in st.session_state:
     app_state.set_list_answer_bullet_config('•')
+if 'enable_list_style_config' not in st.session_state:
+    app_state.set_enable_list_style_config(True)
 if 'remove_chapter_label_config' not in st.session_state:
     app_state.set_remove_chapter_label_config(False)
 if 'table_answer_style_config' not in st.session_state:
@@ -1094,6 +1096,7 @@ do_hint, hint_type, hint_text, hint_image_path, hint_style = result[6:11]
 answer_source_style, answer_copy_style = result[11:13]
 list_method, list_style, list_answer_method, list_answer_style, list_answer_bullet = result[13:18]
 remove_chapter_label = result[18]
+enable_list_style = result[19] if len(result) > 19 else True
 
 # 不插入应答句时使用默认值（确保变量存在）
 if not do_answer:
@@ -1251,12 +1254,15 @@ else:
                     # [OK] 修复：使用每个文件各自的样式映射配置（与桌面版一致）
                     file_mapping = None
                     file_tbl_img_config = {}
+                    file_list_config = {}
                     if 'file_style_mappings' in st.session_state and source_file_obj.name in st.session_state.file_style_mappings:
                         file_mapping_data = st.session_state.file_style_mappings[source_file_obj.name]
                         # 样式映射部分（排除特殊键）
                         file_mapping = {k: v for k, v in file_mapping_data.items() if not k.startswith('_')}
                         # 表格/图片样式配置（从映射数据中的特殊键取出）
                         file_tbl_img_config = file_mapping_data.get('_table_image_style', {})
+                        # 列表段落兜底配置（从映射数据中的特殊键取出）
+                        file_list_config = file_mapping_data.get('_list_config', {})
                         if file_mapping:
                             st.info(f"📋 {source_file_obj.name}: 使用自定义样式映射 ({len(file_mapping)} 个样式)")
                     
@@ -1283,6 +1289,15 @@ else:
                     file_table_answer_style = file_tbl_img_config.get('table_answer_style', '')
                     file_image_answer_style = file_tbl_img_config.get('image_answer_style', '')
                     
+                    # 文件级列表段落配置覆盖全局设置
+                    _list_bullet = file_list_config.get('bullet', list_bullet if list_bullet else "—")
+                    _list_method = file_list_config.get('method', list_method)
+                    _list_style = file_list_config.get('style', list_style)
+                    _list_answer_method = file_list_config.get('answer_method', list_answer_method)
+                    _list_answer_style = file_list_config.get('answer_style', list_answer_style)
+                    _list_answer_bullet = file_list_config.get('answer_bullet', list_answer_bullet)
+                    _enable_list_style = file_list_config.get('enable_list', enable_list_style)
+                    
                     # 执行转换
                     success, actual_file, msg = converter.full_convert(
                         source_file=temp_source,
@@ -1295,12 +1310,12 @@ else:
                         answer_source_style=answer_source_style,
                         answer_copy_style=answer_copy_style,
                         table_answer_style=file_table_answer_style,
-                        list_bullet=list_bullet if list_bullet else "—",
-                        list_method=list_method,
-                        list_style=list_style,
-                        list_answer_method=list_answer_method,
-                        list_answer_style=list_answer_style,
-                        list_answer_bullet=list_answer_bullet,
+                        list_bullet=_list_bullet,
+                        list_method=_list_method,
+                        list_style=_list_style,
+                        list_answer_method=_list_answer_method,
+                        list_answer_style=_list_answer_style,
+                        list_answer_bullet=_list_answer_bullet,
                         do_answer_insertion=do_answer,
                         answer_mode=answer_mode,
                         do_hint_insertion=do_hint,
@@ -1315,7 +1330,8 @@ else:
                         enable_table_style=file_tbl_img_config.get('enable_table_style', False),
                         image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
                         enable_image_style=file_tbl_img_config.get('enable_image_style', False),
-                        remove_chapter_label=remove_chapter_label
+                        remove_chapter_label=remove_chapter_label,
+                        enable_list_style=_enable_list_style
                     )
                     
                     if success:

@@ -12,7 +12,6 @@
 import streamlit as st
 
 
-@st.fragment
 def render_conversion_config():
     """
     渲染转换配置区（完全参照桌面版）
@@ -243,10 +242,11 @@ def render_conversion_config():
     list_answer_method = st.session_state.get('list_answer_method_config', 'bullet')
     list_answer_style = st.session_state.get('list_answer_style_config', 'Body Text')
     list_answer_bullet = st.session_state.get('list_answer_bullet_config', '•')
+    enable_list_style = st.session_state.get('enable_list_style_config', True)
     remove_chapter_label = st.session_state.get('remove_chapter_label_config', False)
 
     return (do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode,
             do_hint, hint_type, hint_text, hint_image_path, hint_style,
             answer_source_style, answer_copy_style,
             list_method, list_style, list_answer_method, list_answer_style, list_answer_bullet,
-            remove_chapter_label)
+            remove_chapter_label, enable_list_style)
