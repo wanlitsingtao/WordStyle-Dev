@@ -135,36 +135,48 @@ def render_conversion_config():
         if 'hint_image_config' not in st.session_state:
             hint_image_path = None
     else:
-        # 单行布局：类型、样式、文本/图片上传、清除按钮 在同一行
-        row = st.columns([2, 2, 6, 1])
-        with row[0]:
+        # ========== 标签行 ==========
+        lbl = st.columns([2, 2, 5, 1.5, 1.5])
+        with lbl[0]:
+            st.markdown("**类型**")
+        with lbl[1]:
+            st.markdown("**提示语样式**")
+        with lbl[2]:
+            st.markdown("**提示语文本**" if hint_type == "text" else "**上传提示语图片**")
+        with lbl[3]:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+        with lbl[4]:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+
+        # ========== 控件行（全部 label_visibility="collapsed"，底端对齐） ==========
+        ctrl = st.columns([2, 2, 5, 1.5, 1.5])
+        with ctrl[0]:
             hint_type = st.radio(
                 "类型",
                 options=["text", "image"],
-                format_func=lambda x: "文本提示语" if x == "text" else "图片提示语",
+                format_func=lambda x: "文本" if x == "text" else "图片",
                 index=0 if hint_type == "text" else 1,
                 horizontal=True,
-                key="hint_type_radio"
+                key="hint_type_radio",
+                label_visibility="collapsed"
             )
             if hint_type != st.session_state.get('hint_type_config'):
                 st.session_state.hint_type_config = hint_type
-        with row[1]:
+        with ctrl[1]:
             hint_style = st.selectbox(
                 "提示语样式",
                 options=template_styles,
                 index=hint_style_idx,
                 key="hint_style_select",
+                label_visibility="collapsed"
             )
             st.session_state.hint_style_config = hint_style
-        with row[2]:
-            # 动态标签（文本或图片）并在同一行显示输入/上传控件
-            label_text = "提示语文本:" if hint_type == "text" else "上传提示语图片:"
-            st.markdown(f"<div class='hint-label'>{label_text}</div>", unsafe_allow_html=True)
+        with ctrl[2]:
             if hint_type == "text":
                 hint_text = st.text_input(
                     "提示语文本",
                     value=hint_text,
-                    help="提示语文本内容（图片模式下作为alt文本）",
+                    help="提示语文本内容",
                     key="hint_text_input",
                     label_visibility="collapsed",
                 )
@@ -192,23 +204,24 @@ def render_conversion_config():
                     st.info(f"📎 当前图片: {os.path.basename(hint_image_path)}")
                 else:
                     st.caption("请选择提示语图片文件")
-        with row[3]:
-            # 仅在图片模式下显示清除图片按钮
-            if hint_type == "image":
-                has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
-                if st.button("清除图片", key="clear_hint_img_btn", use_container_width=True, disabled=not has_image):
-                    if hint_image_path and os.path.exists(hint_image_path):
-                        try:
-                            os.remove(hint_image_path)
-                        except Exception:
-                            pass
-                    st.session_state.hint_image_config = None
-                    st.session_state.hint_image_uploaded = None
-                    st.rerun()
-
-        # 设为默认按钮：在启用时以全宽显示，便于与页面其他主操作按钮一致
-        if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
-            _save_hint_defaults(do_hint, hint_type, hint_text, hint_image_path, hint_style)
+        with ctrl[3]:
+            # 清除图片按钮：始终显示，无图片时禁用
+            has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
+            is_image_mode = (hint_type == "image")
+            if st.button("🗑️ 清除", key="clear_hint_img_btn", use_container_width=True,
+                        disabled=not (is_image_mode and has_image),
+                        help="清除已上传的提示语图片"):
+                if hint_image_path and os.path.exists(hint_image_path):
+                    try:
+                        os.remove(hint_image_path)
+                    except Exception:
+                        pass
+                st.session_state.hint_image_config = None
+                st.session_state.hint_image_uploaded = None
+                st.rerun()
+        with ctrl[4]:
+            if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
+                _save_hint_defaults(do_hint, hint_type, hint_text, hint_image_path, hint_style)
 
     # 返回配置值（保持与 app.py 的兼容）
     do_answer = st.session_state.get('do_answer_config', False)
