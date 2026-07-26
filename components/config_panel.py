@@ -196,16 +196,18 @@ def render_conversion_config():
                 else:
                     st.caption("请选择提示语图片文件")
         with bottom_row[2]:
-            has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
-            if st.button("清除图片", key="clear_hint_img_btn", use_container_width=True, disabled=not has_image):
-                if hint_image_path and os.path.exists(hint_image_path):
-                    try:
-                        os.remove(hint_image_path)
-                    except Exception:
-                        pass
-                st.session_state.hint_image_config = None
-                st.session_state.hint_image_uploaded = None
-                st.rerun()
+            # 仅在图片模式下显示清除图片按钮
+            if hint_type == "image":
+                has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
+                if st.button("清除图片", key="clear_hint_img_btn", use_container_width=True, disabled=not has_image):
+                    if hint_image_path and os.path.exists(hint_image_path):
+                        try:
+                            os.remove(hint_image_path)
+                        except Exception:
+                            pass
+                    st.session_state.hint_image_config = None
+                    st.session_state.hint_image_uploaded = None
+                    st.rerun()
 
         # 设为默认按钮：在启用时以全宽显示，便于与页面其他主操作按钮一致
         if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
