@@ -51,11 +51,12 @@ def render_conversion_config():
     # CSS：统一控件高度（提示语配置区）
     st.markdown("""
     <style>
-        /* 按钮：与下拉框/文本框等高 */
-        div[data-testid="column"] .stButton > button {
-            height: 3em;
-            line-height: 1;
-            font-size: 0.9em;
+        /* 所有按钮统一 3em 高度 */
+        div[data-testid="column"] button[kind="secondary"],
+        div[data-testid="column"] button[kind="primary"] {
+            height: 3em !important;
+            line-height: 1 !important;
+            font-size: 0.9em !important;
         }
         div[data-testid="column"] .stCheckbox > label {
             min-height: 2.5em;
@@ -63,26 +64,21 @@ def render_conversion_config():
             align-items: center;
             padding-top: 0.25em;
         }
-        /* 文本框、下拉框、文件上传器：统一3em高度 */
-        div[data-testid="column"] .stTextInput > div > div,
-        div[data-testid="column"] .stSelectbox > div > div > div,
-        div[data-testid="column"] section[data-testid="stFileUploader"] {
-            height: 3em;
-            display: flex;
-            align-items: center;
+        /* 文本框、下拉框：统一 3em 高度 */
+        div[data-testid="column"] .stTextInput [data-baseweb="input"],
+        div[data-testid="column"] .stSelectbox [data-baseweb="select"] {
+            height: 3em !important;
         }
-        /* 文件上传器内部dropzone高度填满 */
-        div[data-testid="column"] section[data-testid="stFileUploader"] > div {
-            height: 100%;
-            display: flex;
-            align-items: center;
+        /* 文件上传器：inner 容器 3em */
+        div[data-testid="column"] [data-testid="stFileUploader"] {
+            min-height: 3em !important;
         }
-        .hint-label {
-            height: 3em;
-            display: flex;
-            align-items: center;
-            padding-bottom: 0.1em;
-            font-size: 0.95em;
+        div[data-testid="column"] [data-testid="stFileUploader"] section {
+            padding: 0 0.5em !important;
+        }
+        div[data-testid="column"] [data-testid="stFileUploader"] button {
+            height: 2.4em !important;
+            font-size: 0.85em !important;
         }
         div[data-testid="column"] .stRadio > div {
             display: flex;
@@ -146,7 +142,7 @@ def render_conversion_config():
         with lbl[1]:
             st.markdown("**提示语样式**")
         with lbl[2]:
-            st.markdown("**上传提示语图片**" if hint_type == "text" else "**提示语文本**")
+            st.markdown("**提示语文本**" if hint_type == "text" else "**上传提示语图片**")
         with lbl[3]:
             st.markdown("&nbsp;", unsafe_allow_html=True)
         with lbl[4]:
@@ -159,13 +155,11 @@ def render_conversion_config():
                 "类型",
                 options=["text", "image"],
                 format_func=lambda x: "文本" if x == "text" else "图片",
-                index=0 if hint_type == "text" else 1,
+                index=0 if st.session_state.get('hint_type_config', 'text') == "text" else 1,
                 horizontal=True,
-                key="hint_type_radio",
+                key="hint_type_config",
                 label_visibility="collapsed"
             )
-            if hint_type != st.session_state.get('hint_type_config'):
-                st.session_state.hint_type_config = hint_type
         with ctrl[1]:
             hint_style = st.selectbox(
                 "提示语样式",
