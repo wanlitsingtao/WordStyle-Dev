@@ -68,6 +68,14 @@ def render_conversion_config():
         div[data-testid="column"] .stSelectbox > div > div > div {
             min-height: 2.5em;
         }
+        /* 标签容器，确保与输入/下拉底端对齐 */
+        .hint-label {
+            height: 2.5em;
+            display: flex;
+            align-items: flex-end;
+            padding-bottom: 0.15em;
+            font-size: 0.95em;
+        }
         div[data-testid="column"] .stRadio > div {
             display: flex;
             align-items: center;
@@ -150,7 +158,7 @@ def render_conversion_config():
         with row[2]:
             # 动态标签（文本或图片）并在同一行显示输入/上传控件
             label_text = "提示语文本:" if hint_type == "text" else "上传提示语图片:"
-            st.markdown(label_text)
+            st.markdown(f"<div class='hint-label'>{label_text}</div>", unsafe_allow_html=True)
             if hint_type == "text":
                 hint_text = st.text_input(
                     "提示语文本",
