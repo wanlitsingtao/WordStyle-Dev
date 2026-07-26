@@ -1030,20 +1030,6 @@ if current_temp_template:
         st.markdown(f"**✅ 已上传:** {os.path.basename(current_temp_template)}")
         st.markdown(f"**📋 检测到样式:** {len(app_state.get_template_styles())} 种 - {', '.join(app_state.get_template_styles()[:10])}{'...' if len(app_state.get_template_styles()) > 10 else ''}")
 
-# ========== 样式映射按钮（参照桌面版：始终显示，允许无文档时打开配置空窗口） ==========
-st.markdown("---")
-map_col1, map_col2 = st.columns([2, 8])
-with map_col1:
-    if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
-                 help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
-        from components.dialogs.style_mapping import show_style_mapping_dialog
-        show_style_mapping_dialog()
-with map_col2:
-    if current_source_files and st.session_state.get('template_styles'):
-        st.caption("点击按钮配置当前文件的样式映射")
-    else:
-        st.caption("上传源文档和模板文档后即可配置样式映射")
-
 # 转换配置
 st.markdown("---")
 st.subheader("⚙️ 转换配置")
@@ -1098,10 +1084,24 @@ if 'image_answer_style_config' not in st.session_state:
     app_state.set_image_answer_style_config('')
 
 
+# 在“⚙️ 转换配置”下放置“配置样式映射”按钮
+st.markdown("---")
+map_col1, map_col2 = st.columns([2, 8])
+with map_col1:
+    if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
+                 help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
+        from components.dialogs.style_mapping import show_style_mapping_dialog
+        show_style_mapping_dialog()
+with map_col2:
+    if current_source_files and st.session_state.get('template_styles'):
+        st.caption("点击按钮配置当前文件的样式映射")
+    else:
+        st.caption("上传源文档和模板文档后即可配置样式映射")
+
 # ==================== [FIX] 调用配置区组件渲染实际的UI控件 ====================
 # render_conversion_config() 来自 components/config_panel.py
 # 完全参照桌面版布局：
-# 转换选项区：配置样式映射按钮 + 祈使语气转换checkbox
+# 转换选项区：祈使语气转换checkbox
 # 章节提示语区：插入提示语checkbox + 类型/样式/内容配置
 # 所有其他配置（应答句、列表段落、表格/图片兜底、清除章节标签）均在样式映射对话框中管理
 result = render_conversion_config()
