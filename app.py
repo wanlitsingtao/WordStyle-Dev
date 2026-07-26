@@ -1034,54 +1034,95 @@ if current_temp_template:
 st.markdown("---")
 st.subheader("⚙️ 转换配置")
 
-# 使用 session_state 保存配置，避免每次页面刷新都重置
-# 注意：应答句配置、列表段落配置、清除章节标签等现在由样式映射对话框管理
-# 这里只初始化未设置的键
+# ====================================================================
+# 加载用户持久化的默认配置（跨会话保持，多用户隔离）
+# 所有"设为默认"按钮保存的配置在此统一恢复
+# ====================================================================
+_user_defaults = {}
+try:
+    _uid = app_state.get_user_id()
+    if _uid:
+        _ud = load_user_data(_uid)
+        if _ud and 'style_mappings' in _ud:
+            _sm = _ud['style_mappings']
+            _user_defaults = {
+                'hint':      _sm.get('_default_hint_settings', {}) or {},
+                'answer':    _sm.get('_default_answer_config', {}) or {},
+                'list':      _sm.get('_default_list_config', {}) or {},
+                'tbl_img':   _sm.get('_default_tbl_img_config', {}) or {},
+                'rm_chapter': _sm.get('_default_remove_chapter_label', None),
+            }
+except Exception:
+    pass
+
+_h  = _user_defaults.get('hint', {})
+_a  = _user_defaults.get('answer', {})
+_l  = _user_defaults.get('list', {})
+_t  = _user_defaults.get('tbl_img', {})
 
 if 'do_mood_config' not in st.session_state:
     app_state.set_do_mood_config(True)
-if 'do_answer_config' not in st.session_state:
-    st.session_state.do_answer_config = False  # 默认不勾选，与桌面版一致
-if 'list_bullet_config' not in st.session_state:
-    app_state.set_list_bullet_config("•")
-if 'answer_text_config' not in st.session_state:
-    app_state.set_answer_text_config("应答：本投标人理解并满足要求。")
-if 'answer_style_config' not in st.session_state:
-    app_state.set_answer_style_config("Normal")
-if 'answer_mode_config' not in st.session_state:
-    app_state.set_answer_mode_config('copy_chapter')  # 默认"原文+应答句+应答原文"模式，与桌面版一致
-if 'do_hint_config' not in st.session_state:
-    app_state.set_do_hint_config(False)
-if 'hint_type_config' not in st.session_state:
-    app_state.set_hint_type_config('text')
-if 'hint_text_config' not in st.session_state:
-    app_state.set_hint_text_config('招标文件原文')
-if 'hint_style_config' not in st.session_state:
-    app_state.set_hint_style_config('Normal')
 
-# ========== 新增配置键初始化（与桌面版同步） ==========
+# ── 应答句配置 ──
+if 'do_answer_config' not in st.session_state:
+    st.session_state.do_answer_config = _a.get('do_answer', False)
+if 'answer_text_config' not in st.session_state:
+    app_state.set_answer_text_config(_a.get('answer_text', '应答：本投标人理解并满足要求。'))
+if 'answer_style_config' not in st.session_state:
+    app_state.set_answer_style_config(_a.get('answer_style', 'Normal'))
+if 'answer_mode_config' not in st.session_state:
+    app_state.set_answer_mode_config(_a.get('answer_mode', 'copy_chapter'))
 if 'answer_source_style_config' not in st.session_state:
-    app_state.set_answer_source_style_config('')
+    app_state.set_answer_source_style_config(_a.get('answer_source_style', ''))
 if 'answer_copy_style_config' not in st.session_state:
-    app_state.set_answer_copy_style_config('')
-if 'list_method_config' not in st.session_state:
-    app_state.set_list_method_config('bullet')
-if 'list_style_config' not in st.session_state:
-    app_state.set_list_style_config('Body Text')
-if 'list_answer_method_config' not in st.session_state:
-    app_state.set_list_answer_method_config('bullet')
-if 'list_answer_style_config' not in st.session_state:
-    app_state.set_list_answer_style_config('Body Text')
-if 'list_answer_bullet_config' not in st.session_state:
-    app_state.set_list_answer_bullet_config('•')
+    app_state.set_answer_copy_style_config(_a.get('answer_copy_style', ''))
+
+# ── 列表段落兜底配置 ──
 if 'enable_list_style_config' not in st.session_state:
-    app_state.set_enable_list_style_config(True)
-if 'remove_chapter_label_config' not in st.session_state:
-    app_state.set_remove_chapter_label_config(False)
+    app_state.set_enable_list_style_config(_l.get('enable_list', True))
+if 'list_method_config' not in st.session_state:
+    app_state.set_list_method_config(_l.get('method', 'bullet'))
+if 'list_bullet_config' not in st.session_state:
+    app_state.set_list_bullet_config(_l.get('bullet', '•'))
+if 'list_style_config' not in st.session_state:
+    app_state.set_list_style_config(_l.get('style', 'Body Text'))
+if 'list_answer_method_config' not in st.session_state:
+    app_state.set_list_answer_method_config(_l.get('answer_method', 'bullet'))
+if 'list_answer_bullet_config' not in st.session_state:
+    app_state.set_list_answer_bullet_config(_l.get('answer_bullet', '•'))
+if 'list_answer_style_config' not in st.session_state:
+    app_state.set_list_answer_style_config(_l.get('answer_style', 'Body Text'))
+
+# ── 表格/图片兜底配置 ──
+if 'enable_table_style_config' not in st.session_state:
+    app_state.set_enable_table_style_config(_t.get('enable_table_style', False))
+if 'table_style_config' not in st.session_state:
+    app_state.set_table_style_config(_t.get('table_style', 'Body Text'))
 if 'table_answer_style_config' not in st.session_state:
-    app_state.set_table_answer_style_config('')
+    app_state.set_table_answer_style_config(_t.get('table_answer_style', ''))
+if 'enable_image_style_config' not in st.session_state:
+    app_state.set_enable_image_style_config(_t.get('enable_image_style', False))
+if 'image_style_config' not in st.session_state:
+    app_state.set_image_style_config(_t.get('image_style', 'Body Text'))
 if 'image_answer_style_config' not in st.session_state:
-    app_state.set_image_answer_style_config('')
+    app_state.set_image_answer_style_config(_t.get('image_answer_style', ''))
+
+# ── 清除章节标签 ──
+if 'remove_chapter_label_config' not in st.session_state:
+    _rm = _user_defaults.get('rm_chapter', None)
+    app_state.set_remove_chapter_label_config(False if _rm is None else bool(_rm))
+
+# ── 提示语配置 ──
+if 'do_hint_config' not in st.session_state:
+    app_state.set_do_hint_config(_h.get('do_hint', False))
+if 'hint_type_config' not in st.session_state:
+    app_state.set_hint_type_config(_h.get('hint_type', 'text'))
+if 'hint_text_config' not in st.session_state:
+    app_state.set_hint_text_config(_h.get('hint_text', '招标文件原文'))
+if 'hint_style_config' not in st.session_state:
+    app_state.set_hint_style_config(_h.get('hint_style', 'Normal'))
+if 'hint_image_config' not in st.session_state:
+    app_state.set_hint_image_config(None)  # 图片路径不跨会话恢复（临时文件）
 
 
 # 在“⚙️ 转换配置”下放置“配置样式映射”按钮

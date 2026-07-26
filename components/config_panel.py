@@ -49,17 +49,8 @@ def render_conversion_config():
     返回与 `app.py` 兼容的配置元组。
     """
     # CSS：统一控件高度（提示语配置区）
-    # 使用固定的 42px 高度避免 em 计算差异
     st.markdown("""
     <style>
-        /* === 统一按钮高度 42px === */
-        div[data-testid="column"] button {
-            height: 42px !important;
-            min-height: 42px !important;
-            line-height: 1 !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
         /* === selectbox 输入框 42px === */
         div[data-testid="column"] [data-baseweb="select"] > div {
             height: 42px !important;
@@ -79,11 +70,19 @@ def render_conversion_config():
             padding-top: 0 !important;
             padding-bottom: 0 !important;
         }
-        /* file_uploader 内部按钮也 42px */
+        /* file_uploader 内部浏览按钮缩小 */
         div[data-testid="column"] [data-testid="stFileUploader"] section button {
             height: 34px !important;
             min-height: 34px !important;
             padding: 0 0.75em !important;
+        }
+        /* === 清除按钮 42px（与下拉框/上传器齐平） === */
+        .hint-clear-wrap button {
+            height: 42px !important;
+            min-height: 42px !important;
+            line-height: 1 !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
         /* === checkbox/radio 容器垂直居中 === */
         div[data-testid="column"] .stCheckbox > label,
@@ -210,9 +209,10 @@ def render_conversion_config():
                 else:
                     st.caption("请选择提示语图片文件")
         with ctrl[3]:
-            # 清除按钮：仅图片模式显示
+            # 清除按钮：仅图片模式显示，高度42px与下拉框齐平
             if hint_type == "image":
                 has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
+                st.markdown('<div class="hint-clear-wrap">', unsafe_allow_html=True)
                 if st.button("🗑️ 清除", key="clear_hint_img_btn", use_container_width=True,
                             disabled=not has_image,
                             help="清除已上传的提示语图片"):
@@ -224,6 +224,7 @@ def render_conversion_config():
                     st.session_state.hint_image_config = None
                     st.session_state.hint_image_uploaded = None
                     st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
         with ctrl[4]:
             # 设为默认：始终在最后一列
             if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
