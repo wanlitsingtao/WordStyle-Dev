@@ -155,6 +155,10 @@ class AccountManager:
                 return {"username": acct["username"], "created_at": acct["created_at"]}
         elif self.data_source == "supabase":
             return self._get_bound_supabase(device_fingerprint)
+        elif self.data_source == "api":
+            result = self._call_api("GET", f"/bound-account/{device_fingerprint}")
+            if result and result.get("bound"):
+                return {"username": result["username"], "created_at": result.get("created_at", "")}
         return None
 
     def is_username_taken(self, username: str) -> bool:
@@ -165,6 +169,10 @@ class AccountManager:
             return username_lower in data.get("accounts", {})
         elif self.data_source == "supabase":
             return self._username_taken_supabase(username_lower)
+        elif self.data_source == "api":
+            result = self._call_api("GET", f"/check-username/{username_lower}")
+            if result:
+                return not result.get("available", True)
         return False
 
     def get_user_id_for_username(self, username: str) -> Optional[str]:
@@ -189,6 +197,10 @@ class AccountManager:
                         pass
         elif self.data_source == "supabase":
             return self._get_user_id_supabase(username_lower)
+        elif self.data_source == "api":
+            result = self._call_api("GET", f"/user-id/{username_lower}")
+            if result and result.get("user_id"):
+                return result["user_id"]
         return None
 
     # ==================== Local 实现 ====================
@@ -376,13 +388,49 @@ class AccountManager:
         except Exception:
             return None
 
-    # ==================== API 模式实现（占位） ====================
+    # ==================== API 模式实现 ====================
+
+    def _call_api(self, method: str, path: str, json_data: dict = None) -> dict:
+        """通用 API 调用"""
+        import requests
+        url = f"{self.backend_url.rstrip('/')}/api/account{path}"
+        try:
+            if method == "POST":
+                resp = requests.post(url, json=json_data, timeout=10)
+            elif method == "GET":
+                resp = requests.get(url, params=json_data, timeout=10)
+            else:
+                return None
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning(f"API 调用失败 {url}: {resp.status_code} {resp.text}")
+            return None
+        except Exception as e:
+            logger.error(f"API 调用异常 {url}: {e}")
+            return None
 
     def _bind_api(self, device_fp: str, username: str, username_lower: str, password: str) -> Tuple[bool, str]:
-        return False, "API 模式暂不支持账号绑定，请使用设备指纹"
+        result = self._call_api("POST", "/bind", {
+            "device_fingerprint": device_fp,
+            "username": username,
+            "password": password,
+        })
+        if result:
+            return result.get("success", False), result.get("message", "未知错误")
+        return False, "后端服务暂不可用，请稍后重试"
 
     def _login_api(self, username_lower: str, password: str) -> Tuple[bool, str, Optional[str]]:
-        return False, "API 模式暂不支持账号登录，请使用设备指纹"
+        result = self._call_api("POST", "/login", {
+            "username": username_lower,
+            "password": password,
+        })
+        if result:
+            return (
+                result.get("success", False),
+                result.get("message", "未知错误"),
+                result.get("user_id"),
+            )
+        return False, "后端服务暂不可用，请稍后重试", None
 
 
 # ==================== 便捷工厂函数 ====================

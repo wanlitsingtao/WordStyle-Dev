@@ -26,6 +26,41 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ==================== 账号绑定/登录相关 ====================
+
+class AccountBindRequest(BaseModel):
+    """账号绑定请求"""
+    device_fingerprint: str
+    username: str
+    password: str
+
+class AccountBindResponse(BaseModel):
+    """账号绑定响应"""
+    success: bool
+    message: str
+
+class AccountLoginRequest(BaseModel):
+    """账号登录请求"""
+    username: str
+    password: str
+
+class AccountLoginResponse(BaseModel):
+    """账号登录响应"""
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+
+class CheckUsernameResponse(BaseModel):
+    """用户名检查响应"""
+    available: bool
+    message: str
+
+class BoundAccountResponse(BaseModel):
+    """设备绑定账号查询响应"""
+    bound: bool
+    username: Optional[str] = None
+    created_at: Optional[str] = None
+
 # ==================== 评论相关 ====================
 
 class CommentResponse(BaseModel):
@@ -40,6 +75,41 @@ class CommentResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# ==================== 账号绑定/登录相关 ====================
+
+class AccountBindRequest(BaseModel):
+    """账号绑定请求"""
+    device_fingerprint: str
+    username: str
+    password: str
+
+class AccountBindResponse(BaseModel):
+    """账号绑定响应"""
+    success: bool
+    message: str
+
+class AccountLoginRequest(BaseModel):
+    """账号登录请求"""
+    username: str
+    password: str
+
+class AccountLoginResponse(BaseModel):
+    """账号登录响应"""
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+
+class CheckUsernameResponse(BaseModel):
+    """用户名检查响应"""
+    available: bool
+    message: str
+
+class BoundAccountResponse(BaseModel):
+    """设备绑定账号查询响应"""
+    bound: bool
+    username: Optional[str] = None
+    created_at: Optional[str] = None
 
 # ==================== 反馈相关 ====================
 
@@ -59,6 +129,41 @@ class FeedbackResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ==================== 账号绑定/登录相关 ====================
+
+class AccountBindRequest(BaseModel):
+    """账号绑定请求"""
+    device_fingerprint: str
+    username: str
+    password: str
+
+class AccountBindResponse(BaseModel):
+    """账号绑定响应"""
+    success: bool
+    message: str
+
+class AccountLoginRequest(BaseModel):
+    """账号登录请求"""
+    username: str
+    password: str
+
+class AccountLoginResponse(BaseModel):
+    """账号登录响应"""
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+
+class CheckUsernameResponse(BaseModel):
+    """用户名检查响应"""
+    available: bool
+    message: str
+
+class BoundAccountResponse(BaseModel):
+    """设备绑定账号查询响应"""
+    bound: bool
+    username: Optional[str] = None
+    created_at: Optional[str] = None
+
 # ==================== 样式映射相关 ====================
 
 class StyleMappingResponse(BaseModel):
@@ -72,6 +177,41 @@ class StyleMappingResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# ==================== 账号绑定/登录相关 ====================
+
+class AccountBindRequest(BaseModel):
+    """账号绑定请求"""
+    device_fingerprint: str
+    username: str
+    password: str
+
+class AccountBindResponse(BaseModel):
+    """账号绑定响应"""
+    success: bool
+    message: str
+
+class AccountLoginRequest(BaseModel):
+    """账号登录请求"""
+    username: str
+    password: str
+
+class AccountLoginResponse(BaseModel):
+    """账号登录响应"""
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+
+class CheckUsernameResponse(BaseModel):
+    """用户名检查响应"""
+    available: bool
+    message: str
+
+class BoundAccountResponse(BaseModel):
+    """设备绑定账号查询响应"""
+    bound: bool
+    username: Optional[str] = None
+    created_at: Optional[str] = None
 
 # 订单相关已移除，直接进入转换任务相关
 
@@ -93,3 +233,38 @@ class ConversionTaskResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# ==================== 账号绑定/登录相关 ====================
+
+class AccountBindRequest(BaseModel):
+    """账号绑定请求"""
+    device_fingerprint: str
+    username: str
+    password: str
+
+class AccountBindResponse(BaseModel):
+    """账号绑定响应"""
+    success: bool
+    message: str
+
+class AccountLoginRequest(BaseModel):
+    """账号登录请求"""
+    username: str
+    password: str
+
+class AccountLoginResponse(BaseModel):
+    """账号登录响应"""
+    success: bool
+    message: str
+    user_id: Optional[str] = None
+
+class CheckUsernameResponse(BaseModel):
+    """用户名检查响应"""
+    available: bool
+    message: str
+
+class BoundAccountResponse(BaseModel):
+    """设备绑定账号查询响应"""
+    bound: bool
+    username: Optional[str] = None
+    created_at: Optional[str] = None
