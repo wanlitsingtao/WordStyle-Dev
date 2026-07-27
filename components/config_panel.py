@@ -51,36 +51,46 @@ def render_conversion_config():
     # CSS：统一控件高度（提示语配置区）
     st.markdown("""
     <style>
-        /* === selectbox 输入框 42px === */
+        /* === 固定高度变量 === */
+        :root { --hint-ctrl-h: 42px; }
+
+        /* === selectbox === */
         div[data-testid="column"] [data-baseweb="select"] > div {
-            height: 42px !important;
-            min-height: 42px !important;
+            height: var(--hint-ctrl-h) !important;
+            min-height: var(--hint-ctrl-h) !important;
         }
-        /* === text_input 输入框 42px === */
+        /* === text_input === */
         div[data-testid="column"] [data-testid="stTextInput"] input {
-            height: 42px !important;
-            min-height: 42px !important;
+            height: var(--hint-ctrl-h) !important;
+            min-height: var(--hint-ctrl-h) !important;
         }
-        /* === file_uploader 整体区域 42px，垂直居中 === */
+        /* === file_uploader 整体区域 === */
         div[data-testid="column"] [data-testid="stFileUploader"] section {
-            height: 42px !important;
-            min-height: 42px !important;
+            height: var(--hint-ctrl-h) !important;
+            min-height: var(--hint-ctrl-h) !important;
             display: flex !important;
             align-items: center !important;
             padding-top: 0 !important;
             padding-bottom: 0 !important;
         }
-        /* file_uploader 内部浏览按钮缩小 */
+        /* file_uploader 内部浏览按钮（略小） */
         div[data-testid="column"] [data-testid="stFileUploader"] section button {
             height: 34px !important;
             min-height: 34px !important;
             padding: 0 0.75em !important;
         }
-        /* === 清除按钮：自然高度，与"设为默认"按钮一致 === */
+        /* === 普通按钮（清除图片 / 设为默认）：统一 42px === */
+        div[data-testid="column"] .stButton > button {
+            height: var(--hint-ctrl-h) !important;
+            min-height: var(--hint-ctrl-h) !important;
+            line-height: 1 !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+        }
         /* === checkbox/radio 容器垂直居中 === */
         div[data-testid="column"] .stCheckbox > label,
         div[data-testid="column"] .stRadio > div {
-            min-height: 42px !important;
+            min-height: var(--hint-ctrl-h) !important;
             display: flex !important;
             align-items: center !important;
         }
