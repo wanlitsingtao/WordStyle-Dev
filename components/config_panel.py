@@ -51,23 +51,33 @@ def render_conversion_config():
     # CSS：统一控件高度（提示语配置区）
     st.markdown("""
     <style>
-        /* === 固定高度变量 === */
-        :root { --hint-ctrl-h: 42px; }
+        /* === 所有控件统一盒模型 === */
+        div[data-testid="column"] [data-baseweb="select"] > div,
+        div[data-testid="column"] [data-testid="stTextInput"] input,
+        div[data-testid="column"] [data-testid="stFileUploader"],
+        div[data-testid="column"] [data-testid="stFileUploader"] section,
+        div[data-testid="column"] .stButton > button {
+            box-sizing: border-box !important;
+        }
 
         /* === selectbox === */
         div[data-testid="column"] [data-baseweb="select"] > div {
-            height: var(--hint-ctrl-h) !important;
-            min-height: var(--hint-ctrl-h) !important;
+            height: 42px !important;
+            min-height: 42px !important;
         }
         /* === text_input === */
         div[data-testid="column"] [data-testid="stTextInput"] input {
-            height: var(--hint-ctrl-h) !important;
-            min-height: var(--hint-ctrl-h) !important;
+            height: 42px !important;
+            min-height: 42px !important;
         }
-        /* === file_uploader 整体区域 === */
+        /* === file_uploader：外层容器定高，section 填满 === */
+        div[data-testid="column"] [data-testid="stFileUploader"] {
+            height: 42px !important;
+            min-height: 42px !important;
+        }
         div[data-testid="column"] [data-testid="stFileUploader"] section {
-            height: var(--hint-ctrl-h) !important;
-            min-height: var(--hint-ctrl-h) !important;
+            height: 100% !important;
+            min-height: unset !important;
             display: flex !important;
             align-items: center !important;
             padding-top: 0 !important;
@@ -79,10 +89,10 @@ def render_conversion_config():
             min-height: 34px !important;
             padding: 0 0.75em !important;
         }
-        /* === 普通按钮（清除图片 / 设为默认）：统一 42px === */
+        /* === 普通按钮（清除图片 / 设为默认）：42px === */
         div[data-testid="column"] .stButton > button {
-            height: var(--hint-ctrl-h) !important;
-            min-height: var(--hint-ctrl-h) !important;
+            height: 42px !important;
+            min-height: 42px !important;
             line-height: 1 !important;
             padding-top: 0 !important;
             padding-bottom: 0 !important;
@@ -90,7 +100,7 @@ def render_conversion_config():
         /* === checkbox/radio 容器垂直居中 === */
         div[data-testid="column"] .stCheckbox > label,
         div[data-testid="column"] .stRadio > div {
-            min-height: var(--hint-ctrl-h) !important;
+            min-height: 42px !important;
             display: flex !important;
             align-items: center !important;
         }
