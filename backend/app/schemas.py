@@ -39,6 +39,10 @@ class AccountBindResponse(BaseModel):
     success: bool
     message: str
 
+class AccountUnbindRequest(BaseModel):
+    """账号解绑请求"""
+    device_fingerprint: str
+
 class AccountLoginRequest(BaseModel):
     """账号登录请求"""
     username: str
@@ -88,6 +92,10 @@ class AccountBindResponse(BaseModel):
     """账号绑定响应"""
     success: bool
     message: str
+
+class AccountUnbindRequest(BaseModel):
+    """账号解绑请求"""
+    device_fingerprint: str
 
 class AccountLoginRequest(BaseModel):
     """账号登录请求"""
@@ -142,6 +150,10 @@ class AccountBindResponse(BaseModel):
     success: bool
     message: str
 
+class AccountUnbindRequest(BaseModel):
+    """账号解绑请求"""
+    device_fingerprint: str
+
 class AccountLoginRequest(BaseModel):
     """账号登录请求"""
     username: str
@@ -190,6 +202,10 @@ class AccountBindResponse(BaseModel):
     """账号绑定响应"""
     success: bool
     message: str
+
+class AccountUnbindRequest(BaseModel):
+    """账号解绑请求"""
+    device_fingerprint: str
 
 class AccountLoginRequest(BaseModel):
     """账号登录请求"""
@@ -246,6 +262,10 @@ class AccountBindResponse(BaseModel):
     """账号绑定响应"""
     success: bool
     message: str
+
+class AccountUnbindRequest(BaseModel):
+    """账号解绑请求"""
+    device_fingerprint: str
 
 class AccountLoginRequest(BaseModel):
     """账号登录请求"""

@@ -17,7 +17,7 @@ import hashlib
 from app.core.database import get_db
 from app.models import User
 from app.schemas import (
-    AccountBindRequest, AccountLoginRequest,
+    AccountBindRequest, AccountLoginRequest, AccountUnbindRequest,
     AccountBindResponse, AccountLoginResponse,
     CheckUsernameResponse, BoundAccountResponse
 )
@@ -166,6 +166,32 @@ def get_bound_account(device_fp: str, db: Session = Depends(get_db)):
         username=user.username,
         created_at=user.created_at.isoformat() if user.created_at else None
     )
+
+
+@router.post("/unbind", response_model=AccountBindResponse)
+def unbind_account(req: AccountUnbindRequest, db: Session = Depends(get_db)):
+    """
+    解除设备指纹与用户名的绑定。
+
+    清除用户的 username 和 password_hash，保留设备指纹和段落额度。
+    """
+    device_fp = req.device_fingerprint.strip()
+    if not device_fp:
+        return AccountBindResponse(success=False, message="设备指纹不能为空")
+
+    user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+    if not user or not user.username:
+        return AccountBindResponse(success=False, message="该设备未绑定任何账号")
+
+    try:
+        user.username = None
+        user.password_hash = None
+        user.updated_at = datetime.now()
+        db.commit()
+        return AccountBindResponse(success=True, message="账号解绑成功")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"解绑失败: {str(e)}")
 
 
 @router.get("/user-id/{username_lower}")
