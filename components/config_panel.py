@@ -49,48 +49,69 @@ def render_conversion_config():
     返回与 `app.py` 兼容的配置元组。
     """
     # CSS：统一控件高度（提示语配置区）
+    # 关键：Streamlit 1.57 中 file_uploader 拖拽区是 [data-testid="stFileUploaderDropzone"]（div），
+    # 不是 <section>！之前 Robot 用 section 选择器完全失效，改多少遍都没用。
     st.markdown("""
     <style>
         /* === 所有控件统一盒模型 === */
         div[data-testid="column"] [data-baseweb="select"] > div,
         div[data-testid="column"] [data-testid="stTextInput"] input,
         div[data-testid="column"] [data-testid="stFileUploader"],
-        div[data-testid="column"] [data-testid="stFileUploader"] section,
-        div[data-testid="column"] .stButton > button {
+        div[data-testid="column"] [data-testid="stFileUploaderDropzone"],
+        div[data-testid="column"] .stButton > button,
+        div[data-testid="column"] button[kind] {
             box-sizing: border-box !important;
         }
 
-        /* === selectbox === */
+        /* === selectbox：高度 42px === */
         div[data-testid="column"] [data-baseweb="select"] > div {
             height: 42px !important;
             min-height: 42px !important;
         }
-        /* === text_input === */
+        /* === text_input：高度 42px === */
         div[data-testid="column"] [data-testid="stTextInput"] input {
             height: 42px !important;
             min-height: 42px !important;
         }
-        /* === file_uploader：外层容器定高，section 填满 === */
+        /* === file_uploader 外层容器 === */
         div[data-testid="column"] [data-testid="stFileUploader"] {
-            height: 42px !important;
             min-height: 42px !important;
         }
-        div[data-testid="column"] [data-testid="stFileUploader"] section {
-            height: 100% !important;
-            min-height: unset !important;
+        /* 隐藏 file_uploader 的 label（collapsed 时仍占位） */
+        div[data-testid="column"] [data-testid="stFileUploader"] [data-testid="stWidgetLabel"] {
+            display: none !important;
+        }
+        /* === file_uploader 拖拽区（Streamlit 1.57 用 div，不是 section！） === */
+        div[data-testid="column"] [data-testid="stFileUploaderDropzone"] {
+            height: 42px !important;
+            min-height: 42px !important;
+            padding: 0 8px !important;
             display: flex !important;
             align-items: center !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
+            gap: 4px !important;
         }
-        /* file_uploader 内部浏览按钮（略小） */
-        div[data-testid="column"] [data-testid="stFileUploader"] section button {
+        /* 拖拽区内的提示文字：缩小并单行截断 */
+        div[data-testid="column"] [data-testid="stFileUploaderDropzone"] span {
+            font-size: 0.65rem !important;
+            line-height: 1.1 !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        /* 拖拽区内的文件大小限制文字：隐藏 */
+        div[data-testid="column"] [data-testid="stFileUploaderDropzone"] small {
+            display: none !important;
+        }
+        /* 拖拽区内的浏览按钮：34px，与 42px 外层留 4px 上下间距 */
+        div[data-testid="column"] [data-testid="stFileUploaderDropzone"] button {
             height: 34px !important;
             min-height: 34px !important;
-            padding: 0 0.75em !important;
+            flex-shrink: 0 !important;
         }
-        /* === 普通按钮（清除图片 / 设为默认）：42px === */
-        div[data-testid="column"] .stButton > button {
+        /* === 普通按钮（清除图片 / 设为默认）：统一 42px === */
+        div[data-testid="column"] .stButton > button,
+        div[data-testid="column"] button[kind="secondary"],
+        div[data-testid="column"] button[kind="primary"] {
             height: 42px !important;
             min-height: 42px !important;
             line-height: 1 !important;
@@ -168,7 +189,7 @@ def render_conversion_config():
             st.markdown("&nbsp;", unsafe_allow_html=True)
 
         # ========== 控件行（全部 label_visibility="collapsed"，底端对齐） ==========
-        ctrl = st.columns([2, 2, 5, 1.5, 1.5])
+        ctrl = st.columns([2, 2, 5, 1.5, 1.5], vertical_alignment="center")
         with ctrl[0]:
             hint_type = st.radio(
                 "类型",
