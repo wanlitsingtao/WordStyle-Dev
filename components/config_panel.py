@@ -76,14 +76,7 @@ def render_conversion_config():
             min-height: 34px !important;
             padding: 0 0.75em !important;
         }
-        /* === 清除按钮 42px（与下拉框/上传器齐平） === */
-        .hint-clear-wrap button {
-            height: 42px !important;
-            min-height: 42px !important;
-            line-height: 1 !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
+        /* === 清除按钮：自然高度，与"设为默认"按钮一致 === */
         /* === checkbox/radio 容器垂直居中 === */
         div[data-testid="column"] .stCheckbox > label,
         div[data-testid="column"] .stRadio > div {
@@ -212,8 +205,7 @@ def render_conversion_config():
             # 清除按钮：仅图片模式显示，高度42px与下拉框齐平
             if hint_type == "image":
                 has_image = bool(hint_image_path and os.path.exists(hint_image_path) if hint_image_path else False)
-                st.markdown('<div class="hint-clear-wrap">', unsafe_allow_html=True)
-                if st.button("🗑️ 清除", key="clear_hint_img_btn", use_container_width=True,
+                if st.button("🗑️ 清除图片", key="clear_hint_img_btn", use_container_width=True,
                             disabled=not has_image,
                             help="清除已上传的提示语图片"):
                     if hint_image_path and os.path.exists(hint_image_path):
@@ -224,7 +216,6 @@ def render_conversion_config():
                     st.session_state.hint_image_config = None
                     st.session_state.hint_image_uploaded = None
                     st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
         with ctrl[4]:
             # 设为默认：始终在最后一列
             if st.button("⭐ 设为默认", key="save_default_hint_btn", use_container_width=True):
