@@ -369,9 +369,15 @@ elif DATA_SOURCE == "supabase":
         
         # 用户管理相关函数（Supabase 模式 - 完整实现）
         def _claim_free(user_id=None):
-            """领取免费段落（Supabase 模式）- 每日只领取一次"""
-            from config import FREE_PARAGRAPHS_DAILY
+            """领取免费段落（Supabase 模式）- 每日只领取一次，从 system_config 动态读取额度"""
             from datetime import date
+            
+            # 从 system_config 表动态读取免费段落数
+            try:
+                config_val = get_config('free_paragraphs_daily')
+                free_paragraphs = int(config_val) if config_val else 10000
+            except Exception:
+                free_paragraphs = 10000
             
             db = SessionLocal()
             try:
@@ -387,10 +393,10 @@ elif DATA_SOURCE == "supabase":
                             return 0
                     
                     # 今日首次领取：重置为免费额度（不累计）
-                    user.paragraphs_remaining = FREE_PARAGRAPHS_DAILY
+                    user.paragraphs_remaining = free_paragraphs
                     user.last_claim_date = datetime.now()
                     db.commit()
-                    return FREE_PARAGRAPHS_DAILY
+                    return free_paragraphs
                 return 0
             except Exception as e:
                 db.rollback()
@@ -1072,9 +1078,15 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
     elif DATA_SOURCE == "supabase":
         # Supabase模式直接使用已有的实现
         from backend.app.core.database import SessionLocal
-        from config import FREE_PARAGRAPHS_DAILY
         from datetime import datetime
         import hashlib
+        
+        # 从 system_config 动态读取免费段落数
+        try:
+            _config_val = get_config('free_paragraphs_daily')
+            _free_paras = int(_config_val) if _config_val else 10000
+        except Exception:
+            _free_paras = 10000
         
         db = SessionLocal()
         try:
@@ -1112,7 +1124,7 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 id=user_id,
                 device_fingerprint=device_fingerprint,
                 balance=0.0,
-                paragraphs_remaining=FREE_PARAGRAPHS_DAILY,
+                paragraphs_remaining=_free_paras,
                 total_paragraphs_used=0,
                 total_converted=0,
                 is_active=True,
@@ -1127,7 +1139,7 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
             return {
                 'user_id': user_id,
                 'balance': 0.0,
-                'paragraphs_remaining': FREE_PARAGRAPHS_DAILY,
+                'paragraphs_remaining': _free_paras,
                 'total_paragraphs_used': 0,
                 'total_converted': 0,
                 'is_active': True,

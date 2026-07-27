@@ -41,6 +41,7 @@ class User(Base):
     id = Column(String(12), primary_key=True)  # 12位字符串用户ID
     device_fingerprint = Column(String(32), unique=True, index=True)  # 设备指纹（32位MD5哈希）
     username = Column(String(50))  # 用户名
+    password_hash = Column(String(256))  # 密码哈希（SHA-256），仅绑定账号的用户设置
     style_mappings = Column(JSONB, default='{}')  # 样式映射配置
     balance = Column(Float, default=0.0)  # 账户余额
     paragraphs_remaining = Column(Integer, default=0)  # 剩余段落数
