@@ -145,10 +145,14 @@ try:
     # 但是如果用户已通过账号登录，则保持登录身份不变
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)
     if _logged_in_uid:
-        # 已登录：保持登录身份，但仍记录设备指纹
+        # 已登录：使用账号身份，加载账号对应的用户数据（而非设备指纹数据）
         app_state.set_user_id(_logged_in_uid)
         app_state.set_device_fingerprint(device_fingerprint)
-        logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}")
+        user_data = load_user_data(_logged_in_uid)
+        if not user_data:
+            # 降级：如果账号数据加载失败，回退到设备指纹
+            user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+        logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}, 额度: {user_data.get('paragraphs_remaining', 0)}")
     else:
         user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
         app_state.set_user_id(user_data['user_id'])
@@ -825,86 +829,110 @@ with st.sidebar:
     if st.session_state.get('show_bind_dialog', False):
         with st.expander("🔗 绑定账号", expanded=True):
             st.markdown("将当前设备与一个易记的用户名绑定，方便以后跨设备登录。")
-            bind_username = st.text_input(
-                "设置用户名",
-                placeholder="字母、数字或中文，不区分大小写",
-                key="bind_username_input"
-            )
-            bind_password = st.text_input(
-                "设置密码",
-                type="password",
-                placeholder="设置登录密码",
-                key="bind_password_input"
-            )
-            bind_password2 = st.text_input(
-                "确认密码",
-                type="password",
-                placeholder="再次输入密码",
-                key="bind_password2_input"
-            )
+            # 使用 st.form 保证所有输入原子提交，避免 password 字段值丢失
+            with st.form("bind_account_form"):
+                bind_username = st.text_input(
+                    "设置用户名",
+                    placeholder="字母、数字或中文，不区分大小写",
+                    key="bind_username_input"
+                )
+                bind_password = st.text_input(
+                    "设置密码",
+                    type="password",
+                    placeholder="设置登录密码",
+                    key="bind_password_input"
+                )
+                bind_password2 = st.text_input(
+                    "确认密码",
+                    type="password",
+                    placeholder="再次输入密码",
+                    key="bind_password2_input"
+                )
 
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                if st.button("✅ 确定绑定", key="confirm_bind_btn", use_container_width=True):
-                    if bind_password != bind_password2:
-                        st.error("两次输入的密码不一致")
-                    elif not bind_username or not bind_password:
-                        st.error("用户名和密码不能为空")
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    submitted_bind = st.form_submit_button("✅ 确定绑定", use_container_width=True)
+                with col_b2:
+                    cancelled_bind = st.form_submit_button("取消", use_container_width=True)
+
+            if cancelled_bind:
+                st.session_state.show_bind_dialog = False
+                # 清理 form 中的 key 避免残留
+                for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+            if submitted_bind:
+                if bind_password != bind_password2:
+                    st.error("两次输入的密码不一致")
+                elif not bind_username or not bind_password:
+                    st.error("用户名和密码不能为空")
+                else:
+                    mgr = create_account_manager()
+                    success, msg = mgr.bind_account(
+                        _device_fp, bind_username, bind_password
+                    )
+                    if success:
+                        # 绑定成功 → 自动登录，侧边栏显示用户名
+                        st.session_state.logged_in_username = bind_username.strip()
+                        st.session_state.logged_in_user_id = app_state.get_user_id()
+                        st.session_state.sidebar_user_data = None
+                        st.session_state.show_bind_dialog = False
+                        for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
+                            st.session_state.pop(k, None)
+                        st.success(msg + " 已自动登录。")
+                        st.rerun()
                     else:
-                        mgr = create_account_manager()
-                        success, msg = mgr.bind_account(
-                            _device_fp, bind_username, bind_password
-                        )
-                        if success:
-                            st.success(msg)
-                            st.session_state.show_bind_dialog = False
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            with col_b2:
-                if st.button("取消", key="cancel_bind_btn", use_container_width=True):
-                    st.session_state.show_bind_dialog = False
-                    st.rerun()
+                        st.error(msg)
 
     # ==================== 账号登录对话框 ====================
     if st.session_state.get('show_login_dialog', False):
         with st.expander("🔑 账号登录", expanded=True):
             st.markdown("使用已绑定的用户名和密码登录。")
-            login_username = st.text_input(
-                "用户名",
-                placeholder="输入已绑定的用户名",
-                key="login_username_input"
-            )
-            login_password = st.text_input(
-                "密码",
-                type="password",
-                placeholder="输入登录密码",
-                key="login_password_input"
-            )
+            with st.form("login_account_form"):
+                login_username = st.text_input(
+                    "用户名",
+                    placeholder="输入已绑定的用户名",
+                    key="login_username_input"
+                )
+                login_password = st.text_input(
+                    "密码",
+                    type="password",
+                    placeholder="输入登录密码",
+                    key="login_password_input"
+                )
 
-            col_l1, col_l2 = st.columns(2)
-            with col_l1:
-                if st.button("✅ 登录", key="confirm_login_btn", use_container_width=True):
-                    if not login_username or not login_password:
-                        st.error("用户名和密码不能为空")
+                col_l1, col_l2 = st.columns(2)
+                with col_l1:
+                    submitted_login = st.form_submit_button("✅ 登录", use_container_width=True)
+                with col_l2:
+                    cancelled_login = st.form_submit_button("取消", use_container_width=True)
+
+            if cancelled_login:
+                st.session_state.show_login_dialog = False
+                for k in ('login_username_input', 'login_password_input'):
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+            if submitted_login:
+                if not login_username or not login_password:
+                    st.error("用户名和密码不能为空")
+                else:
+                    mgr = create_account_manager()
+                    success, msg, user_id = mgr.login_account(login_username, login_password)
+                    if success and user_id:
+                        st.session_state.logged_in_username = login_username.strip()
+                        st.session_state.logged_in_user_id = user_id
+                        # 切换身份后刷新用户数据
+                        app_state.set_user_id(user_id)
+                        st.session_state.sidebar_user_data = None
+                        st.session_state.show_login_dialog = False
+                        for k in ('login_username_input', 'login_password_input'):
+                            st.session_state.pop(k, None)
+                        st.success(msg)
+                        st.rerun()
                     else:
-                        mgr = create_account_manager()
-                        success, msg, user_id = mgr.login_account(login_username, login_password)
-                        if success and user_id:
-                            st.session_state.logged_in_username = login_username.strip()
-                            st.session_state.logged_in_user_id = user_id
-                            # 切换身份后刷新用户数据
-                            app_state.set_user_id(user_id)
-                            st.session_state.sidebar_user_data = None
-                            st.session_state.show_login_dialog = False
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            with col_l2:
-                if st.button("取消", key="cancel_login_btn", use_container_width=True):
-                    st.session_state.show_login_dialog = False
-                    st.rerun()
+                        st.error(msg)
 
     # 居中显示版本号和版权信息
     col1, col2, col3 = st.columns([1, 6, 1])
