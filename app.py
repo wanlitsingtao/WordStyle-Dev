@@ -847,10 +847,12 @@ with st.sidebar:
         with col_a:
             if st.button("🔗 绑定账号", key="bind_account_btn", use_container_width=True):
                 st.session_state.show_bind_dialog = True
+                st.session_state.show_login_dialog = False
 
         with col_b:
             if st.button("🔑 账号登录", key="login_account_btn", use_container_width=True):
                 st.session_state.show_login_dialog = True
+                st.session_state.show_bind_dialog = False
 
     # ==================== 绑定账号对话框 ====================
     if st.session_state.get('show_bind_dialog', False):
