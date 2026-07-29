@@ -980,10 +980,12 @@ if 'source_files_uploaded' not in st.session_state:
 
 st.subheader("📄 上传源文档")
 
+st.info("⚠️ 仅支持 **.docx** 格式（Word 2007 及以上）。\n\n如果您的文档是 **.doc** 格式（Word 97-2003），请先用 Word 打开后「另存为」**.docx** 格式再上传。", icon="💡")
+
 source_files = st.file_uploader(
     "选择要转换的 Word 文档（可多选）",
     type=['docx'],
-    help="支持 .docx 格式，可同时选择多个文件",
+    help="仅支持 .docx 格式，可同时选择多个文件",
     accept_multiple_files=True,
     key="source_uploader"
 )
@@ -1139,7 +1141,7 @@ if 'template_file_uploaded' not in st.session_state:
 
 st.subheader("📋 上传模板文档")
 template_file = st.file_uploader(
-    "选择模板文档",
+    "选择模板文档（仅支持 .docx）",
     type=['docx'],
     help="用于定义目标样式的 Word 文档",
     key="template_uploader"

@@ -1066,6 +1066,14 @@ class DocumentConverterGUI:
             filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")]
         )
         if filename:
+            if filename.lower().endswith('.doc') and not filename.lower().endswith('.docx'):
+                messagebox.showwarning(
+                    "格式不支持",
+                    "不支持 .doc 格式（Word 97-2003）。\n\n"
+                    "请用 Word 打开该文件，点击「文件」→「另存为」，\n"
+                    "选择保存类型为「Word 文档 (*.docx)」后重新上传。"
+                )
+                return
             self.source_files = [filename]
             self.source_entry.delete(0, END)
             self.source_entry.insert(0, filename)
@@ -1190,6 +1198,30 @@ class DocumentConverterGUI:
             filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")]
         )
         if filenames:
+            # 过滤 .doc 格式文件
+            doc_files = [f for f in filenames if f.lower().endswith('.doc') and not f.lower().endswith('.docx')]
+            valid_files = [f for f in filenames if f not in doc_files]
+            
+            if doc_files:
+                names = '\n'.join(f"  • {os.path.basename(f)}" for f in doc_files)
+                if not valid_files:
+                    messagebox.showwarning(
+                        "格式不支持",
+                        f"以下文件为 .doc 格式（Word 97-2003），不支持此格式：\n\n{names}\n\n"
+                        "请用 Word 打开后「另存为」.docx 格式再上传。"
+                    )
+                    return
+                else:
+                    messagebox.showwarning(
+                        "部分文件格式不支持",
+                        f"已跳过以下 .doc 格式文件：\n\n{names}\n\n"
+                        "请用 Word 打开后「另存为」.docx 格式再上传。"
+                    )
+            
+            if not valid_files:
+                return
+            
+            filenames = valid_files
             self.source_files = list(filenames)
             self.source_entry.delete(0, END)
             
@@ -1532,6 +1564,14 @@ class DocumentConverterGUI:
             filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")]
         )
         if filename:
+            if filename.lower().endswith('.doc') and not filename.lower().endswith('.docx'):
+                messagebox.showwarning(
+                    "格式不支持",
+                    "不支持 .doc 格式（Word 97-2003）。\n\n"
+                    "请用 Word 打开该文件，点击「文件」→「另存为」，\n"
+                    "选择保存类型为「Word 文档 (*.docx)」后重新上传。"
+                )
+                return
             self.template_file.set(filename)
             
             # 清空之前的模板数据
