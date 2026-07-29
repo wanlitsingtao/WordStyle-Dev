@@ -967,7 +967,7 @@ with st.sidebar:
     col1, col2, col3 = st.columns([1, 6, 1])
     with col2:
         st.markdown('<div style="text-align: center; white-space: nowrap;">', unsafe_allow_html=True)
-        st.markdown('<p style="text-align: center; margin: 0.5rem 0 0 0; color: #666; font-size: 0.875rem;">标书抄写神器1.0.0</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align: center; margin: 0.5rem 0 0 0; color: #666; font-size: 0.875rem;">标书抄写神器2.0.0</p>', unsafe_allow_html=True)
         st.markdown('<p style="text-align: center; margin: 0.25rem 0 0 0; color: #666; font-size: 0.75rem; white-space: nowrap;">© 2026 文档转换工具 保留所有权利</p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
