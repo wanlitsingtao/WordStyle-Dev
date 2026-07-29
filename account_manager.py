@@ -140,6 +140,23 @@ class AccountManager:
         elif self.data_source == "api":
             return self._login_api(username_lower, password)
 
+    def unbind_account(self, device_fingerprint: str) -> Tuple[bool, str]:
+        """
+        解除设备指纹与用户名的绑定。
+
+        Args:
+            device_fingerprint: 设备指纹
+
+        Returns:
+            (success, message)
+        """
+        if self.data_source == "local":
+            return self._unbind_local(device_fingerprint)
+        elif self.data_source == "supabase":
+            return self._unbind_supabase(device_fingerprint)
+        elif self.data_source == "api":
+            return self._unbind_api(device_fingerprint)
+
     def get_bound_account(self, device_fingerprint: str) -> Optional[dict]:
         """
         查询设备指纹绑定的账号。
@@ -250,6 +267,19 @@ class AccountManager:
 
         return False, "账号数据异常，请联系管理员", None
 
+    def _unbind_local(self, device_fp: str) -> Tuple[bool, str]:
+        data = self._load_local_accounts()
+        username_lower = data.get("by_device", {}).get(device_fp)
+        if not username_lower:
+            return False, "该设备未绑定任何账号"
+        acct = data.get("accounts", {}).get(username_lower, {})
+        del data["by_device"][device_fp]
+        if username_lower in data["accounts"]:
+            del data["accounts"][username_lower]
+        self._save_local_accounts(data)
+        logger.info(f"账号解绑成功: 设备 {device_fp[:12]}... ← 用户名 {acct.get('username', username_lower)}")
+        return True, "账号解绑成功"
+
     # ==================== Supabase 实现 ====================
 
     def _get_supabase_engine(self):
@@ -311,6 +341,27 @@ class AccountManager:
         except Exception as e:
             logger.error(f"[Supabase] 绑定账号失败: {e}")
             return False, f"绑定失败: {e}"
+
+    def _unbind_supabase(self, device_fp: str) -> Tuple[bool, str]:
+        try:
+            SessionLocal = self._get_supabase_engine()
+            db = SessionLocal()
+            try:
+                from app.models import User
+                user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+                if not user or not user.username:
+                    return False, "该设备未绑定任何账号"
+                user.username = None
+                user.password_hash = None
+                user.updated_at = datetime.now()
+                db.commit()
+                logger.info(f"[Supabase] 账号解绑成功: 设备 {device_fp[:12]}...")
+                return True, "账号解绑成功"
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[Supabase] 解绑账号失败: {e}")
+            return False, f"解绑失败: {e}"
 
     def _login_supabase(self, username_lower: str, password: str) -> Tuple[bool, str, Optional[str]]:
         try:
@@ -431,6 +482,14 @@ class AccountManager:
                 result.get("user_id"),
             )
         return False, "后端服务暂不可用，请稍后重试", None
+
+    def _unbind_api(self, device_fp: str) -> Tuple[bool, str]:
+        result = self._call_api("POST", "/unbind", {
+            "device_fingerprint": device_fp,
+        })
+        if result:
+            return result.get("success", False), result.get("message", "未知错误")
+        return False, "后端服务暂不可用，请稍后重试"
 
 
 # ==================== 便捷工厂函数 ====================

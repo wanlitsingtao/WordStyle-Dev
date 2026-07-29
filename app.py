@@ -806,8 +806,35 @@ with st.sidebar:
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)
 
     if _logged_in_user:
-        # 已登录状态：显示用户名 + 退出按钮
+        # 已登录状态：显示用户名 + 解绑 + 退出按钮
         st.markdown(f"👤 **{_logged_in_user}**")
+
+        # 解绑确认状态
+        if st.session_state.get('show_unbind_confirm', False):
+            st.warning("确定要解绑账号吗？解绑后用户名和密码将被清除，恢复设备指纹身份。")
+            col_ub1, col_ub2 = st.columns(2)
+            with col_ub1:
+                if st.button("✅ 确认解绑", key="confirm_unbind_btn", use_container_width=True):
+                    mgr = create_account_manager()
+                    success, msg = mgr.unbind_account(_device_fp)
+                    if success:
+                        st.session_state.logged_in_username = None
+                        st.session_state.logged_in_user_id = None
+                        st.session_state.sidebar_user_data = None
+                        st.session_state.show_unbind_confirm = False
+                        st.success(msg + " 已恢复设备指纹身份。")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with col_ub2:
+                if st.button("取消", key="cancel_unbind_btn", use_container_width=True):
+                    st.session_state.show_unbind_confirm = False
+                    st.rerun()
+        else:
+            if st.button("🔓 解绑用户", key="unbind_account_btn", use_container_width=True):
+                st.session_state.show_unbind_confirm = True
+                st.rerun()
+
         if st.button("🚪 退出登录", key="logout_btn", use_container_width=True):
             # 退出：恢复设备指纹身份
             st.session_state.logged_in_username = None
