@@ -880,7 +880,7 @@ with st.sidebar:
 
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
-                    submitted_bind = st.form_submit_button("✅ 确定绑定", use_container_width=True)
+                    submitted_bind = st.form_submit_button("✅ 确定", use_container_width=True)
                 with col_b2:
                     cancelled_bind = st.form_submit_button("取消", use_container_width=True)
 

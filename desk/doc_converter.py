@@ -83,7 +83,11 @@ EXCEPTION_WORDS_YING = [
     "应时", "应需",
 ]
 EXCEPTION_WORDS_XU = ["必须", "无须", "无需","须知"]
-REPLACE_MAP = {"投标人": "本投标人"}
+REPLACE_MAP = {
+    "投标人需要": "本投标人",
+    "投标人需": "本投标人",
+    "投标人": "本投标人",
+}
 
 
 def build_word_pattern(word):
@@ -107,7 +111,7 @@ REPLACE_REGEX = None
 if REPLACE_MAP:
     patterns = []
     for word, repl in REPLACE_MAP.items():
-        if word == "投标人":
+        if word.startswith("投标人"):
             pat = r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])'
         else:
             pat = build_word_pattern(word)
