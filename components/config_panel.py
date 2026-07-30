@@ -38,6 +38,7 @@ def _save_hint_defaults(do_hint, hint_type, hint_text, hint_image_path, hint_sty
         st.error("❌ 保存默认配置失败")
 
 
+@st.fragment
 def render_conversion_config():
     """
     渲染转换配置区（完全参照桌面版）
@@ -47,6 +48,9 @@ def render_conversion_config():
     2. 章节提示语配置（当勾选时显示类型/样式/文本或图片上传/清除/设为默认）
 
     返回与 `app.py` 兼容的配置元组。
+    
+    使用 @st.fragment 包裹，checkbox 点击仅刷新配置区本身，
+    不会触发主页面文件上传区 / 段落计数重跑。
     """
     # CSS：统一控件高度（提示语配置区）
     # 关键：Streamlit 1.57 中 file_uploader 拖拽区是 [data-testid="stFileUploaderDropzone"]（div），
