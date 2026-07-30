@@ -1209,12 +1209,11 @@ class DocumentConverter:
                     cleaned_text = self._clean_residual_numbering_artifacts(cleaned_text)
             else:
                 # 未勾选"清除第X章/第X节"：
-                # 保留章节标记和手动编号，仅做以下处理：
-                # 1. 如果有自动编号，清理残留的手动编号痕迹（如".总则"中的前导点）
+                # 保留章节标记，只清理常规手动编号（"一、"、"3.1"、"（1）"等）
+                cleaned_text = self.remove_manual_numbering(full_text)
+                # 如果有自动编号，清理残留的手动编号痕迹
                 if has_auto_numbering:
-                    cleaned_text = self._clean_residual_numbering_artifacts(full_text)
-                else:
-                    cleaned_text = full_text
+                    cleaned_text = self._clean_residual_numbering_artifacts(cleaned_text)
                 # ★ 修复：不直接复制 numPr（不同文档的 numId 映射不同，会导致错误编号），
                 # 改为选择性解析自动编号：
                 # 1. 如果编号是章节样式（如"第%1节"→"第二节"），解析并拼接到文本前
