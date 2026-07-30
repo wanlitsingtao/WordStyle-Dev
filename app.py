@@ -588,7 +588,21 @@ except Exception as e:
     logger.warning(f"维护模式检查失败（不影响服务）: {e}")
 
 # ==================== 主界面 ====================
-st.title("📄 标书抄写神器")
+# 使用 resource/logo.png 替换 emoji 图标
+import base64 as _b64
+_logo_path = Path(__file__).parent / "resource" / "logo.png"
+if _logo_path.exists():
+    with open(_logo_path, 'rb') as _f:
+        _logo_b64 = _b64.b64encode(_f.read()).decode()
+    st.markdown(f'''
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.5rem;">
+        <img src="data:image/png;base64,{_logo_b64}" 
+             style="height: 2.5rem; vertical-align: middle;">
+        <span style="font-size: 2rem; font-weight: 700; color: #262730;">标书抄写神器</span>
+    </div>
+    ''', unsafe_allow_html=True)
+else:
+    st.title("📄 标书抄写神器")
 
 # 全屏提示
 st.markdown("""
