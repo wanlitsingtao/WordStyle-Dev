@@ -10,11 +10,21 @@
     "[大纲级别 5]": "BN_标题4",
     "[大纲级别 6]": "BN_标题5",
     "1 列表段落": "BN_原文引用列表项目符号",
+    "BN_标题0": "BN_标题0",
+    "BN_标题1": "BN_标题1",
+    "BN_标题2": "BN_标题2",
+    "BN_标题3": "BN_标题3",
+    "BN_正文缩进": "BN_原文引用_缩进",
     "Normal": "BN_原文引用_缩进",
     "● 列表段落": "BN_原文引用列表项目符号",
     "海信正文": "BN_原文引用_缩进",
     "贵阳表格图": "BN_原文引用_居中",
     "answer_1 列表段落": "BN_列表项目符号",
+    "answer_BN_标题0": "BN_标题0",
+    "answer_BN_标题1": "BN_标题1",
+    "answer_BN_标题2": "BN_标题2",
+    "answer_BN_标题3": "BN_标题3",
+    "answer_BN_正文缩进": "BN_正文缩进",
     "answer_Normal": "BN_正文缩进",
     "answer_● 列表段落": "BN_列表项目符号",
     "answer_海信正文": "BN_正文缩进",
@@ -44,5 +54,5 @@
   "list_answer_method": "style",
   "list_answer_bullet": "● ",
   "list_answer_style": "BN_列表项目符号",
-  "enable_list_style": 0
+  "enable_list_style": 1
 }

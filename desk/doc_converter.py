@@ -429,6 +429,9 @@ class DocumentConverter:
         改进：支持"1 .总则"（数字与分隔符之间有空格）等变体格式。
         """
         fragment_patterns = [
+            # 字母+数字多级编号：如"C5.1.1.1"、"A1.2"、"B3.4.5"等附录/章节编号
+            # 允许点之间有空格：如"C5. 1.1.1"
+            r'[A-Za-z]\d+(?:\s*\.\s*\d+)*(?:\s*[\.、，,）\)\s]|(?=\D|$))?',
             # 多级阿拉伯数字编号："1.1"、"1.1.1"、"14.2.1"等，点分隔，后面可选分隔符或直接跟文字
             # 允许数字与点之间有空格，如"1 .总则"
             r'\d+\s*\.\s*\d+(?:\s*\.\s*\d+)*(?:\s*[\.、，,）\)\s]|(?=\D|$))',
@@ -1163,8 +1166,11 @@ class DocumentConverter:
         
         is_heading_by_outline = outline_level > 0
         is_heading_by_style = src_style_name in HEADING_STYLES
+        is_heading_by_target = final_style in HEADING_STYLES
+        is_custom_src_heading = '标题' in src_style_name or src_style_name.startswith('Heading')
+        is_custom_tgt_heading = '标题' in final_style or final_style.startswith('Heading')
         
-        if is_heading_by_outline or is_heading_by_style:
+        if is_heading_by_outline or is_heading_by_style or is_heading_by_target or is_custom_src_heading or is_custom_tgt_heading:
             # 使用 para.text 而非手动拼接 runs，因为 runs 不包含超链接(w:hyperlink)内部的 run 文本
             # 例如"第六章  图纸（如有）"中，"第六章"和"图纸"在 hyperlink 内部，runs 无法获取
             full_text = source_para.text
@@ -1613,7 +1619,10 @@ class DocumentConverter:
                     # 应走正常的标题样式映射路径。
                     is_heading_by_outline = self.get_outline_level(para) > 0
                     is_heading_by_style = src_style in HEADING_STYLES
-                    if is_heading_by_outline or is_heading_by_style:
+                    style_map = getattr(self, 'current_style_map', STYLE_MAP)
+                    is_heading_by_mapped = style_map.get(src_style) in HEADING_STYLES
+                    is_custom_heading = '标题' in src_style or src_style.startswith('Heading')
+                    if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                         # 标题段落：走标题样式映射
                         target_style = self.get_target_style(src_style, new_doc, source_file)
                     elif self.has_numbering(para):
@@ -1636,7 +1645,7 @@ class DocumentConverter:
                         enable_list_style=enable_list_style
                     )
                     
-                    if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES:
+                    if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES or style_map.get(src_style) in HEADING_STYLES or '标题' in src_style or src_style.startswith('Heading'):
                         self.stats["heading"] += 1
                     self.stats["para"] += 1
                     para_idx += 1
@@ -1933,15 +1942,6 @@ class DocumentConverter:
         except KeyError:
             return None
     
-    def is_heading_paragraph(self, elem):
-        """判断是否为标题段落"""
-        if not hasattr(elem, 'tag'):
-            return False
-        if elem.tag != qn('w:p'):
-            return False
-        style_id = self.get_style_id(elem)
-        return style_id in HEADING_STYLE_IDS
-    
     def is_plain_paragraph(self, elem):
         """判断是否为无样式的普通正文段落"""
         if not hasattr(elem, 'tag'):
@@ -1978,8 +1978,46 @@ class DocumentConverter:
         return para_elem
     
     def is_heading_paragraph(self, elem, doc=None):
-        """判断段落是否为标题（通过大纲级别）"""
-        return self.get_outline_level(elem, doc) > 0
+        """判断段落是否为标题（通过大纲级别 + 样式名/ID判断）
+        
+        支持标准 Heading 1-9 样式、自定义"标题"样式（如 BN_标题0），
+        以及具有大纲级别的段落。
+        
+        兼容两种调用场景：
+        - python-docx Paragraph 对象：.style 返回 Style 对象，有 .name 属性
+        - lxml/CT_P XML 元素：.style 返回样式 ID 字符串（如 '1', 'a3', 'BN0'）
+        """
+        if self.get_outline_level(elem, doc) > 0:
+            return True
+        
+        if hasattr(elem, 'style') and elem.style:
+            s = elem.style
+            if isinstance(s, str):
+                # XML元素 (CT_P等)：.style 返回样式ID字符串
+                style_id = s
+                # 检查是否为内置标题样式ID (1-9)
+                if style_id in HEADING_STYLE_IDS:
+                    return True
+                # 尝试通过doc解析样式名称，识别自定义标题样式
+                if doc is not None:
+                    try:
+                        style_obj = doc.styles[style_id]
+                        style_name = style_obj.name
+                        if style_name in HEADING_STYLES:
+                            return True
+                        if '标题' in style_name or style_name.startswith('Heading'):
+                            return True
+                    except (KeyError, AttributeError):
+                        pass
+            elif hasattr(s, 'name'):
+                # Paragraph对象：.style 返回Style对象
+                style_name = s.name
+                if style_name in HEADING_STYLES:
+                    return True
+                if '标题' in style_name or style_name.startswith('Heading'):
+                    return True
+        
+        return False
     
     def insert_hint_paragraph(self, input_file, output_file=None,
                               hint_type='text', hint_text='招标文件原文',
