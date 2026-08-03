@@ -374,9 +374,11 @@ class DocumentConverter:
         elem = paragraph._element
         
         # 检查是否包含 TOC 域指令
+        # ★ 修复：TOC 域指令必须以 "TOC" 开头（如 TOC \o "1-3"），
+        # 不能仅因为域代码中含 "TOC" 子串就误判（如 HYPERLINK \l "_Toc27841" 中的书签名 _Toc27841）
         has_toc_instr = False
         for instr_text in elem.findall('.//' + qn('w:instrText')):
-            if instr_text.text and 'TOC' in instr_text.text.upper():
+            if instr_text.text and instr_text.text.strip().upper().startswith('TOC'):
                 has_toc_instr = True
                 break
         

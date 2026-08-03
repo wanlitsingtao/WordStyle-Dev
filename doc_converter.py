@@ -274,7 +274,7 @@ class DocumentConverter:
         # 检查是否包含 TOC 域指令
         has_toc_instr = False
         for instr_text in elem.findall('.//' + qn('w:instrText')):
-            if instr_text.text and 'TOC' in instr_text.text.upper():
+            if instr_text.text and instr_text.text.strip().upper().startswith('TOC'):
                 has_toc_instr = True
                 break
         
