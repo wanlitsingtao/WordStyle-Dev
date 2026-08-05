@@ -1741,8 +1741,8 @@ class DocumentConverter:
                         if exc == "应对":
                             if self._is_ying_dui_separable(full_text, match_end):
                                 return False  # 类型B：应+对分离，不视为例外，正常去掉"应"
-                    return True
-                pos = substr.find(exc, pos+1)
+                        return True
+                    pos = substr.find(exc, pos+1)
         return False
     
     def _is_ying_dui_separable(self, full_text, dui_pos):
