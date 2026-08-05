@@ -165,6 +165,9 @@ class DocumentConverter:
         # 额外收集具有 outlineLvl 但样式为 Normal 的段落，生成虚拟大纲样式名
         outline_styles = self.get_outline_virtual_styles(doc)
         styles.update(outline_styles)
+        # 额外收集具有自动编号的列表段落，生成虚拟列表样式名（如 '1 列表段落'、'● 列表段落'）
+        list_styles = self.get_list_virtual_styles(doc)
+        styles.update(list_styles)
         return styles
     
     def get_outline_virtual_styles(self, doc):
