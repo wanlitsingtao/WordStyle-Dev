@@ -1422,7 +1422,14 @@ class DocumentConverterGUI:
     
     def save_default_style_map(self, style_map, answer_config=None, tbl_img_config=None, list_config=None, remove_chapter_label=None):
         """将当前样式映射保存为默认（包含样式映射、应答句配置、表格/图片/列表样式定义和清除章节编号配置）"""
-        self.default_config["style_map"] = style_map
+        # 合并保存：保留已有映射，新映射覆盖同名键（取并集）
+        existing = self.default_config.get("style_map", {})
+        if existing:
+            merged = dict(existing)
+            merged.update(style_map)
+            self.default_config["style_map"] = merged
+        else:
+            self.default_config["style_map"] = style_map
         # 保存应答句配置
         if answer_config:
             self.default_config["do_answer"] = answer_config.get('do_answer', 0)

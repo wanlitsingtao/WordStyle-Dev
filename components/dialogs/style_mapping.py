@@ -540,7 +540,13 @@ def show_style_mapping_dialog():
 
     with btn_cols[1]:
         if st.button("⭐ 设为默认", use_container_width=True, key="save_default_mapping_btn"):
-            st.session_state.file_style_mappings['_default_style_map'] = dict(updated_mapping)
+            # ★ 样式映射：合并并集——新配置覆盖同名键，旧配置中不同的键保留
+            old_default = st.session_state.file_style_mappings.get('_default_style_map', {})
+            merged_style_map = dict(old_default)        # 先复制旧的
+            merged_style_map.update(updated_mapping)     # 新值覆盖同名键，新键追加
+            st.session_state.file_style_mappings['_default_style_map'] = merged_style_map
+            
+            # 完整配置块：整体替换（非键值映射，不存在并集语义）
             st.session_state.file_style_mappings['_default_tbl_img_config'] = dict(tbl_img_config_new)
             st.session_state.file_style_mappings['_default_answer_config'] = dict(answer_config)
             st.session_state.file_style_mappings['_default_list_config'] = dict(list_config_new)

@@ -1235,6 +1235,7 @@ st.subheader("⚙️ 转换配置")
 # 所有"设为默认"按钮保存的配置在此统一恢复
 # ====================================================================
 _user_defaults = {}
+_sm = {}  # ★ 修复：初始化，供下方 file_style_mappings 使用
 try:
     _uid = app_state.get_user_id()
     if _uid:
@@ -1250,6 +1251,12 @@ try:
             }
 except Exception:
     pass
+
+# ★ 修复：将 style_mappings 完整加载到 session_state
+# 桌面版/Web版"设为默认"保存的样式映射、表格/图片/列表兜底配置，
+# 页面刷新/重启后通过此处恢复到 session_state，供转换时回退使用
+if 'file_style_mappings' not in st.session_state:
+    st.session_state.file_style_mappings = _sm if isinstance(_sm, dict) else {}
 
 _h  = _user_defaults.get('hint', {})
 _a  = _user_defaults.get('answer', {})
@@ -1390,10 +1397,12 @@ else:
                 st.error("❌ 请上传源文档和模板文档")
                 status_placeholder.text("[ERROR] 验证失败：缺少文件")
                 progress_bar.progress(0)
+                st.stop()
             elif not os.path.exists(current_temp_template):
                 st.error("❌ 文件上传失败，请重试")
                 status_placeholder.text("[ERROR] 验证失败：文件上传错误")
                 progress_bar.progress(0)
+                st.stop()
             else:
                 # 设置转换标志，禁用后续操作
                 st.session_state.is_converting = True
@@ -1503,6 +1512,7 @@ else:
                     status_placeholder.text(f" 正在转换第 {idx+1}/{len(current_source_files)} 个文件 {source_file_obj.name} ({file_paragraphs:,} 段落)")
                     
                     # [OK] 修复：使用每个文件各自的样式映射配置（与桌面版一致）
+                    # ★ 如果没有文件级配置，回退到用户设定的默认配置
                     file_mapping = None
                     file_tbl_img_config = {}
                     file_list_config = {}
@@ -1514,8 +1524,25 @@ else:
                         file_tbl_img_config = file_mapping_data.get('_table_image_style', {})
                         # 列表段落兜底配置（从映射数据中的特殊键取出）
                         file_list_config = file_mapping_data.get('_list_config', {})
-                        if file_mapping:
-                            st.info(f"📋 {source_file_obj.name}: 使用自定义样式映射 ({len(file_mapping)} 个样式)")
+                    
+                    # ★ 修复：文件无单独配置时，回退到"设为默认"保存的默认配置
+                    if not file_mapping:
+                        default_style_map = st.session_state.file_style_mappings.get('_default_style_map', {})
+                        if default_style_map:
+                            # 排除嵌套的特殊键，只取样式映射部分
+                            file_mapping = {k: v for k, v in default_style_map.items() if not k.startswith('_')}
+                            if file_mapping:
+                                st.info(f"📋 {source_file_obj.name}: 使用默认样式映射 ({len(file_mapping)} 个样式)")
+                    
+                    if not file_tbl_img_config:
+                        default_tbl_img = st.session_state.file_style_mappings.get('_default_tbl_img_config', {})
+                        if default_tbl_img:
+                            file_tbl_img_config = default_tbl_img
+                    
+                    if not file_list_config:
+                        default_list = st.session_state.file_style_mappings.get('_default_list_config', {})
+                        if default_list:
+                            file_list_config = default_list
                     
                     # 警告收集
                     warnings_list = []
@@ -1536,9 +1563,9 @@ else:
                     # [HIGH_VOLTAGE] 性能优化：传递缓存的样式列表，避免重复分枀
                     source_styles_for_file = st.session_state.file_styles_map.get(source_file_obj.name, None)
                     
-                    # 获取该文件的表格/图片应答样式配置
-                    file_table_answer_style = file_tbl_img_config.get('table_answer_style', '')
-                    file_image_answer_style = file_tbl_img_config.get('image_answer_style', '')
+                    # 获取该文件的表格/图片应答样式配置（★ 修复：回退到全局默认配置）
+                    file_table_answer_style = file_tbl_img_config.get('table_answer_style') or st.session_state.get('table_answer_style_config', '')
+                    file_image_answer_style = file_tbl_img_config.get('image_answer_style') or st.session_state.get('image_answer_style_config', '')
                     
                     # 文件级列表段落配置覆盖全局设置
                     _list_bullet = file_list_config.get('bullet', list_bullet if list_bullet else "—")
@@ -1577,10 +1604,10 @@ else:
                         progress_callback=make_progress_callback(idx, len(current_source_files)),
                         warning_callback=warning_callback,
                         source_styles_cache=source_styles_for_file,  # [HIGH_VOLTAGE] 传递缓存的样式列表
-                        table_style_override=file_tbl_img_config.get('table_style', 'Body Text'),
-                        enable_table_style=file_tbl_img_config.get('enable_table_style', False),
-                        image_style_override=file_tbl_img_config.get('image_style', 'Body Text'),
-                        enable_image_style=file_tbl_img_config.get('enable_image_style', False),
+                        table_style_override=file_tbl_img_config.get('table_style') or st.session_state.get('table_style_config', 'Body Text'),
+                        enable_table_style=file_tbl_img_config.get('enable_table_style', st.session_state.get('enable_table_style_config', False)),
+                        image_style_override=file_tbl_img_config.get('image_style') or st.session_state.get('image_style_config', 'Body Text'),
+                        enable_image_style=file_tbl_img_config.get('enable_image_style', st.session_state.get('enable_image_style_config', False)),
                         remove_chapter_label=remove_chapter_label,
                         enable_list_style=_enable_list_style
                     )
