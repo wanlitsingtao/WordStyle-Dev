@@ -83,6 +83,15 @@ EXCEPTION_WORDS_YING = [
     "应时", "应需",
 ]
 EXCEPTION_WORDS_XU = ["必须", "无须", "无需","须知"]
+
+# "应+对"分离结构标志动词：用于区分复合词"应对"(yìng duì) 和 情态动词"应"+介词"对"(yīng+duì)
+# 模式：应 + 对 + <名词短语> + [动词] → 类型B，不应视为例外
+_YING_DUI_VERBS = re.compile(
+    r'(负责|进行|予以|加以|负有|承担|提供|作出|做出|提交|出示'
+    r'|说明|描述|解释|保证|给予|出具|支付|赔偿|归还|返还|退回'
+    r'|履行|执行|实施|开展|组织|落实|协调|处理|管理|审核|审批'
+    r')'
+)
 REPLACE_MAP = {
     "投标人需要": "本投标人",
     "投标人需": "本投标人",
@@ -1704,7 +1713,13 @@ class DocumentConverter:
             return False, output_file, msg
     
     def is_part_of_exception(self, full_text, match_start, match_end, word):
-        """判断单字词是否属于例外词"""
+        """判断单字词是否属于例外词
+        
+        特殊处理"应对"：复合词"应对"(yìng duì = 处理/对付) 作为例外保留"应"，
+        但情态动词"应"+介词"对"(yīng + duì = 应该 + 对于) 不是例外，需去掉"应"。
+        区分方法：检查"对"之后 ~25 字范围是否存在 "负责/进行/予以..." 等标志动词，
+        且动词距"对" > 2 字 → 分离结构，不视为例外。
+        """
         if word == "应":
             exceptions = EXCEPTION_WORDS_YING
         elif word == "须":
@@ -1722,8 +1737,28 @@ class DocumentConverter:
                     exc_start = start + pos
                     exc_end = exc_start + len(exc)
                     if exc_start <= match_start < exc_end:
-                        return True
-                    pos = substr.find(exc, pos+1)
+                        # 特殊处理"应对"：区分复合词 vs "应+对"分离结构
+                        if exc == "应对":
+                            if self._is_ying_dui_separable(full_text, match_end):
+                                return False  # 类型B：应+对分离，不视为例外，正常去掉"应"
+                    return True
+                pos = substr.find(exc, pos+1)
+        return False
+    
+    def _is_ying_dui_separable(self, full_text, dui_pos):
+        """判断"应+对"是否属于分离结构（应 yīng + 对 duì = 应当 + 对于）
+        
+        参数 dui_pos 是"对"字在 full_text 中的位置（即 match_end）。
+        检查"对"之后 ~25 字范围内是否存在标志动词（负责/进行/予以...），
+        且动词距"对" > 2 字，防止误杀"应对措施/应对方案"等复合词。
+        
+        返回 True 表示是分离结构（类型B），"应"不应受"应对"例外保护。
+        """
+        after_dui = full_text[dui_pos:dui_pos + 25]
+        for m in _YING_DUI_VERBS.finditer(after_dui):
+            verb_dist = m.start()  # 动词距"对"的字数
+            if verb_dist > 2:
+                return True
         return False
     
     def is_multi_exception(self, full_text, match_start, match_end, word):
@@ -1768,31 +1803,143 @@ class DocumentConverter:
             return SINGLE_REPLACE.get(word, word)
         return SINGLE_IMPERATIVE_REGEX.sub(repl, run_text)
     
+    # 零宽/不可见字符集（Unicode 控制字符）
+    _ZW_CHARS_RE = re.compile(r'[\u200b\u200c\u200d\ufeff]')
+
     def process_paragraph_mood(self, para):
-        """处理段落语气转换"""
-        full_text = ''.join(run.text for run in para.runs)
-        modified = False
-        current_offset = 0
+        """处理段落语气转换 - 基于段落全文匹配，支持跨run和零宽字符
         
-        for run in para.runs:
-            text = run.text
-            if not text:
-                current_offset += len(text)
+        修复两个遗留问题：
+        A. Word 拼写检查/语言检测/Track Changes 导致"投标人"被拆分到多个 run
+        B. 零宽空格(U+200B)等不可见字符夹在"投标人"中间导致正则断裂
+        
+        策略：在段落全文(para.text)上匹配，清理零宽字符后再做正则搜索，
+        匹配结果映射回原始 run 边界执行替换。
+        """
+        runs = list(para.runs)
+        if not runs:
+            return False
+
+        # 原始 run 文本快照
+        run_texts_orig = [run.text for run in runs]
+        full_text = ''.join(run_texts_orig)
+        if not full_text.strip():
+            return False
+
+        # 清理零宽字符，用于正则匹配
+        clean_text = self._ZW_CHARS_RE.sub('', full_text)
+        if not clean_text.strip():
+            return False
+
+        # 构建 clean_text -> full_text 索引映射
+        # clean_to_full[i] = 在 full_text 中对应 clean_text[i] 的位置
+        clean_to_full = []
+        for fi, ch in enumerate(full_text):
+            if ch not in '\u200b\u200c\u200d\ufeff':
+                clean_to_full.append(fi)
+
+        if not clean_to_full:
+            return False
+
+        # 收集所有替换（在 full_text 坐标中）
+        # 格式: [(full_start, full_end, replacement_str), ...]
+        replacements = []
+
+        def _add_match(clean_start, clean_end, repl_text):
+            """将 clean_text 中的匹配转换为 full_text 坐标并加入替换列表"""
+            if clean_start >= len(clean_to_full):
+                return
+            fs = clean_to_full[clean_start]
+            if clean_end - 1 < len(clean_to_full):
+                fe = clean_to_full[clean_end - 1] + 1
+            else:
+                fe = len(full_text)
+            orig = full_text[fs:fe]
+            if repl_text and repl_text != orig:
+                replacements.append((fs, fe, repl_text))
+
+        # 1. REPLACE_REGEX: "投标人" -> "本投标人" 等固定替换
+        if REPLACE_REGEX:
+            for m in REPLACE_REGEX.finditer(clean_text):
+                _add_match(m.start(), m.end(), REPLACE_MAP.get(m.group(0), ''))
+
+        # 2. MULTI_IMPERATIVE_REGEX: 多字祈使词
+        for m in MULTI_IMPERATIVE_REGEX.finditer(clean_text):
+            word = m.group(0)
+            cs, ce = m.start(), m.end()
+            if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
                 continue
-            
-            new_text = text
-            if REPLACE_REGEX:
-                new_text = REPLACE_REGEX.sub(lambda m: REPLACE_MAP.get(m.group(0), m.group(0)), new_text)
-            new_text = self.replace_multiple_imperative(new_text, full_text, current_offset)
-            new_text = self.replace_single_imperative(new_text, full_text, current_offset)
-            new_text = new_text.replace('将将', '将把')
-            
-            if new_text != text:
-                run.text = new_text
+            fs = clean_to_full[cs]
+            fe = clean_to_full[ce - 1] + 1
+            if self.is_multi_exception(full_text, fs, fe, word):
+                continue
+            repl = MULTI_IMPERATIVE_TO_STATEMENT.get(word)
+            if repl:
+                replacements.append((fs, fe, repl))
+
+        # 3. SINGLE_IMPERATIVE_REGEX: 单字祈使词
+        for m in SINGLE_IMPERATIVE_REGEX.finditer(clean_text):
+            word = m.group(0)
+            cs, ce = m.start(), m.end()
+            if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
+                continue
+            fs = clean_to_full[cs]
+            fe = clean_to_full[ce - 1] + 1
+            if self.is_part_of_exception(full_text, fs, fe, word):
+                continue
+            repl = SINGLE_REPLACE.get(word)
+            if repl:
+                replacements.append((fs, fe, repl))
+
+        if not replacements:
+            return False
+
+        # 按起始位置降序排列，从后往前执行替换避免偏移问题
+        replacements.sort(key=lambda x: x[0], reverse=True)
+
+        # 在 full_text 上执行所有替换
+        result = full_text
+        for fs, fe, repl in replacements:
+            result = result[:fs] + repl + result[fe:]
+
+        # "将将" -> "将把"（后处理，全局替换）
+        result = result.replace('将将', '将把')
+
+        # 按原始字符数比例将 result 分配回各个 run
+        total_orig = len(full_text)
+        total_result = len(result)
+
+        if total_orig == 0:
+            return False
+
+        new_run_texts = []
+        result_pos = 0
+        cum_orig = 0
+
+        if len(run_texts_orig) == 1:
+            # 单 run：直接使用全部 result
+            new_run_texts.append(result)
+        else:
+            # 多 run：前 N-1 个按比例分配，最后一个拿剩余全部
+            for i, orig_text in enumerate(run_texts_orig[:-1]):
+                cum_orig += len(orig_text)
+                # 按比例计算该 run 在 result 中的结束位置
+                target_end = int(total_result * cum_orig / total_orig)
+                # 确保不后退且不越界
+                target_end = max(result_pos, min(target_end, total_result))
+                new_text = result[result_pos:target_end]
+                new_run_texts.append(new_text)
+                result_pos = target_end
+            # 最后一个 run 获取所有剩余部分
+            new_run_texts.append(result[result_pos:])
+
+        # 写回 run 文本
+        modified = False
+        for i, run in enumerate(runs):
+            if run.text != new_run_texts[i]:
+                run.text = new_run_texts[i]
                 modified = True
-            
-            current_offset += len(text)
-        
+
         return modified
     
     def convert_mood(self, input_file, output_file=None):
@@ -1818,6 +1965,9 @@ class DocumentConverter:
             # 跳过标记为 keepOriginal 的段落（copy_chapter 模式的第一份副本）
             if self._is_keep_original_paragraph(para._element):
                 continue
+            # 跳过标题段落（标题中的"投标人"不应转换）
+            if self.is_heading_paragraph(para._element, doc):
+                continue
             if self.process_paragraph_mood(para):
                 modified_count += 1
         
@@ -1827,6 +1977,9 @@ class DocumentConverter:
                     for para in cell.paragraphs:
                         para_count += 1
                         if self._is_keep_original_paragraph(para._element):
+                            continue
+                        # 跳过标题段落（表格内通常无标题，但保持一致）
+                        if self.is_heading_paragraph(para._element, doc):
                             continue
                         if self.process_paragraph_mood(para):
                             modified_count += 1
@@ -1875,6 +2028,24 @@ class DocumentConverter:
                 elem.remove(start)
             for end in ends_to_remove:
                 elem.remove(end)
+
+    def _add_keep_original_to_table(self, tbl_elem, start_bookmark_id):
+        """为表格内所有段落添加 _keepOriginal_ 标记，返回下一个可用的 bookmark_id
+        
+        用于 copy_chapter 模式：表格属于原文副本的一部分，其内容（如"投标人"）
+        不应被语气转换修改。
+        """
+        bid = start_bookmark_id
+        for p_elem in tbl_elem.iter(qn('w:p')):
+            bookmark_start = OxmlElement('w:bookmarkStart')
+            bookmark_start.set(qn('w:id'), str(bid))
+            bookmark_start.set(qn('w:name'), '_keepOriginal_')
+            p_elem.insert(0, bookmark_start)
+            bookmark_end = OxmlElement('w:bookmarkEnd')
+            bookmark_end.set(qn('w:id'), str(bid))
+            p_elem.append(bookmark_end)
+            bid += 1
+        return bid
 
     def _is_hint_paragraph(self, elem):
         """检查段落是否标记为提示语（hint）"""
@@ -2752,8 +2923,16 @@ class DocumentConverter:
                         new_children.append(source_elem)
                         chapter_buffer.append(source_elem)
                     else:
-                        new_children.append(child)
-                        chapter_buffer.append(child)
+                        # 表格等非段落元素：需要给原文副本的表格添加 keepOriginal 保护，
+                        # 避免语气转换时把表格中的"投标人"转为"本投标人"
+                        if child.tag == qn('w:tbl'):
+                            source_elem = deepcopy(child)
+                            bookmark_id = self._add_keep_original_to_table(source_elem, bookmark_id)
+                            new_children.append(source_elem)
+                            chapter_buffer.append(child)  # 保留原始引用，供应答副本使用
+                        else:
+                            new_children.append(child)
+                            chapter_buffer.append(child)
             else:
                 # 不在任何章节内（文档开头无标题），直接输出
                 new_children.append(child)
