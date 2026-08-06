@@ -405,34 +405,55 @@ class DocumentConverter:
                 numPr = pPr.find(qn('w:numPr'))
                 if numPr is not None:
                     numId_elem = numPr.find(qn('w:numId'))
+                    ilvl_elem = numPr.find(qn('w:ilvl'))
                     if numId_elem is not None:
                         numId = numId_elem.get(qn('w:val'))
+                        ilvl = ilvl_elem.get(qn('w:val')) if ilvl_elem is not None else '0'
                         if numId:
-                            doc_element = paragraph._element.getroottree().getroot()
-                            numbering_part = doc_element.find('.//' + qn('w:numbering'))
-                            if numbering_part is not None:
-                                num_elem = numbering_part.find(f'.//' + qn('w:num') + f'[@' + qn('w:numId') + f'="{numId}"]')
+                            # ★ 修复：通过 paragraph.part.numbering_part.element 访问 numbering XML，
+                            # 而不是 getroottree().getroot()（后者返回的是 document body 根，不包含 numbering）
+                            numbering_root = paragraph.part.numbering_part.element
+                            if numbering_root is not None:
+                                # 查找 num 元素
+                                num_elem = None
+                                for n in numbering_root.findall(qn('w:num')):
+                                    if n.get(qn('w:numId')) == numId:
+                                        num_elem = n
+                                        break
                                 if num_elem is not None:
                                     abstractNumId_elem = num_elem.find(qn('w:abstractNumId'))
                                     if abstractNumId_elem is not None:
                                         abstractNumId = abstractNumId_elem.get(qn('w:val'))
                                         if abstractNumId:
-                                            abs_num = numbering_part.find(f'.//' + qn('w:abstractNum') + f'[@' + qn('w:abstractNumId') + f'="{abstractNumId}"]')
+                                            # 查找 abstractNum 定义
+                                            abs_num = None
+                                            for an in numbering_root.findall(qn('w:abstractNum')):
+                                                if an.get(qn('w:abstractNumId')) == abstractNumId:
+                                                    abs_num = an
+                                                    break
                                             if abs_num is not None:
-                                                lvl = abs_num.find('.//' + qn('w:lvl'))
-                                                if lvl is not None:
-                                                    numFmt = lvl.find(qn('w:numFmt'))
+                                                # 查找对应 ilvl 的级别定义
+                                                target_lvl = None
+                                                for l in abs_num.findall(qn('w:lvl')):
+                                                    if l.get(qn('w:ilvl')) == ilvl:
+                                                        target_lvl = l
+                                                        break
+                                                if target_lvl is None:
+                                                    target_lvl = abs_num.find(qn('w:lvl'))
+                                                if target_lvl is not None:
+                                                    numFmt = target_lvl.find(qn('w:numFmt'))
                                                     if numFmt is not None:
                                                         fmt_val = numFmt.get(qn('w:val'))
                                                         if fmt_val == 'bullet':
                                                             return '● 列表段落'
                                                         elif fmt_val == 'decimal':
                                                             return '1 列表段落'
-                                                styleLink = abs_num.find(qn('w:numStyleLink'))
-                                                if styleLink is not None:
-                                                    val = styleLink.get(qn('w:val'))
-                                                    if val:
-                                                        return '1 列表段落'
+                                            # 查找替代格式：通过 numStyleLink
+                                            styleLink = abs_num.find(qn('w:numStyleLink'))
+                                            if styleLink is not None:
+                                                val = styleLink.get(qn('w:val'))
+                                                if val:
+                                                    return '1 列表段落'
         except Exception:
             pass
 
@@ -998,7 +1019,7 @@ class DocumentConverter:
                                    warning_callback=None, image_style_override=None, enable_image_style=False,
                                    remove_chapter_label=False,
                                    list_method='bullet', list_style='Body Text',
-                                   enable_list_style=True):
+                                   enable_list_style=True, resolved_numbering_text=None):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
@@ -1349,6 +1370,11 @@ class DocumentConverter:
                                 pass
                 return new_para
         
+        # ★ 修复：如果传入了 resolved_numbering_text（虚拟样式映射到非列表样式时，
+        # 需要保留原始编号文本），将其作为第一个 run 添加到段落最前面
+        if resolved_numbering_text:
+            new_para.add_run(resolved_numbering_text)
+        
         # 获取段落完整文本（包括超链接内部的run文本）
         # python-docx 的 para.runs 不返回超链接(w:hyperlink)内部的run，需要用 para.text
         runs_text = ''.join(run.text for run in source_para.runs)
@@ -1662,12 +1688,42 @@ class DocumentConverter:
                     if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                         # 标题段落：走标题样式映射
                         target_style = self.get_target_style(src_style, new_doc, source_file)
+                        _enable_list_fallback = enable_list_style
+                        _list_style = list_style
+                        _resolve_num_text = None
                     elif self.has_numbering(para):
                         # 非标题的列表段落：使用虚拟样式名进行映射
                         virtual_style = self._detect_numbering_format(para)
                         target_style = self.get_target_style(virtual_style, new_doc, source_file)
+                        _resolve_num_text = None
+                        if virtual_style in style_map:
+                            # ★ 修复：虚拟样式已在 Step 3 映射
+                            # 判断目标样式是否为列表段落样式（模板中自带 w:numPr 定义）
+                            target_has_numPr = False
+                            try:
+                                tpl_style_xml = new_doc.styles[target_style]._element.xml
+                                if '<w:numPr>' in tpl_style_xml or '<w:numPr ' in tpl_style_xml:
+                                    target_has_numPr = True
+                            except KeyError:
+                                pass
+                            
+                            if target_has_numPr:
+                                # 目标样式是列表段落样式 → 走样式模式兜底，用映射目标样式替代 list_style
+                                # 这样 copy_paragraph_with_images 会应用目标样式的 numPr 编号
+                                _enable_list_fallback = True
+                                _list_style = target_style
+                            else:
+                                # 目标样式是正文/普通段落 → 保留原编号文本，应用目标样式
+                                _enable_list_fallback = False
+                                _resolve_num_text = self._resolve_auto_numbering_text(para)
+                        else:
+                            _enable_list_fallback = enable_list_style
+                            _list_style = list_style
                     else:
                         target_style = self.get_target_style(src_style, new_doc, source_file)
+                        _enable_list_fallback = enable_list_style
+                        _list_style = list_style
+                        _resolve_num_text = None
                     
                     new_para = self.copy_paragraph_with_images(
                         para, new_doc, target_style,
@@ -1678,8 +1734,9 @@ class DocumentConverter:
                         enable_image_style=enable_image_style,
                         remove_chapter_label=remove_chapter_label,
                         list_method=list_method,
-                        list_style=list_style,
-                        enable_list_style=enable_list_style
+                        list_style=_list_style,
+                        enable_list_style=_enable_list_fallback,
+                        resolved_numbering_text=_resolve_num_text
                     )
                     
                     if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES or style_map.get(src_style) in HEADING_STYLES or '标题' in src_style or src_style.startswith('Heading'):
@@ -3509,12 +3566,37 @@ class DocumentConverter:
                         if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                             # 标题段落：走标题样式映射
                             target_style = self.get_target_style(src_style, new_doc, source_file)
+                            _enable_list_fallback = enable_list_style
+                            _list_style = list_style
+                            _resolve_num_text = None
                         elif self.has_numbering(para):
                             # 非标题的列表段落：使用虚拟样式名进行映射
                             virtual_style = self._detect_numbering_format(para)
                             target_style = self.get_target_style(virtual_style, new_doc, source_file)
+                            _resolve_num_text = None
+                            if virtual_style in style_map:
+                                # ★ 修复：虚拟样式已在 Step 3 映射
+                                target_has_numPr = False
+                                try:
+                                    tpl_style_xml = new_doc.styles[target_style]._element.xml
+                                    if '<w:numPr>' in tpl_style_xml or '<w:numPr ' in tpl_style_xml:
+                                        target_has_numPr = True
+                                except KeyError:
+                                    pass
+                                if target_has_numPr:
+                                    _enable_list_fallback = True
+                                    _list_style = target_style
+                                else:
+                                    _enable_list_fallback = False
+                                    _resolve_num_text = self._resolve_auto_numbering_text(para)
+                            else:
+                                _enable_list_fallback = enable_list_style
+                                _list_style = list_style
                         else:
                             target_style = self.get_target_style(src_style, new_doc, source_file)
+                            _enable_list_fallback = enable_list_style
+                            _list_style = list_style
+                            _resolve_num_text = None
                         
                         # 使用copy_paragraph_with_images方法复制段落
                         self.copy_paragraph_with_images(
@@ -3526,8 +3608,9 @@ class DocumentConverter:
                             enable_image_style=enable_image_style,
                             remove_chapter_label=remove_chapter_label,
                             list_method=list_method,
-                            list_style=list_style,
-                            enable_list_style=enable_list_style
+                            list_style=_list_style,
+                            enable_list_style=_enable_list_fallback,
+                            resolved_numbering_text=_resolve_num_text
                         )
                         para_idx += 1
                 elif child.tag == qn('w:tbl'):

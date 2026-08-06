@@ -1061,6 +1061,12 @@ if current_source_files:
             total_paragraphs += current_file_total
             
             styles = set()
+            
+            # ★ 收集列表段落虚拟样式（数字编号/符号编号），用于 Step 3 样式映射
+            converter_temp = DocumentConverter()
+            list_virtual_styles = converter_temp.get_list_virtual_styles(doc)
+            styles.update(list_virtual_styles)
+            
             status_text.text(f"🔍 正在分析文件 {idx}/{total_files}: {source_file.name}...")
             
             for para_idx, para in enumerate(doc.paragraphs):

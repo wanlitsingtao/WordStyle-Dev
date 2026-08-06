@@ -250,10 +250,6 @@ def show_style_mapping_dialog():
         # 样式映射行
         body_list_shown = False
         for source_style in body_styles:
-            # 隐藏"列表段落"样式（由Step 4的兜底配置处理）
-            if '列表段落' in source_style and source_style not in current_file_mapping:
-                continue
-
             body_list_shown = True
             if is_dual:
                 cols = st.columns([2, 2, 2])
