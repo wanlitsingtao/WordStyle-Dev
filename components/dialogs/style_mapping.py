@@ -29,6 +29,152 @@ def get_answer_mode_options():
     }
 
 
+@st.fragment
+def _render_step4_fallback(selected_file_name, template_styles, current_file_mapping,
+                            default_tbl_img_config, default_list_config,
+                            default_remove_chapter_label, is_dual):
+    """Step 4: 表格/图片/列表兜底配置（使用 fragment 避免每次操作都刷新整个页面）"""
+    st.markdown("---")
+    st.markdown("**4. 表格/图片/列表兜底配置**")
+
+    # 获取表格/图片现有配置
+    tbl_img_config = current_file_mapping.get('_table_image_style', {})
+    if not tbl_img_config and default_tbl_img_config:
+        tbl_img_config = default_tbl_img_config
+
+    # ---- 表格与图片（带原文/应答原文双列） ----
+    st.markdown("**表格与图片兜底样式**")
+    st.markdown("_（选中后，表格/图片段落统一使用指定的模板样式）_")
+
+    # 布局：使用grid对齐（与桌面版一致）
+    tbl_img_hdr = st.columns([1, 2, 2, 1, 1, 2, 2])
+    tbl_img_hdr[1].markdown("**原文**")
+    tbl_img_hdr[2].markdown("**应答原文**")
+    tbl_img_hdr[5].markdown("**原文**")
+    tbl_img_hdr[6].markdown("**应答原文**")
+
+    # 第1行：表格
+    tbl_img_row = st.columns([1, 2, 2, 1, 1, 2, 2])
+
+    with tbl_img_row[0]:
+        enable_table = st.checkbox("表格",
+            value=tbl_img_config.get('enable_table_style', False),
+            key=f"enable_table_{selected_file_name}")
+
+    with tbl_img_row[1]:
+        td = tbl_img_config.get('table_style', 'Body Text')
+        ti = template_styles.index(td) if td in template_styles else 0
+        table_style = st.selectbox("表格原文", options=template_styles, index=ti,
+            key=f"table_style_{selected_file_name}", disabled=not enable_table,
+            label_visibility="collapsed")
+
+    with tbl_img_row[2]:
+        tad = tbl_img_config.get('table_answer_style', table_style)
+        tai = template_styles.index(tad) if tad in template_styles else 0
+        table_answer_style = st.selectbox("表格答原文", options=template_styles, index=tai,
+            key=f"table_answer_{selected_file_name}",
+            disabled=not (enable_table and is_dual),
+            label_visibility="collapsed")
+
+    with tbl_img_row[4]:
+        enable_image = st.checkbox("图片",
+            value=tbl_img_config.get('enable_image_style', False),
+            key=f"enable_image_{selected_file_name}")
+
+    with tbl_img_row[5]:
+        imd = tbl_img_config.get('image_style', 'Body Text')
+        imi = template_styles.index(imd) if imd in template_styles else 0
+        image_style = st.selectbox("图片原文", options=template_styles, index=imi,
+            key=f"image_style_{selected_file_name}", disabled=not enable_image,
+            label_visibility="collapsed")
+
+    with tbl_img_row[6]:
+        iad = tbl_img_config.get('image_answer_style', image_style)
+        iai = template_styles.index(iad) if iad in template_styles else 0
+        image_answer_style = st.selectbox("图片答原文", options=template_styles, index=iai,
+            key=f"image_answer_{selected_file_name}",
+            disabled=not (enable_image and is_dual),
+            label_visibility="collapsed")
+
+    # ---- 列表段落兜底 ----
+    st.markdown("---")
+    st.markdown("**列表段落（未映射）兜底**")
+    st.caption("配置源文档中未在样式映射中配置的列表段落的处理方式")
+
+    # 获取列表配置
+    list_config = current_file_mapping.get('_list_config', default_list_config)
+    enable_list_val = list_config.get('enable_list', st.session_state.get('enable_list_style_config', True))
+    list_method_val = list_config.get('method', st.session_state.get('list_method_config', 'bullet'))
+    list_bullet_val = list_config.get('bullet', st.session_state.get('list_bullet_config', '•'))
+    list_style_val = list_config.get('style', st.session_state.get('list_style_config', 'Body Text'))
+    list_answer_method_val = list_config.get('answer_method', st.session_state.get('list_answer_method_config', 'bullet'))
+    list_answer_bullet_val = list_config.get('answer_bullet', st.session_state.get('list_answer_bullet_config', '•'))
+    list_answer_style_val = list_config.get('answer_style', st.session_state.get('list_answer_style_config', 'Body Text'))
+
+    # 列表段落兜底：3列布局
+    list_row = st.columns([3, 5, 5])
+    with list_row[0]:
+        list_enable = st.checkbox("列表段落\n（未映射）", value=enable_list_val,
+            key=f"enable_list_{selected_file_name}",
+            help="勾选后，未映射的列表段落将按照下方配置的方式处理")
+    with list_row[1]:
+        st.markdown("**原文**")
+    with list_row[2]:
+        st.markdown("**答原文**")
+
+    # 第二行：原文设置 + 答原文设置
+    list_cols = st.columns([3, 5, 5])
+    with list_cols[0]:
+        st.text("")
+    with list_cols[1]:
+        l_method = st.radio("原文方式",
+            options=["bullet", "style"],
+            format_func=lambda x: "符号" if x == "bullet" else "样式",
+            index=0 if list_method_val == "bullet" else 1,
+            horizontal=True, key=f"list_method_{selected_file_name}",
+            label_visibility="collapsed",
+            disabled=not list_enable)
+
+        if l_method == "bullet":
+            l_bullet = st.text_input("原文符号", value=list_bullet_val,
+                key=f"list_bullet_{selected_file_name}", label_visibility="collapsed",
+                disabled=not list_enable)
+        else:
+            lsi = template_styles.index(list_style_val) if list_style_val in template_styles else 0
+            st.selectbox("原文目标样式", options=template_styles, index=lsi,
+                key=f"list_style_{selected_file_name}", label_visibility="collapsed",
+                disabled=not list_enable)
+
+    with list_cols[2]:
+        la_method = st.radio("答原文方式",
+            options=["bullet", "style"],
+            format_func=lambda x: "符号" if x == "bullet" else "样式",
+            index=0 if list_answer_method_val == "bullet" else 1,
+            horizontal=True, key=f"list_answer_method_{selected_file_name}",
+            label_visibility="collapsed",
+            disabled=not (list_enable and is_dual))
+
+        if la_method == "bullet":
+            st.text_input("答原文符号", value=list_answer_bullet_val,
+                key=f"list_answer_bullet_{selected_file_name}", label_visibility="collapsed",
+                disabled=not (list_enable and is_dual))
+        else:
+            lasi = template_styles.index(list_answer_style_val) if list_answer_style_val in template_styles else 0
+            st.selectbox("答原文目标样式", options=template_styles, index=lasi,
+                key=f"list_answer_style_{selected_file_name}", label_visibility="collapsed",
+                disabled=not (list_enable and is_dual))
+
+    # 清除章节标签 checkbox
+    st.markdown("---")
+    st.checkbox(
+        '清除标题中的"第X章/第X节"等字样',
+        value=current_file_mapping.get('_remove_chapter_label',
+               default_remove_chapter_label if isinstance(default_remove_chapter_label, bool)
+               else st.session_state.get('remove_chapter_label_config', False)),
+        key=f"remove_chapter_label_{selected_file_name}"
+    )
+
+
 @st.dialog("📊 样式映射配置", width="large")
 def show_style_mapping_dialog():
     """显示样式映射配置对话框（完整四步流程，完全参照桌面版）"""
@@ -294,157 +440,39 @@ def show_style_mapping_dialog():
             st.caption("（当前源文档未检测到正文样式）")
 
     # ====================================================================
-    # Step 4: 表格/图片/列表兜底配置（完全参照桌面版）
+    # Step 4: 表格/图片/列表兜底配置（使用 @st.fragment 避免每次操作刷新页面）
     # ====================================================================
-    st.markdown("---")
-    st.markdown("**4. 表格/图片/列表兜底配置**")
-
-    # 获取表格/图片现有配置
-    tbl_img_config = current_file_mapping.get('_table_image_style', {})
-    if not tbl_img_config and default_tbl_img_config:
-        tbl_img_config = default_tbl_img_config
-
-    # ---- 表格与图片（带原文/应答原文双列） ----
-    st.markdown("**表格与图片兜底样式**")
-    st.markdown("_（选中后，表格/图片段落统一使用指定的模板样式）_")
-
-    # 布局：使用grid对齐（与桌面版一致：列0=表格checkbox, 1=表格原文, 2=表格应答原文, 3=间隔, 4=图片checkbox, 5=图片原文, 6=图片应答原文）
-    # 第0行：标签
-    tbl_img_hdr = st.columns([1, 2, 2, 1, 1, 2, 2])
-    tbl_img_hdr[1].markdown("**原文**")
-    tbl_img_hdr[2].markdown("**应答原文**")
-    tbl_img_hdr[5].markdown("**原文**")
-    tbl_img_hdr[6].markdown("**应答原文**")
-
-    # 第1行：表格
-    tbl_img_row = st.columns([1, 2, 2, 1, 1, 2, 2])
-
-    with tbl_img_row[0]:
-        enable_table = st.checkbox("表格",
-            value=tbl_img_config.get('enable_table_style', False),
-            key=f"enable_table_{selected_file.name}")
-
-    with tbl_img_row[1]:
-        td = tbl_img_config.get('table_style', 'Body Text')
-        ti = template_styles.index(td) if td in template_styles else 0
-        table_style = st.selectbox("表格原文", options=template_styles, index=ti,
-            key=f"table_style_{selected_file.name}", disabled=not enable_table,
-            label_visibility="collapsed")
-
-    with tbl_img_row[2]:
-        tad = tbl_img_config.get('table_answer_style', table_style)
-        tai = template_styles.index(tad) if tad in template_styles else 0
-        table_answer_style = st.selectbox("表格答原文", options=template_styles, index=tai,
-            key=f"table_answer_{selected_file.name}",
-            disabled=not (enable_table and is_dual),
-            label_visibility="collapsed")
-
-    with tbl_img_row[4]:
-        enable_image = st.checkbox("图片",
-            value=tbl_img_config.get('enable_image_style', False),
-            key=f"enable_image_{selected_file.name}")
-
-    with tbl_img_row[5]:
-        imd = tbl_img_config.get('image_style', 'Body Text')
-        imi = template_styles.index(imd) if imd in template_styles else 0
-        image_style = st.selectbox("图片原文", options=template_styles, index=imi,
-            key=f"image_style_{selected_file.name}", disabled=not enable_image,
-            label_visibility="collapsed")
-
-    with tbl_img_row[6]:
-        iad = tbl_img_config.get('image_answer_style', image_style)
-        iai = template_styles.index(iad) if iad in template_styles else 0
-        image_answer_style = st.selectbox("图片答原文", options=template_styles, index=iai,
-            key=f"image_answer_{selected_file.name}",
-            disabled=not (enable_image and is_dual),
-            label_visibility="collapsed")
-
-    # ---- 列表段落兜底（与桌面版完全一致：原文+应答原文在同一行，标签+控件全部在同一行） ----
-    st.markdown("---")
-    st.markdown("**列表段落（未映射）兜底**")
-    st.caption("配置源文档中未在样式映射中配置的列表段落的处理方式")
-
-    # 获取列表配置
-    list_config = current_file_mapping.get('_list_config', default_list_config)
-    enable_list_val = list_config.get('enable_list', st.session_state.get('enable_list_style_config', True))
-    list_method_val = list_config.get('method', st.session_state.get('list_method_config', 'bullet'))
-    list_bullet_val = list_config.get('bullet', st.session_state.get('list_bullet_config', '•'))
-    list_style_val = list_config.get('style', st.session_state.get('list_style_config', 'Body Text'))
-    list_answer_method_val = list_config.get('answer_method', st.session_state.get('list_answer_method_config', 'bullet'))
-    list_answer_bullet_val = list_config.get('answer_bullet', st.session_state.get('list_answer_bullet_config', '•'))
-    list_answer_style_val = list_config.get('answer_style', st.session_state.get('list_answer_style_config', 'Body Text'))
-
-    # 列表段落兜底：3列布局，复选框 / 原文 / 答原文
-    # 3列比例 3:5:5，复选框占23%，原文和答原文各占38%，避免文字被挤占
-    list_row = st.columns([3, 5, 5])
-    with list_row[0]:
-        list_enable = st.checkbox("列表段落\n（未映射）", value=enable_list_val,
-            key=f"enable_list_{selected_file.name}",
-            help="勾选后，未映射的列表段落将按照下方配置的方式处理")
-    with list_row[1]:
-        st.markdown("**原文**")
-    with list_row[2]:
-        st.markdown("**答原文**")
-
-    # 第二行：原文设置 + 答原文设置
-    list_cols = st.columns([3, 5, 5])
-    with list_cols[0]:
-        st.text("")  # 占位，对齐复选框列
-    with list_cols[1]:
-        l_method = st.radio("原文方式",
-            options=["bullet", "style"],
-            format_func=lambda x: "符号" if x == "bullet" else "样式",
-            index=0 if list_method_val == "bullet" else 1,
-            horizontal=True, key=f"list_method_{selected_file.name}",
-            label_visibility="collapsed",
-            disabled=not list_enable)
-        
-        if l_method == "bullet":
-            l_bullet = st.text_input("原文符号", value=list_bullet_val,
-                key=f"list_bullet_{selected_file.name}", label_visibility="collapsed",
-                disabled=not list_enable)
-            l_style = st.session_state.get('list_style_config', 'Body Text')
-        else:
-            lsi = template_styles.index(list_style_val) if list_style_val in template_styles else 0
-            l_style = st.selectbox("原文目标样式", options=template_styles, index=lsi,
-                key=f"list_style_{selected_file.name}", label_visibility="collapsed",
-                disabled=not list_enable)
-            l_bullet = st.session_state.get('list_bullet_config', '•')
-
-    with list_cols[2]:
-        la_method = st.radio("答原文方式",
-            options=["bullet", "style"],
-            format_func=lambda x: "符号" if x == "bullet" else "样式",
-            index=0 if list_answer_method_val == "bullet" else 1,
-            horizontal=True, key=f"list_answer_method_{selected_file.name}",
-            label_visibility="collapsed",
-            disabled=not (list_enable and is_dual))
-        
-        if la_method == "bullet":
-            la_bullet = st.text_input("答原文符号", value=list_answer_bullet_val,
-                key=f"list_answer_bullet_{selected_file.name}", label_visibility="collapsed",
-                disabled=not (list_enable and is_dual))
-            la_style = st.session_state.get('list_answer_style_config', 'Body Text')
-        else:
-            lasi = template_styles.index(list_answer_style_val) if list_answer_style_val in template_styles else 0
-            la_style = st.selectbox("答原文目标样式", options=template_styles, index=lasi,
-                key=f"list_answer_style_{selected_file.name}", label_visibility="collapsed",
-                disabled=not (list_enable and is_dual))
-            la_bullet = st.session_state.get('list_answer_bullet_config', '•')
-
-    # 清除章节标签 checkbox（放在Step 4内，与桌面版一致）
-    st.markdown("---")
-    remove_chapter_label = st.checkbox(
-        '清除标题中的"第X章/第X节"等字样',
-        value=current_file_mapping.get('_remove_chapter_label',
-               default_remove_chapter_label if isinstance(default_remove_chapter_label, bool)
-               else st.session_state.get('remove_chapter_label_config', False)),
-        key=f"remove_chapter_label_{selected_file.name}"
+    _render_step4_fallback(
+        selected_file_name=selected_file.name,
+        template_styles=template_styles,
+        current_file_mapping=current_file_mapping,
+        default_tbl_img_config=default_tbl_img_config,
+        default_list_config=default_list_config,
+        default_remove_chapter_label=default_remove_chapter_label,
+        is_dual=is_dual,
     )
 
     # ====================================================================
     # 保存所有配置到 session_state
     # ====================================================================
+
+    # ★ Step 4 的 widget 值从 session_state 读取（因为 Step 4 在 @st.fragment 中运行，
+    #    其局部变量在外部不可见，但 widget 值已自动写入 session_state）
+    fname = selected_file.name
+    enable_table = st.session_state.get(f"enable_table_{fname}", False)
+    table_style = st.session_state.get(f"table_style_{fname}", "Body Text")
+    table_answer_style = st.session_state.get(f"table_answer_{fname}", table_style)
+    enable_image = st.session_state.get(f"enable_image_{fname}", False)
+    image_style = st.session_state.get(f"image_style_{fname}", "Body Text")
+    image_answer_style = st.session_state.get(f"image_answer_{fname}", image_style)
+    list_enable = st.session_state.get(f"enable_list_{fname}", True)
+    l_method = st.session_state.get(f"list_method_{fname}", "bullet")
+    l_bullet = st.session_state.get(f"list_bullet_{fname}", "•")
+    l_style = st.session_state.get(f"list_style_{fname}", "Body Text")
+    la_method = st.session_state.get(f"list_answer_method_{fname}", "bullet")
+    la_bullet = st.session_state.get(f"list_answer_bullet_{fname}", "•")
+    la_style = st.session_state.get(f"list_answer_style_{fname}", "Body Text")
+    remove_chapter_label = st.session_state.get(f"remove_chapter_label_{fname}", False)
 
     # 1. 保存样式映射
     updated_mapping = {}
