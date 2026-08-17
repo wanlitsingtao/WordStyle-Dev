@@ -78,12 +78,15 @@ def _load_config_from_secrets():
                 backend_section = secrets.get('backend', {})
                 backend_url = backend_section.get('url', None) if isinstance(backend_section, dict) else None
             
-            # ========== 3. 读取 DATABASE_URL（顶层优先）==========
+            # ========== 3. 读取 DATABASE_URL（仅顶层）==========
+            # [FIX 2026-08-17] 禁止用 [supabase].url 回退：
+            # 那是 REST API 地址（https://xxx.supabase.co），不是 PostgreSQL 连接串。
+            # 否则 DATABASE_URL 会被错误赋值，导致 Supabase 直连失败。
             database_url = secrets.get('DATABASE_URL', None)
-            if not database_url:
-                supabase_section = secrets.get('supabase', {})
-                if isinstance(supabase_section, dict):
-                    database_url = supabase_section.get('url', None)
+            if isinstance(database_url, str):
+                database_url = database_url.strip()
+                if not database_url:
+                    database_url = None
             
             return {
                 'use_supabase': use_supabase,

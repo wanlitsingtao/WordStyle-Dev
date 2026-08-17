@@ -31,48 +31,16 @@ def _load_database_url():
         database_url = os.getenv("DATABASE_URL", "sqlite:///./wordstyle.db")
         print(f"[INFO] 从环境变量加载 DATABASE_URL")
     
-    # 3. 自动转换连接池器为直连地址（Streamlit Cloud 兼容）
+    # 3. 保持 pooler 连接串原样使用（不做直连转换）
+    # [FIX 2026-08-17] 原逻辑会把 Supabase 新式 pooler 地址
+    #   postgres.{project_id}@aws-{region}.pooler.supabase.com:6543
+    # 错误转换成 db.aws-{region}.supabase.co:5432，导致 DNS 解析失败
+    # （ENOTFOUND / could not translate host name）。
+    # 同时 Streamlit Cloud 不支持 IPv6 直连 5432，必须走 pooler 6543。
     if database_url and database_url.startswith("postgresql"):
         if "pooler.supabase.com" in database_url:
-            try:
-                # 使用 urlparse 解析 URL
-                parsed = urlparse(database_url)
-                
-                # 提取项目 ID
-                # hostname: cgfdhubkklpyvjgezeeq.pooler.supabase.com
-                hostname = parsed.hostname or ""
-                project_id = hostname.replace(".pooler.supabase.com", "")
-                
-                # 新主机名: db.{project_id}.supabase.co
-                new_hostname = f"db.{project_id}.supabase.co"
-                
-                # 新端口: 5432
-                new_port = 5432
-                
-                # 用户名转换: postgres.{project_id} -> postgres
-                username = parsed.username or "postgres"
-                new_username = username.replace(f"postgres.{project_id}", "postgres")
-                
-                # 构建新 URL
-                new_netloc = f"{new_username}"
-                if parsed.password:
-                    new_netloc += f":{parsed.password}"
-                new_netloc += f"@{new_hostname}:{new_port}"
-                
-                # 重建 URL
-                database_url = urlunparse((
-                    parsed.scheme,
-                    new_netloc,
-                    parsed.path,
-                    parsed.params,
-                    parsed.query,
-                    parsed.fragment
-                ))
-                
-                print(f"[OK] 自动转换连接池器为直连地址（Streamlit Cloud 兼容）")
-                print(f"   原始: {database_url[:60]}...")
-            except Exception as e:
-                print(f"[WARN] URL 转换失败: {e}，使用原始 URL")
+            print(f"[OK] 使用 Supabase pooler 连接串（6543），不做直连转换")
+            print(f"   连接: {database_url[:80]}...")
     
     return database_url
 
