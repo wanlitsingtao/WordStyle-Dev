@@ -897,6 +897,52 @@ class DocumentConverter:
         else:
             run.add_picture(io.BytesIO(img_bytes), width=Emu(w_emu), height=Emu(h_emu))
     
+    def _ole_preview_to_png(self, blob):
+        """将 OLE 预览图转为 python-docx 支持的 PNG（WMF/EMF 等需转换）。
+        返回 PNG bytes，失败返回 None。"""
+        if not PIL_AVAILABLE:
+            return None
+        try:
+            img = Image.open(io.BytesIO(blob))
+            fmt = (img.format or '').upper()
+            if fmt in ('PNG', 'JPEG', 'GIF', 'BMP', 'TIFF'):
+                return blob
+            # WMF/EMF 等矢量或非常见格式 → 转 PNG
+            img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'PNG')
+            return buf.getvalue()
+        except Exception:
+            return None
+    
+    def _extract_ole_preview(self, part, obj_elem):
+        """从 OLE 对象中提取预览图并转为 PNG，返回 (png_bytes, emu_w, emu_h) 或 None。
+        显示尺寸从 v:shape 的 style 属性解析（pt → EMU），避免用 PNG 像素反推导致放大失真。"""
+        try:
+            shape = obj_elem.find('{urn:schemas-microsoft-com:vml}shape')
+            if shape is None:
+                return None
+            imagedata = shape.find('{urn:schemas-microsoft-com:vml}imagedata')
+            if imagedata is None:
+                return None
+            rId = imagedata.get(qn('r:id')) or imagedata.get(qn('r:embed'))
+            if not rId:
+                return None
+            style = shape.get('style') or ''
+            m_w = re.search(r'width:\s*([\d.]+)pt', style)
+            m_h = re.search(r'height:\s*([\d.]+)pt', style)
+            if not m_w or not m_h:
+                return None
+            emu_w = int(round(float(m_w.group(1)) * 12700))
+            emu_h = int(round(float(m_h.group(1)) * 12700))
+            blob = part.related_parts[rId].blob
+            png_bytes = self._ole_preview_to_png(blob)
+            if png_bytes is None:
+                return None
+            return (png_bytes, emu_w, emu_h)
+        except Exception:
+            return None
+    
     def set_table_width(self, table, width_emu):
         """设置表格宽度"""
         width_dxa = int(width_emu / 635)
@@ -954,10 +1000,12 @@ class DocumentConverter:
         else:
             return self.copy_special_element(source_elem, target_doc, target_style_name)
     
-    def copy_special_element(self, source_elem, target_doc, target_style_name, warning_callback=None):
+    def copy_special_element(self, source_elem, target_doc, target_style_name,
+                             source_part=None, page_width_emu=None, available_width_emu=None,
+                             warning_callback=None):
         """复制特殊元素（OLE对象、Visio图等）
-        注意：OLE/VML对象的关系ID(rId)在新文档中无效，直接复制XML会导致文档损坏。
-        因此OLE/VML对象只添加占位提示，不复制其XML结构。
+        OLE 对象：提取其预览图转为 PNG 后作为普通图片插入；
+        独立 VML 形状（非 OLE 预览）无法安全复制关系 ID，跳过其 XML 结构。
         :param warning_callback: 警告回调函数 callback(message)
         """
         try:
@@ -973,18 +1021,24 @@ class DocumentConverter:
             shapes = source_elem.findall('.//{urn:schemas-microsoft-com:vml}shape')
             
             if objects or shapes:
-                # 生成告警
-                if warning_callback:
-                    warning_msg = f"[WARNING] 检测到 {len(objects)} 个 OLE 对象和 {len(shapes)} 个 VML 形状，请手动检查转换结果"
-                    warning_callback(warning_msg)
-                
-                # 对于包含特殊对象的元素，我们尝试直接复制XML结构
-                from copy import deepcopy
-                new_elem = deepcopy(source_elem)
-                
-                # 将复制的元素添加到新段落的底层XML中
-                new_para._element.append(new_elem)
-                
+                inserted = False
+                if source_part is not None and page_width_emu is not None and available_width_emu is not None:
+                    for obj in objects:
+                        result = self._extract_ole_preview(source_part, obj)
+                        if result is not None:
+                            png_bytes, emu_w, emu_h = result
+                            pic_run = new_para.add_run()
+                            self.add_picture(pic_run, png_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            inserted = True
+                            break
+                if not inserted:
+                    # 无法提取预览图时回退占位提示
+                    new_para.add_run("[OLE对象]")
+                    if warning_callback:
+                        try:
+                            warning_callback(f"[WARNING] 存在无法自动提取预览图的 OLE 对象，已跳过")
+                        except Exception:
+                            pass
                 return new_para
             else:
                 # 如果没有特殊对象，返回空段落
@@ -1069,21 +1123,11 @@ class DocumentConverter:
         has_ole_objects = source_para._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object')
         has_vml_shapes = source_para._element.findall('.//{urn:schemas-microsoft-com:vml}shape')
         
-        # ★ 修复：包含 OLE/VML 对象的段落，按源文档顺序重建内容：
-        # OLE对象所在run的位置插入占位提示，文本保持原位置。
-        # 不能直接深度复制OLE的XML到新文档，因为OLE引用的关系ID(rId)在新文档中无效，
-        # 会导致文档打开报错。文本内容必须保留，避免用户信息丢失。
+        # 包含 OLE/VML 对象的段落，按源文档顺序重建内容：
+        # OLE 对象提取其预览图作为普通图片插入；独立 VML 形状跳过其 XML；
+        # 文本内容保持原位置。不 deepcopy OLE 的 XML（rId 在新文档中无效，会导致文档损坏）。
         if has_ole_objects or has_vml_shapes:
-            warning_msg = f"[WARNING] 段落 {para_idx} 包含 OLE/VML 对象\n  - OLE 对象数: {len(has_ole_objects)}\n  - VML 形状数: {len(has_vml_shapes)}\n  文本内容已保留，OLE对象请在原文中手动复制。"
-            print(warning_msg)
-            if warning_callback:
-                try:
-                    warning_callback(warning_msg)
-                except:
-                    pass
-            
-            # 创建新段落，设置目标样式
-            # ★ 修复：OLE提示语段落使用图片兜底样式（如果启用了图片样式覆盖）
+            # 创建新段落，设置目标样式（OLE 图片段落使用图片兜底样式）
             ole_para_style = target_style_name
             if enable_image_style and image_style_override:
                 try:
@@ -1097,33 +1141,28 @@ class DocumentConverter:
             except KeyError:
                 new_para.style = target_doc.styles['Normal']
             
-            # 按源段落的XML子元素顺序重建内容
-            # run的XML顺序与 source_para.runs 的顺序一致
+            ole_fallback = False
             for run in source_para.runs:
                 # 检查这个run是否包含OLE对象
                 run_has_ole = bool(run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object'))
                 run_has_vml = bool(run._element.findall('.//{urn:schemas-microsoft-com:vml}shape'))
                 
-                if run_has_ole or run_has_vml:
-                    # OLE对象所在位置：插入占位提示（替代原OLE对象）
-                    # ★ 修复：OLE占位提示应用图片兜底样式格式
-                    ole_run = new_para.add_run("[OLE对象，请手动复制]")
-                    if enable_image_style and image_style_override:
-                        try:
-                            img_style = target_doc.styles[image_style_override]
-                            if img_style.font:
-                                ole_run.font.bold = img_style.font.bold
-                                ole_run.font.italic = img_style.font.italic
-                                ole_run.font.underline = img_style.font.underline
-                                if img_style.font.size:
-                                    ole_run.font.size = img_style.font.size
-                                if img_style.font.color and img_style.font.color.rgb:
-                                    try:
-                                        ole_run.font.color.rgb = img_style.font.color.rgb
-                                    except:
-                                        pass
-                        except KeyError:
-                            pass
+                if run_has_ole:
+                    # 提取 OLE 预览图作为普通图片插入
+                    inserted = False
+                    for obj in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object'):
+                        result = self._extract_ole_preview(source_para.part, obj)
+                        if result is not None:
+                            png_bytes, emu_w, emu_h = result
+                            pic_run = new_para.add_run()
+                            self.add_picture(pic_run, png_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            inserted = True
+                            break
+                    if not inserted:
+                        ole_fallback = True
+                elif run_has_vml:
+                    # 独立 VML 形状（非 OLE 预览）：跳过其 XML，不复制
+                    pass
                 elif run.text:
                     # 普通文本：复制文本及格式
                     new_run = new_para.add_run(run.text)
@@ -1139,6 +1178,15 @@ class DocumentConverter:
                                 new_run.font.color.rgb = run.font.color.rgb
                             except:
                                 pass
+            
+            if ole_fallback:
+                warning_msg = f"[WARNING] 段落 {para_idx} 存在无法自动提取预览图的 OLE 对象，已跳过该对象"
+                print(warning_msg)
+                if warning_callback:
+                    try:
+                        warning_callback(warning_msg)
+                    except:
+                        pass
             
             return new_para
         
@@ -1530,15 +1578,23 @@ class DocumentConverter:
             shapes = para._element.findall('.//{urn:schemas-microsoft-com:vml}shape')
             
             if objects or shapes:
-                for obj in objects + shapes:
-                    new_obj = deepcopy(obj)
-                    new_para._element.append(new_obj)
-                if warning_callback:
-                    try:
-                        warning_msg = f"表格 {table_idx} 单元格 {cell_pos} 包含 OLE/VML 对象"
-                        warning_callback(warning_msg)
-                    except Exception:
-                        pass
+                # OLE 对象：提取预览图作为普通图片插入；独立 VML 形状跳过其 XML（不 deepcopy，避免损坏文档）
+                inserted = False
+                for obj in objects:
+                    result = self._extract_ole_preview(para.part, obj)
+                    if result is not None:
+                        png_bytes, emu_w, emu_h = result
+                        pic_run = new_para.add_run()
+                        self.add_picture(pic_run, png_bytes, available_width_emu, available_width_emu, emu_w, emu_h)
+                        inserted = True
+                        break
+                if not inserted:
+                    if warning_callback:
+                        try:
+                            warning_msg = f"表格 {table_idx} 单元格 {cell_pos} 存在无法自动提取预览图的 OLE/VML 对象"
+                            warning_callback(warning_msg)
+                        except Exception:
+                            pass
             else:
                 for run in para.runs:
                     blips = run._element.findall('.//' + qn('a:blip'))
@@ -1599,16 +1655,27 @@ class DocumentConverter:
                 # 个别非法/重叠区域跳过，不影响整体转换
                 pass
         
-        # 复制内容：遍历底层 tc，跳过 vMerge=continue，用网格坐标定位目标单元格
+        # 复制内容：遍历底层 tc，跳过 vMerge=continue，用网格坐标定位目标单元格。
+        # 先一次性构建目标表格 grid 坐标 -> _Cell 映射，避免反复调用 table.cell()
+        # （每次 cell() 都会重算整个 _cells 列表，导致 O(n²) 性能问题）。
+        cell_map = {}
+        for tr in new_table._tbl.tr_lst:
+            for tc in tr.tc_lst:
+                # ★ 修复：纵向合并的 continue cell 的 top 会继承 restart 的 top 值，
+                # 若不加过滤，continue 会用相同 (top,left) 覆盖 restart 的映射，
+                # 导致内容被复制到 continue 位置而 restart 位置为空。
+                if tc.vMerge == 'continue':
+                    continue
+                cell_map[(tc.top, tc.left)] = _Cell(tc, new_table)
+        
         for tr in tbl_el.tr_lst:
             for tc in tr.tc_lst:
                 if tc.vMerge == 'continue':
                     continue
                 top = tc.top
                 left = tc.left
-                try:
-                    new_cell = new_table.cell(top, left)
-                except IndexError:
+                new_cell = cell_map.get((top, left))
+                if new_cell is None:
                     continue
                 source_cell = _Cell(tc, source_table)
                 cell_pos = f"[{top},{left}]"
