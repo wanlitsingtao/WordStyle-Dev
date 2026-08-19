@@ -1799,13 +1799,14 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
                 st.success(f"✅ {result['name']} 转换成功")
                 # 显示警告汇总信息（如果有）
                 if result.get('warnings'):
-                    # 统计OLE/VML对象数
-                    ole_vml_count = sum(1 for w in result['warnings'] if 'OLE/VML 对象' in w or 'OLE' in w or 'VML' in w)
+                    # 统计无法自动提取预览图的 OLE 对象数（成功提取预览图的不会产生 warning）
+                    ole_fail_count = sum(1 for w in result['warnings'] if '无法自动提取预览图' in w)
                     
-                    # 显示汇总警告信息
-                    if ole_vml_count > 0:
+                    # 只有 OLE 转换失败时才提示手动处理（成功转换的不提示）
+                    if ole_fail_count > 0:
                         st.warning(
-                            f"⚠️ **{result['name']}** 文件中包含{ole_vml_count}个OLE对象图片，请手动处理。"
+                            f"⚠️ **{result['name']}** 文件中有 {ole_fail_count} 个 OLE 对象无法自动转换，"
+                            f"已在文档相应位置标注「[OLE对象，请手动复制]」，请手动处理。"
                         )
             else:
                 st.error(f"❌ {result['name']} 转换失败: {result.get('msg', '')}")

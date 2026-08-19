@@ -897,6 +897,26 @@ class DocumentConverter:
         else:
             run.add_picture(io.BytesIO(img_bytes), width=Emu(w_emu), height=Emu(h_emu))
     
+    @staticmethod
+    def _parse_vml_length(style, key):
+        """从 VML shape 的 style 字符串中解析长度值并转为 EMU。
+        支持 pt/in/cm/mm/px 单位（默认 pt），返回 int 或 None。"""
+        if not style:
+            return None
+        m = re.search(key + r':\s*([\d.]+)\s*(pt|in|cm|mm|px)?', style)
+        if not m:
+            return None
+        val = float(m.group(1))
+        unit = (m.group(2) or 'pt').lower()
+        emu_per_unit = {
+            'pt': 12700,
+            'in': 914400,
+            'cm': 360000,
+            'mm': 36000,
+            'px': 9525,  # 96dpi 下 1px ≈ 9525 EMU
+        }
+        return int(round(val * emu_per_unit.get(unit, 12700)))
+
     def _ole_preview_to_png(self, blob):
         """将 OLE 预览图转为 python-docx 支持的 PNG（WMF/EMF 等需转换）。
         返回 PNG bytes，失败返回 None。"""
@@ -929,12 +949,10 @@ class DocumentConverter:
             if not rId:
                 return None
             style = shape.get('style') or ''
-            m_w = re.search(r'width:\s*([\d.]+)pt', style)
-            m_h = re.search(r'height:\s*([\d.]+)pt', style)
-            if not m_w or not m_h:
+            emu_w = self._parse_vml_length(style, 'width')
+            emu_h = self._parse_vml_length(style, 'height')
+            if emu_w is None or emu_h is None:
                 return None
-            emu_w = int(round(float(m_w.group(1)) * 12700))
-            emu_h = int(round(float(m_h.group(1)) * 12700))
             blob = part.related_parts[rId].blob
             png_bytes = self._ole_preview_to_png(blob)
             if png_bytes is None:
@@ -1033,7 +1051,7 @@ class DocumentConverter:
                             break
                 if not inserted:
                     # 无法提取预览图时回退占位提示
-                    new_para.add_run("[OLE对象]")
+                    new_para.add_run("[OLE对象，请手动复制]")
                     if warning_callback:
                         try:
                             warning_callback(f"[WARNING] 存在无法自动提取预览图的 OLE 对象，已跳过")
@@ -1159,6 +1177,8 @@ class DocumentConverter:
                             inserted = True
                             break
                     if not inserted:
+                        # 提取失败：在文档相应位置插入占位提示（该段落已按图片目标样式设置）
+                        new_para.add_run("[OLE对象，请手动复制]")
                         ole_fallback = True
                 elif run_has_vml:
                     # 独立 VML 形状（非 OLE 预览）：跳过其 XML，不复制
@@ -1589,6 +1609,8 @@ class DocumentConverter:
                         inserted = True
                         break
                 if not inserted:
+                    # 提取失败：在单元格内插入占位提示
+                    new_para.add_run("[OLE对象，请手动复制]")
                     if warning_callback:
                         try:
                             warning_msg = f"表格 {table_idx} 单元格 {cell_pos} 存在无法自动提取预览图的 OLE/VML 对象"
@@ -1875,7 +1897,9 @@ class DocumentConverter:
                     target_style = DEFAULT_TARGET
                 
                 # 复制特殊元素
-                special_para = self.copy_special_element(child, new_doc, target_style, warning_callback)  # [FIX] 传递warning_callback参数
+                special_para = self.copy_special_element(child, new_doc, target_style,
+                                                         source_doc.part, page_width, available_width,
+                                                         warning_callback)
                 if special_para is not None:
                     self.stats["para"] += 1  # 计入统计
         
