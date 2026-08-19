@@ -918,81 +918,91 @@ class DocumentConverter:
         return int(round(val * emu_per_unit.get(unit, 12700)))
 
     @staticmethod
-    def _metafile_suffix(blob):
-        """根据魔数判断 WMF/EMF，返回 '.wmf' 或 '.emf'。"""
+    def _detect_image_format(blob):
+        """根据魔数判断图片格式，返回 'wmf'/'emf'/'png'/'jpeg'/'gif'/'bmp'/'tiff' 或 None。"""
         if blob[:4] == b'\xd7\xcd\xc6\x9a' or blob[:4] == b'\x01\x00\x09\x00':
-            return '.wmf'
-        return '.emf'  # EMF 头为 01 00 00 00
+            return 'wmf'
+        if blob[:4] == b'\x01\x00\x00\x00':
+            return 'emf'
+        if blob[:8] == b'\x89PNG\r\n\x1a\n':
+            return 'png'
+        if blob[:3] == b'\xff\xd8\xff':
+            return 'jpeg'
+        if blob[:4] == b'GIF8':
+            return 'gif'
+        if blob[:2] == b'BM':
+            return 'bmp'
+        if blob[:4] in (b'II*\x00', b'MM\x00*'):
+            return 'tiff'
+        return None
 
-    def _convert_via_libreoffice(self, blob, suffix):
-        """用 LibreOffice headless 把 WMF/EMF 转成 PNG。
+    def _insert_metafile_as_picture(self, run, blob, fmt, emu_w, emu_h):
+        """把 WMF/EMF 原始字节作为图片直接插入（绕过 add_picture 的格式限制）。
 
-        说明：Linux（Streamlit Cloud）上 Pillow 缺 drawwmf，而 Debian/Ubuntu 的
-        ImageMagick 默认未启用 WMF/EMF delegate，二者都不可靠；LibreOffice 原生
-        支持 WMF/EMF，是 Linux 上最稳的转换方式。
-        返回 PNG bytes，失败返回 None。"""
-        try:
-            import subprocess
-            import tempfile
-            import shutil
-            import pathlib
-            soffice = shutil.which('soffice') or shutil.which('libreoffice')
-            if not soffice:
-                print("[OLE-DIAG] 未找到 soffice/libreoffice 命令，无法转换 WMF/EMF")
-                return None
-            workdir = tempfile.mkdtemp(prefix='ole_conv_')
-            try:
-                src = os.path.join(workdir, 'preview' + suffix)
-                with open(src, 'wb') as f:
-                    f.write(blob)
-                # 每次用独立 profile，避免并发时 LibreOffice 用户配置锁冲突
-                profile = os.path.join(workdir, 'profile')
-                profile_uri = pathlib.Path(profile).as_uri()
-                cmd = [
-                    soffice, '--headless', '--norestore',
-                    '-env:UserInstallation=' + profile_uri,
-                    '--convert-to', 'png', '--outdir', workdir, src,
-                ]
-                r = subprocess.run(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
-                )
-                out_png = os.path.join(workdir, 'preview.png')
-                if os.path.exists(out_png):
-                    with open(out_png, 'rb') as f:
-                        return f.read()
-                stderr_tail = r.stderr.decode('utf-8', errors='ignore')[-300:]
-                print(f"[OLE-DIAG] LibreOffice 未产出 PNG: rc={r.returncode}, stderr={stderr_tail!r}")
-                return None
-            finally:
-                shutil.rmtree(workdir, ignore_errors=True)
-        except Exception as e:
-            print(f"[OLE-DIAG] LibreOffice 转换异常: {e!r}")
-            return None
+        Word 原生支持 WMF/EMF 矢量图，直接插入可无损保留、无需栅格化。
+        这既避免 Linux 上 Pillow 无法渲染 WMF/EMF 的问题，也避免引入 LibreOffice
+        等重量级系统依赖（拖慢 Streamlit Cloud 部署）。
+        """
+        from docx.opc.part import Part
+        from docx.opc.packuri import PackURI
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT, CONTENT_TYPE as CT
+        from docx.oxml.ns import nsdecls
 
-    def _ole_preview_to_png(self, blob):
-        """将 OLE 预览图转为 python-docx 支持的 PNG（WMF/EMF 等需转换）。
-        返回 PNG bytes，失败返回 None。
-        Windows 上 Pillow 可直接渲染 WMF/EMF；Linux（Streamlit Cloud）上 Pillow
-        缺少 drawwmf，此时降级到 LibreOffice 命令行转换。"""
-        if PIL_AVAILABLE:
-            try:
-                img = Image.open(io.BytesIO(blob))
-                fmt = (img.format or '').upper()
-                if fmt in ('PNG', 'JPEG', 'GIF', 'BMP', 'TIFF'):
-                    return blob
-                # WMF/EMF 等矢量或非常见格式 → 转 PNG
-                img = img.convert('RGB')
-                buf = io.BytesIO()
-                img.save(buf, 'PNG')
-                return buf.getvalue()
-            except Exception as e:
-                print(f"[OLE-DIAG] Pillow 渲染失败，降级到 LibreOffice: {e!r}")
-        # 降级：LibreOffice headless 转换 WMF/EMF
-        return self._convert_via_libreoffice(blob, self._metafile_suffix(blob))
+        counter = getattr(self, '_ole_image_counter', 0) + 1
+        self._ole_image_counter = counter
+
+        content_type = CT.X_WMF if fmt == 'wmf' else CT.X_EMF
+        partname = PackURI('/word/media/ole_preview_%d.%s' % (counter, fmt))
+        image_part = Part(partname, content_type, blob, run.part.package)
+        rId = run.part.relate_to(image_part, RT.IMAGE)
+
+        docPr_id = counter + 1000
+        drawing_xml = (
+            '<w:drawing %s>'
+            '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+            '<wp:extent cx="%d" cy="%d"/>'
+            '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            '<wp:docPr id="%d" name="OLE %d"/>'
+            '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+            '<a:graphic>'
+            '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic>'
+            '<pic:nvPicPr><pic:cNvPr id="0" name="ole_preview_%d"/><pic:cNvPicPr/></pic:nvPicPr>'
+            '<pic:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm>'
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            '</pic:pic>'
+            '</a:graphicData>'
+            '</a:graphic>'
+            '</wp:inline>'
+            '</w:drawing>'
+        ) % (
+            nsdecls('w', 'wp', 'a', 'pic', 'r'),
+            emu_w, emu_h,
+            docPr_id, docPr_id,
+            counter,
+            rId,
+            emu_w, emu_h,
+        )
+        run._element.append(parse_xml(drawing_xml))
+
+    def _add_ole_preview_image(self, run, blob, fmt, page_width_emu, available_width_emu, emu_w, emu_h):
+        """插入 OLE 预览图：WMF/EMF 直接插入原始矢量字节，其他格式走 add_picture。"""
+        # 超宽缩放（与 add_picture 保持一致）
+        if emu_w > available_width_emu:
+            target_w = int(page_width_emu * IMAGE_SCALE_RATIO)
+            scale = target_w / emu_w
+            emu_w = int(emu_w * scale)
+            emu_h = int(emu_h * scale)
+        if fmt in ('wmf', 'emf'):
+            self._insert_metafile_as_picture(run, blob, fmt, emu_w, emu_h)
+        else:
+            self.add_picture(run, blob, page_width_emu, available_width_emu, emu_w, emu_h)
     
     def _extract_ole_preview(self, part, obj_elem):
-        """从 OLE 对象中提取预览图并转为 PNG，返回 (png_bytes, emu_w, emu_h) 或 None。
-        显示尺寸从 v:shape 的 style 属性解析（pt → EMU），避免用 PNG 像素反推导致放大失真。"""
+        """从 OLE 对象中提取预览图，返回 (blob, emu_w, emu_h, fmt) 或 None。
+        fmt 为 'wmf'/'emf'/'png'/'jpeg' 等原始格式标识；WMF/EMF 不做栅格化转换。
+        显示尺寸从 v:shape 的 style 属性解析（pt → EMU），避免用图片像素反推导致失真。"""
         try:
             shape = obj_elem.find('{urn:schemas-microsoft-com:vml}shape')
             if shape is None:
@@ -1013,11 +1023,11 @@ class DocumentConverter:
                 print(f"[OLE-DIAG] 无法解析尺寸 style={style!r}")
                 return None
             blob = part.related_parts[rId].blob
-            png_bytes = self._ole_preview_to_png(blob)
-            if png_bytes is None:
-                print(f"[OLE-DIAG] 预览图转 PNG 失败 rId={rId} 头={blob[:4].hex()}")
+            fmt = self._detect_image_format(blob)
+            if fmt is None:
+                print(f"[OLE-DIAG] 无法识别预览图格式 rId={rId} 头={blob[:4].hex()}")
                 return None
-            return (png_bytes, emu_w, emu_h)
+            return (blob, emu_w, emu_h, fmt)
         except Exception as e:
             print(f"[OLE-DIAG] _extract_ole_preview 异常: {e!r}")
             return None
@@ -1105,9 +1115,9 @@ class DocumentConverter:
                     for obj in objects:
                         result = self._extract_ole_preview(source_part, obj)
                         if result is not None:
-                            png_bytes, emu_w, emu_h = result
+                            blob, emu_w, emu_h, fmt = result
                             pic_run = new_para.add_run()
-                            self.add_picture(pic_run, png_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            self._add_ole_preview_image(pic_run, blob, fmt, page_width_emu, available_width_emu, emu_w, emu_h)
                             inserted = True
                             break
                 if not inserted:
@@ -1232,9 +1242,9 @@ class DocumentConverter:
                     for obj in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object'):
                         result = self._extract_ole_preview(source_para.part, obj)
                         if result is not None:
-                            png_bytes, emu_w, emu_h = result
+                            blob, emu_w, emu_h, fmt = result
                             pic_run = new_para.add_run()
-                            self.add_picture(pic_run, png_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
+                            self._add_ole_preview_image(pic_run, blob, fmt, page_width_emu, available_width_emu, emu_w, emu_h)
                             inserted = True
                             break
                     if not inserted:
@@ -1664,9 +1674,9 @@ class DocumentConverter:
                 for obj in objects:
                     result = self._extract_ole_preview(para.part, obj)
                     if result is not None:
-                        png_bytes, emu_w, emu_h = result
+                        blob, emu_w, emu_h, fmt = result
                         pic_run = new_para.add_run()
-                        self.add_picture(pic_run, png_bytes, available_width_emu, available_width_emu, emu_w, emu_h)
+                        self._add_ole_preview_image(pic_run, blob, fmt, available_width_emu, available_width_emu, emu_w, emu_h)
                         inserted = True
                         break
                 if not inserted:
