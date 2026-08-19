@@ -614,7 +614,7 @@ st.markdown("""
 # 说明信息
 st.markdown("""
 <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
- <strong>说明：</strong>本程序不处理表格的合并单元格和文档中OLE图片（例如Visio原生图），文档转换后系统会告诉你，文档中是否有这些内容，需要你手动处理。文档转换完成后，请及时下载，文档在转换完成后会被清理。
+ <strong>说明：</strong>本程序不处理文档中OLE图片（例如Visio原生图），文档转换后系统会告诉你，文档中是否有这些内容，需要你手动处理。文档转换完成后，请及时下载，文档在转换完成后会被清理。
 </div>
 """, unsafe_allow_html=True)
 
@@ -1799,22 +1799,13 @@ if 'show_download_buttons' in st.session_state and st.session_state.show_downloa
                 st.success(f"✅ {result['name']} 转换成功")
                 # 显示警告汇总信息（如果有）
                 if result.get('warnings'):
-                    # 统计合并单元格表格数
-                    merge_table_count = sum(1 for w in result['warnings'] if '合并单元格' in w)
                     # 统计OLE/VML对象数
                     ole_vml_count = sum(1 for w in result['warnings'] if 'OLE/VML 对象' in w or 'OLE' in w or 'VML' in w)
                     
                     # 显示汇总警告信息
-                    if merge_table_count > 0 or ole_vml_count > 0:
-                        warning_parts = []
-                        if merge_table_count > 0:
-                            warning_parts.append(f"{merge_table_count}个有合并单元格的表格")
-                        if ole_vml_count > 0:
-                            warning_parts.append(f"{ole_vml_count}个OLE对象图片")
-                        
-                        warning_summary = "，".join(warning_parts)
+                    if ole_vml_count > 0:
                         st.warning(
-                            f"⚠️ **{result['name']}** 文件中包含{warning_summary}，请手动处理。"
+                            f"⚠️ **{result['name']}** 文件中包含{ole_vml_count}个OLE对象图片，请手动处理。"
                         )
             else:
                 st.error(f"❌ {result['name']} 转换失败: {result.get('msg', '')}")
@@ -1899,7 +1890,7 @@ with st.expander("📖 使用说明", expanded=False):
 - 将招标文件的祈使语气自动转为投标人口吻（"应""须""必须"→统统消失）
 - 五种应答句插入模式，自动批量生成应答内容
 - 图片/文本提示语插入，标注原文位置
-- 自动检测合并单元格、OLE对象、Visio图，转换后明确提醒
+- 自动检测OLE对象、Visio图，转换后明确提醒
 
 即便有上述限制，工具也已帮你完成绝大部分工作，剩下的就是舒心检查、把标书打磨得更完美。
 
@@ -1974,7 +1965,6 @@ with st.expander("📖 使用说明", expanded=False):
 ### ⚠️ 注意事项
 
 **已知限制：**
-- 含有合并单元格的表格，转换后会变为拆分模式，需手动调整
 - Visio 图无法自动转换，需在文档转换完成后手动粘贴
 - OLE 对象会自动替换为占位提示语 `[OLE对象，请手动复制]`，转换后请及时替换
 
