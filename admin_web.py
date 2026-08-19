@@ -319,7 +319,7 @@ def show_user_management():
                         )
                         if st.button("保存段落数", key=f"save_para_{selected_user_id}"):
                             user_data_dict['paragraphs_remaining'] = new_paragraphs
-                            save_user_data(selected_user_id, user_data_dict)
+                            save_user_data(user_data_dict, selected_user_id)
                             st.success("✅ 段落数已更新")
                             st.rerun()
                     
@@ -332,7 +332,7 @@ def show_user_management():
                         )
                         if st.button("保存余额", key=f"save_balance_{selected_user_id}"):
                             user_data_dict['balance'] = new_balance
-                            save_user_data(selected_user_id, user_data_dict)
+                            save_user_data(user_data_dict, selected_user_id)
                             st.success("✅ 余额已更新")
                             st.rerun()
                 else:

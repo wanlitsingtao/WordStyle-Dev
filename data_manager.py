@@ -200,9 +200,13 @@ elif DATA_SOURCE == "supabase":
         
         def _save_user(user_data: Dict[str, Any], user_id: str = None):
             """保存用户数据到 Supabase
-            
-            [FIX] 修复：将 style_mappings 等 JSONB 字段真正写入数据库，
-            而非空操作。保存范围限定为可持久化的配置字段。
+
+            保存配置字段（style_mappings、conversion_history）以及计费字段
+            （balance、paragraphs_remaining、total_paragraphs_used、total_converted）。
+
+            [FIX] 修复 supabase 模式下转换后段落额度不减少的问题：
+            之前只保存配置字段、不保存计费字段，导致 app.py 在 user_data 字典中
+            扣减段落额度后无法持久化到数据库。现在同时保存计费字段。
             """
             if not user_id:
                 logger.warning("⚠ _save_user 缺少 user_id，跳过保存")
@@ -211,14 +215,23 @@ elif DATA_SOURCE == "supabase":
             try:
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
-                    # 仅更新可持久化的配置字段（不覆盖计费/任务字段）
+                    # 保存配置字段
                     if 'style_mappings' in user_data:
                         user.style_mappings = user_data['style_mappings']
                     if 'conversion_history' in user_data:
                         user.conversion_history = user_data['conversion_history']
+                    # [FIX] 保存计费字段，确保段落额度扣减、累计使用量能持久化
+                    if 'balance' in user_data:
+                        user.balance = user_data['balance']
+                    if 'paragraphs_remaining' in user_data:
+                        user.paragraphs_remaining = user_data['paragraphs_remaining']
+                    if 'total_paragraphs_used' in user_data:
+                        user.total_paragraphs_used = user_data['total_paragraphs_used']
+                    if 'total_converted' in user_data:
+                        user.total_converted = user_data['total_converted']
                     user.updated_at = datetime.now()
                     db.commit()
-                    logger.info(f"[OK] 用户 {user_id} 的配置已保存到数据库")
+                    logger.info(f"[OK] 用户 {user_id} 的数据已保存到数据库")
                 else:
                     logger.warning(f"⚠ 用户 {user_id} 不存在于数据库，无法保存")
             except Exception as e:
