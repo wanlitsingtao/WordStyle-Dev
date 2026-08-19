@@ -917,23 +917,72 @@ class DocumentConverter:
         }
         return int(round(val * emu_per_unit.get(unit, 12700)))
 
-    def _ole_preview_to_png(self, blob):
-        """将 OLE 预览图转为 python-docx 支持的 PNG（WMF/EMF 等需转换）。
+    def _convert_metafile_external(self, blob):
+        """PIL 无法渲染 WMF/EMF 时（如 Linux 上 Pillow 缺少 drawwmf 扩展），
+        降级尝试用 ImageMagick / libwmf 命令行工具转换为 PNG。
         返回 PNG bytes，失败返回 None。"""
-        if not PIL_AVAILABLE:
-            return None
         try:
-            img = Image.open(io.BytesIO(blob))
-            fmt = (img.format or '').upper()
-            if fmt in ('PNG', 'JPEG', 'GIF', 'BMP', 'TIFF'):
-                return blob
-            # WMF/EMF 等矢量或非常见格式 → 转 PNG
-            img = img.convert('RGB')
-            buf = io.BytesIO()
-            img.save(buf, 'PNG')
-            return buf.getvalue()
+            import subprocess
+            import tempfile
+            import shutil
+            tool = None
+            for candidate in ('magick', 'convert'):
+                if shutil.which(candidate):
+                    tool = candidate
+                    break
+            if tool is None:
+                return None
+            # 根据魔数判断 WMF/EMF，设置正确扩展名（ImageMagick 按扩展名/内容识别）
+            if blob[:4] == b'\xd7\xcd\xc6\x9a' or blob[:4] == b'\x01\x00\x09\x00':
+                suffix = '.wmf'
+            else:
+                suffix = '.emf'  # EMF 头为 01 00 00 00
+            fd, tmp_in = tempfile.mkstemp(suffix=suffix)
+            tmp_out = tmp_in + '.png'
+            try:
+                os.write(fd, blob)
+                os.close(fd)
+                subprocess.run(
+                    [tool, tmp_in, tmp_out],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+                if os.path.exists(tmp_out):
+                    with open(tmp_out, 'rb') as f:
+                        return f.read()
+                return None
+            finally:
+                for p in (tmp_in, tmp_out):
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except OSError:
+                        pass
         except Exception:
             return None
+
+    def _ole_preview_to_png(self, blob):
+        """将 OLE 预览图转为 python-docx 支持的 PNG（WMF/EMF 等需转换）。
+        返回 PNG bytes，失败返回 None。
+        Windows 上 Pillow 可直接渲染 WMF/EMF；Linux（Streamlit Cloud）上 Pillow
+        缺少 drawwmf，此时降级到 ImageMagick 命令行转换。"""
+        if PIL_AVAILABLE:
+            try:
+                img = Image.open(io.BytesIO(blob))
+                fmt = (img.format or '').upper()
+                if fmt in ('PNG', 'JPEG', 'GIF', 'BMP', 'TIFF'):
+                    return blob
+                # WMF/EMF 等矢量或非常见格式 → 转 PNG
+                img = img.convert('RGB')
+                buf = io.BytesIO()
+                img.save(buf, 'PNG')
+                return buf.getvalue()
+            except Exception:
+                pass  # PIL 失败（如 Linux 无 drawwmf），走外部工具降级
+        # 降级：尝试 ImageMagick / libwmf
+        return self._convert_metafile_external(blob)
     
     def _extract_ole_preview(self, part, obj_elem):
         """从 OLE 对象中提取预览图并转为 PNG，返回 (png_bytes, emu_w, emu_h) 或 None。
