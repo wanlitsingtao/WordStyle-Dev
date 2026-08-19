@@ -787,10 +787,6 @@ with st.sidebar:
     # if st.button("📋 查看转换历史", use_container_width=True, key="view_history_btn"):
     #     show_history_dialog()
     
-    # 需求提交入口
-    if st.button("💡 提交需求/反馈", use_container_width=True, key="feedback_btn"):
-        show_feedback_dialog()
-    
     # 管理后台入口（隐藏链接，通过URL访问）
     # st.markdown("[[TOOL] 管理后台](/?page=admin)")
     
@@ -976,6 +972,10 @@ with st.sidebar:
                         st.rerun()
                     else:
                         st.error(msg)
+
+    # 需求提交入口
+    if st.button("💡 提交需求/反馈", use_container_width=True, key="feedback_btn"):
+        show_feedback_dialog()
 
     # 居中显示版本号和版权信息
     col1, col2, col3 = st.columns([1, 6, 1])
