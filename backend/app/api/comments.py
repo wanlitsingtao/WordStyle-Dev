@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
+from uuid import UUID
 
 from ..core.database import get_db
 from ..models import Comment
@@ -159,16 +160,17 @@ def get_comment_stats(db: Session = Depends(get_db)):
 
 @router.put("/like/{comment_id}")
 def like_comment(
-    comment_id: int,
+    comment_id: str,
     db: Session = Depends(get_db)
 ):
     """
     点赞评论
-    
-    - **comment_id**: 评论ID
+
+    - **comment_id**: 评论ID（UUID 字符串）
     """
     try:
-        comment = db.query(Comment).filter(Comment.id == comment_id).first()
+        # [FIX] 评论主键为 UUID，前端传入的是 UUID 字符串，需转换后查询
+        comment = db.query(Comment).filter(Comment.id == UUID(comment_id)).first()
         
         if not comment:
             raise HTTPException(status_code=404, detail="评论不存在")
@@ -184,6 +186,8 @@ def like_comment(
     
     except HTTPException:
         raise
+    except ValueError:
+        raise HTTPException(status_code=422, detail="无效的评论ID格式")
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"点赞失败: {str(e)}")
@@ -191,16 +195,17 @@ def like_comment(
 
 @router.delete("/{comment_id}")
 def delete_comment(
-    comment_id: int,
+    comment_id: str,
     db: Session = Depends(get_db)
 ):
     """
     删除评论（管理员功能）
-    
-    - **comment_id**: 评论ID
+
+    - **comment_id**: 评论ID（UUID 字符串）
     """
     try:
-        comment = db.query(Comment).filter(Comment.id == comment_id).first()
+        # [FIX] 评论主键为 UUID，前端传入的是 UUID 字符串，需转换后查询
+        comment = db.query(Comment).filter(Comment.id == UUID(comment_id)).first()
         
         if not comment:
             raise HTTPException(status_code=404, detail="评论不存在")
@@ -215,6 +220,8 @@ def delete_comment(
     
     except HTTPException:
         raise
+    except ValueError:
+        raise HTTPException(status_code=422, detail="无效的评论ID格式")
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"删除评论失败: {str(e)}")
