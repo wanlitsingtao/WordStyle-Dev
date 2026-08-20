@@ -30,6 +30,7 @@ st.set_page_config(
 import os
 import sys
 import json
+import time
 import threading
 import logging
 from datetime import datetime, timedelta
@@ -55,34 +56,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger('WordStyle')
 
-# [OK] 服务启动时执行文件清理
-try:
-    from file_manager import cleanup_on_startup
-    cleanup_on_startup()
-except Exception as e:
-    logger.warning(f"启动时文件清理失败（不影响服务）: {e}")
+# [OK] 服务级单例：Streamlit rerun 时复用清理任务和后台线程
+@st.cache_resource
+def _start_file_cleanup_scheduler():
+    try:
+        from file_manager import cleanup_on_startup, schedule_daily_cleanup
+        cleanup_on_startup()
 
-# [OK] 设置每日定时清理任务（每天零点执行）
-try:
-    from apscheduler.schedulers.background import BackgroundScheduler
-    from file_manager import schedule_daily_cleanup
-    
-    scheduler = BackgroundScheduler()
-    # 每天零点执行清理
-    scheduler.add_job(
-        func=schedule_daily_cleanup,
-        trigger='cron',
-        hour=0,
-        minute=0,
-        id='daily_file_cleanup',
-        name='每日文件清理任务'
-    )
-    scheduler.start()
-    logger.info("[OK] 每日文件清理任务已启动（每天零点执行）")
-except ImportError:
-    logger.warning("[WARN] APScheduler未安装，跳过定时清理任务")
-except Exception as e:
-    logger.warning(f"定时清理任务启动失败: {e}")
+        from apscheduler.schedulers.background import BackgroundScheduler
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            func=schedule_daily_cleanup,
+            trigger='cron',
+            hour=0,
+            minute=0,
+            id='daily_file_cleanup',
+            name='每日文件清理任务',
+            replace_existing=True
+        )
+        scheduler.start()
+        logger.info("[OK] 每日文件清理任务已启动（每天零点执行）")
+        return scheduler
+    except ImportError:
+        logger.warning("[WARN] APScheduler未安装，跳过定时清理任务")
+    except Exception as e:
+        logger.warning(f"定时清理任务启动失败: {e}")
+    return None
+
+
+_start_file_cleanup_scheduler()
 
 # 添加当前目录到路径，以便导入其他模块
 sys.path.insert(0, os.path.dirname(__file__))
@@ -102,8 +104,22 @@ from utils import (
 
 # 导入用户管理
 from data_manager import (
-    load_user_data, save_user_data, claim_free_paragraphs, register_or_login_user
+    load_user_data, save_user_data, claim_free_paragraphs, register_or_login_user,
+    get_config
 )
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _get_cached_config(key):
+    """短期缓存不随页面 rerun 变化的系统配置。"""
+    return get_config(key)
+
+
+@st.cache_data(show_spinner=False)
+def _get_image_base64(image_path):
+    with open(image_path, 'rb') as image_file:
+        import base64
+        return base64.b64encode(image_file.read()).decode()
 
 # 导入评论管理
 from comments_manager import (
@@ -144,21 +160,31 @@ try:
     # 第二步：通过设备指纹从数据库获取或创建用户
     # 但是如果用户已通过账号登录，则保持登录身份不变
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)
+    _user_cache_key = f"account:{_logged_in_uid}" if _logged_in_uid else f"device:{device_fingerprint}"
+    _cached_user_data = st.session_state.get('user_data')
+    _use_cached_user_data = (
+        _cached_user_data is not None
+        and st.session_state.get('user_data_cache_key') == _user_cache_key
+        and not st.session_state.get('user_data_stale', False)
+    )
     if _logged_in_uid:
         # 已登录：使用账号身份，加载账号对应的用户数据（而非设备指纹数据）
         app_state.set_user_id(_logged_in_uid)
         app_state.set_device_fingerprint(device_fingerprint)
-        user_data = load_user_data(_logged_in_uid)
+        user_data = _cached_user_data if _use_cached_user_data else load_user_data(_logged_in_uid)
         if not user_data:
             # 降级：如果账号数据加载失败，回退到设备指纹
             user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
         logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}, 额度: {user_data.get('paragraphs_remaining', 0)}")
     else:
-        user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+        user_data = _cached_user_data if _use_cached_user_data else get_or_create_user_by_device(device_fingerprint, user_agent)
         app_state.set_user_id(user_data['user_id'])
         app_state.set_device_fingerprint(device_fingerprint)
         logger.info(f"[OK] 用户初始化成功 - ID: {app_state.get_user_id()}")
     user_init_success = True
+    st.session_state.user_data = user_data
+    st.session_state.user_data_cache_key = _user_cache_key
+    st.session_state.user_data_stale = False
     
 except Exception as e:
     logger.error(f"[ERROR] 用户初始化失败: {e}", exc_info=True)
@@ -207,6 +233,7 @@ else:
     if not user_init_success:
         logger.warning("[WARN] 用户初始化失败，跳过额度领取")
 
+st.session_state.user_data = user_data
 logger.info(f"用户 {app_state.get_user_id()} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 
 
@@ -359,8 +386,11 @@ def show_comments_section():
         app_state.set_comment_refresh_needed(False)  # 清除标记
         st.rerun()  # 刷新fragment以加载最新评论
     
-    # 加载评论
-    comments = load_comments()
+    # 会话内复用评论列表，发表评论或点赞后由上方逻辑主动失效
+    comments = st.session_state.get('comments_cache')
+    if comments is None:
+        comments = load_comments()
+        st.session_state.comments_cache = comments
     
     # 显示统计信息
     col1, col2, col3 = st.columns(3)
@@ -404,6 +434,7 @@ def show_comments_section():
                     
                     if new_comment:
                         st.success("✅ 评论发表成功！")
+                        st.session_state.comments_cache = None
                         # [OK] 优化：设置标记，告诉侧边栏使用缓存数据
                         st.session_state.comment_refresh_only = True
                         # 使用session_state标记，通知fragment刷新
@@ -438,6 +469,7 @@ def show_comments_section():
                     likes = comment.get('likes', 0)
                     if st.button(f"👍 {likes}", key=f"like_{comment['id']}"):
                         like_comment(comment['id'])
+                        st.session_state.comments_cache = None
                         # Streamlit会在按钮点击后自动重新运行脚本
                 
                 # 显示评论内容
@@ -451,35 +483,13 @@ def show_comments_section():
 
 
 # ==================== 页面配置 ====================
-# ==================== 定期清理过期文件 ====================
-# 每次加载页面时检查并清理7天前的转换结果文件
-try:
-    import time
-    results_dir = Path("conversion_results")
-    if results_dir.exists():
-        now = time.time()
-        seven_days_ago = now - (7 * 24 * 3600)
-        cleaned_count = 0
-        for file_path in results_dir.glob("*.docx"):
-            if file_path.stat().st_mtime < seven_days_ago:
-                try:
-                    file_path.unlink()
-                    cleaned_count += 1
-                except Exception as e:
-                    logger.error(f"清理文件失败 {file_path}: {e}")
-        if cleaned_count > 0:
-            logger.info(f"已清理 {cleaned_count} 个过期的转换结果文件")
-except Exception as e:
-    logger.error(f"清理过期文件失败: {e}")
-
 # ==================== 应用启动时清理临时文件 ====================
 # [WARN] 已禁用：cleanup_on_startup 函数已被移除
 # 临时文件清理功能已整合到其他模块中
 
 # ==================== 维护模式检查（每次页面渲染时执行）====================
 try:
-    from data_manager import get_config
-    maintenance_mode = get_config('maintenance_mode')
+    maintenance_mode = _get_cached_config('maintenance_mode')
     
     # 处理多种可能的值类型：字符串'true'、布尔值True、字符串'1'等
     is_maintenance = False
@@ -493,8 +503,6 @@ try:
     
     if is_maintenance:
         # 如果启用维护模式，显示维护页面并停止执行
-        import base64
-        
         # 获取当前脚本所在目录
         script_dir = Path(__file__).parent
         logo_path = script_dir / "resource" / "wh.jpg"
@@ -564,8 +572,7 @@ try:
         # 显示Logo图片（铺满全屏，完整显示不裁剪）
         if logo_path.exists():
             try:
-                with open(logo_path, 'rb') as f:
-                    encoded_image = base64.b64encode(f.read()).decode()
+                encoded_image = _get_image_base64(str(logo_path))
                 
                 st.markdown(f'''
                 <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0; overflow: hidden;">
@@ -589,11 +596,9 @@ except Exception as e:
 
 # ==================== 主界面 ====================
 # 使用 resource/logo.png 替换 emoji 图标
-import base64 as _b64
 _logo_path = Path(__file__).parent / "resource" / "logo.png"
 if _logo_path.exists():
-    with open(_logo_path, 'rb') as _f:
-        _logo_b64 = _b64.b64encode(_f.read()).decode()
+    _logo_b64 = _get_image_base64(str(_logo_path))
     st.markdown(f'''
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.5rem;">
         <img src="data:image/png;base64,{_logo_b64}" 
@@ -717,15 +722,9 @@ with st.sidebar:
     
     # [OK] 只有初始化成功才从 API 加载数据
     if not st.session_state.get('user_init_failed', False):
-        # [OK] 优化：缓存侧边栏用户数据，避免评论刷新时重复加载
-        if 'sidebar_user_data' not in st.session_state or not st.session_state.get('comment_refresh_only', False):
-            user_data = load_user_data(app_state.get_user_id())
-            st.session_state.sidebar_user_data = user_data
-        else:
-            # 使用缓存的用户数据
-            user_data = st.session_state.sidebar_user_data
-            # 清除标记，下次正常加载
-            st.session_state.comment_refresh_only = False
+        # 复用页面初始化阶段加载的数据，写操作通过 user_data_stale 触发刷新
+        user_data = st.session_state.get('user_data', user_data)
+        st.session_state.sidebar_user_data = user_data
     else:
         # 初始化失败：使用本地默认数据（额度为0）
         user_data = {
@@ -815,6 +814,7 @@ with st.sidebar:
                         st.session_state.logged_in_username = None
                         st.session_state.logged_in_user_id = None
                         st.session_state.sidebar_user_data = None
+                        st.session_state.user_data_stale = True
                         st.session_state.show_unbind_confirm = False
                         st.success(msg + " 已恢复设备指纹身份。")
                         st.rerun()
@@ -834,6 +834,7 @@ with st.sidebar:
             st.session_state.logged_in_username = None
             st.session_state.logged_in_user_id = None
             st.session_state.sidebar_user_data = None  # 强制刷新用户数据
+            st.session_state.user_data_stale = True
             st.rerun()
     else:
         # 未登录状态：显示绑定/登录按钮
@@ -900,6 +901,7 @@ with st.sidebar:
                         st.session_state.logged_in_username = bind_username.strip()
                         st.session_state.logged_in_user_id = app_state.get_user_id()
                         st.session_state.sidebar_user_data = None
+                        st.session_state.user_data_stale = True
                         st.session_state.show_bind_dialog = False
                         for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
                             st.session_state.pop(k, None)
@@ -949,6 +951,7 @@ with st.sidebar:
                         # 切换身份后刷新用户数据
                         app_state.set_user_id(user_id)
                         st.session_state.sidebar_user_data = None
+                        st.session_state.user_data_stale = True
                         st.session_state.show_login_dialog = False
                         for k in ('login_username_input', 'login_password_input'):
                             st.session_state.pop(k, None)
@@ -1095,13 +1098,13 @@ if current_source_files:
                     completed_files_progress = (idx - 1) * (100 / total_files)
                     current_file_progress = ((para_idx + 1) / current_file_total) * (100 / total_files)
                     total_progress = completed_files_progress + current_file_progress
-                    
-                    progress_bar.progress(min(total_progress / 100, 1.0))
+
+                    now = time.monotonic()
+                    last_progress_update = st.session_state.get('_analysis_progress_time', 0.0)
+                    if now - last_progress_update >= 0.2 or para_idx == len(doc.paragraphs) - 1:
+                        progress_bar.progress(min(total_progress / 100, 1.0))
+                        st.session_state._analysis_progress_time = now
                 
-                # 强制更新界面
-                if para_idx % 50 == 0:
-                    st.session_state._progress_update = True
-            
             # 保存该文件的样式和段落数
             file_styles_map[source_file.name] = sorted(list(styles))
             
@@ -1243,26 +1246,27 @@ st.subheader("⚙️ 转换配置")
 # ====================================================================
 _user_defaults = {}
 _sm = {}  # ★ 修复：初始化，供下方 file_style_mappings 使用
-try:
-    _uid = app_state.get_user_id()
-    if _uid:
-        _ud = load_user_data(_uid)
-        if _ud and 'style_mappings' in _ud:
-            _sm = _ud['style_mappings']
-            _user_defaults = {
-                'hint':      _sm.get('_default_hint_settings', {}) or {},
-                'answer':    _sm.get('_default_answer_config', {}) or {},
-                'list':      _sm.get('_default_list_config', {}) or {},
-                'tbl_img':   _sm.get('_default_tbl_img_config', {}) or {},
-                'rm_chapter': _sm.get('_default_remove_chapter_label', None),
-            }
-except Exception:
-    pass
 
 # ★ 修复：将 style_mappings 完整加载到 session_state
 # 桌面版/Web版"设为默认"保存的样式映射、表格/图片/列表兜底配置，
 # 页面刷新/重启后通过此处恢复到 session_state，供转换时回退使用
 if 'file_style_mappings' not in st.session_state:
+    # 仅首次会话初始化时读取持久化默认配置
+    try:
+        _uid = app_state.get_user_id()
+        if _uid:
+            _ud = load_user_data(_uid)
+            if _ud and 'style_mappings' in _ud:
+                _sm = _ud['style_mappings']
+                _user_defaults = {
+                    'hint':      _sm.get('_default_hint_settings', {}) or {},
+                    'answer':    _sm.get('_default_answer_config', {}) or {},
+                    'list':      _sm.get('_default_list_config', {}) or {},
+                    'tbl_img':   _sm.get('_default_tbl_img_config', {}) or {},
+                    'rm_chapter': _sm.get('_default_remove_chapter_label', None),
+                }
+    except Exception:
+        pass
     st.session_state.file_style_mappings = _sm if isinstance(_sm, dict) else {}
 
 _h  = _user_defaults.get('hint', {})
@@ -1558,13 +1562,18 @@ else:
                     
                     # 进度回调函数 - 实时更新进度杀
                     def make_progress_callback(file_idx, total_files):
+                        last_update = [0.0]
+
                         def callback(step, message):
                             # 计算总体进度 (10% - 80%)
                             base_progress = 10 + int((file_idx / total_files) * 70)
                             step_progress = int((step / 7) * (70 / total_files))
                             current_progress = min(base_progress + step_progress, 80)
-                            progress_bar.progress(current_progress)
-                            status_placeholder.text(f"⏀{message}")
+                            now = time.monotonic()
+                            if current_progress >= 80 or now - last_update[0] >= 0.2:
+                                progress_bar.progress(current_progress)
+                                status_placeholder.text(f"⏀{message}")
+                                last_update[0] = now
                         return callback
                     
                     # [HIGH_VOLTAGE] 性能优化：传递缓存的样式列表，避免重复分枀
@@ -1686,6 +1695,7 @@ else:
                     # 保存用户数据（使用统一数据接口（
                     from data_manager import save_user_data
                     save_user_data(user_data, st.session_state.user_id)
+                    st.session_state.user_data_stale = True
                     
                     # [OK] 修复：将转换结果文件路径保存刀session_state，防止刷新后丢失
                     if 'recent_results' not in st.session_state:
@@ -1874,7 +1884,7 @@ st.markdown("""
 with st.expander("📖 使用说明", expanded=False):
     # 动态获取免费额度配置
     try:
-        free_paragraphs_value = get_config('free_paragraphs_daily')
+        free_paragraphs_value = _get_cached_config('free_paragraphs_daily')
         if free_paragraphs_value:
             free_paragraphs_display = f"{int(free_paragraphs_value):,}"
         else:

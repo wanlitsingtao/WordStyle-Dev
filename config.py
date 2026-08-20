@@ -94,7 +94,9 @@ def _load_config_from_secrets():
                 'backend_url': backend_url
             }
     except Exception as e:
-        print(f"[WARN] 读取 Streamlit Secrets 出错: {e}")
+        # 本地开发没有 secrets.toml 时正常回退到 .env/环境变量
+        if 'No secrets found' not in str(e):
+            print(f"[WARN] 读取 Streamlit Secrets 出错: {e}")
     return None
 
 # 尝试从 Streamlit Secrets 加载

@@ -24,7 +24,8 @@ def _load_database_url():
                 database_url = secrets_db_url
                 print(f"[OK] 从 Streamlit Secrets 加载 DATABASE_URL")
     except Exception as e:
-        print(f"[WARN] 读取 Streamlit Secrets 失败: {e}")
+        if 'No secrets found' not in str(e):
+            print(f"[WARN] 读取 Streamlit Secrets 失败: {e}")
     
     # 2. 从环境变量读取
     if not database_url:

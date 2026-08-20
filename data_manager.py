@@ -12,6 +12,7 @@ import os
 import sys
 import logging
 import requests
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -22,6 +23,17 @@ logger = logging.getLogger(__name__)
 # 导入配置
 sys.path.insert(0, os.path.dirname(__file__))
 from config import DATA_SOURCE, DATABASE_URL, BACKEND_URL, USER_DATA_FILE, TASKS_DB_FILE
+
+
+@lru_cache(maxsize=1)
+def _get_supabase_engine():
+    """复用 Supabase 直连引擎，避免每次请求重建连接池。"""
+    from sqlalchemy import create_engine
+
+    direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
+    if ':6543' not in direct_url and ':5432' not in direct_url:
+        direct_url = DATABASE_URL
+    return create_engine(direct_url, pool_pre_ping=True)
 
 # ==================== 本地模式导入 ====================
 if DATA_SOURCE == "local":
@@ -1299,7 +1311,7 @@ def get_all_configs() -> Dict:
                 # 如果已经是直连URL，直接使用
                 direct_url = DATABASE_URL
             
-            engine = create_engine(direct_url)
+            engine = _get_supabase_engine()
             with engine.connect() as conn:
                 result = conn.execute(text("SELECT config_key, config_value, description, updated_at FROM system_config ORDER BY config_key"))
                 rows = result.fetchall()
@@ -1387,7 +1399,7 @@ def get_config(key: str) -> Optional[str]:
             if ':6543' not in direct_url and ':5432' not in direct_url:
                 direct_url = DATABASE_URL
             
-            engine = create_engine(direct_url)
+            engine = _get_supabase_engine()
             with engine.connect() as conn:
                 result = conn.execute(
                     text("SELECT config_value FROM system_config WHERE config_key = :key"),
@@ -1460,7 +1472,7 @@ def update_config(key: str, value: str, description: str = None) -> Dict:
             if ':6543' not in direct_url and ':5432' not in direct_url:
                 direct_url = DATABASE_URL
             
-            engine = create_engine(direct_url)
+            engine = _get_supabase_engine()
             with engine.connect() as conn:
                 # 检查是否存在
                 result = conn.execute(text("SELECT id FROM system_config WHERE config_key = :key"), {"key": key})
@@ -1599,7 +1611,7 @@ def init_default_configs() -> Dict:
             if ':6543' not in direct_url and ':5432' not in direct_url:
                 direct_url = DATABASE_URL
             
-            engine = create_engine(direct_url)
+            engine = _get_supabase_engine()
             
             default_configs = [
                 {"config_key": "paragraph_price", "config_value": "0.001", "description": "每个段落的价格（元）"},
