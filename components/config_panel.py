@@ -158,6 +158,8 @@ def render_conversion_config():
             hint_style_idx = 0
 
     # 读取当前类型（保持选择状态）
+    if 'hint_type_config' not in st.session_state:
+        st.session_state.hint_type_config = 'text'
     hint_type = st.session_state.get('hint_type_config', 'text')
     hint_text = st.session_state.get('hint_text_config', '招标文件原文')
     hint_image_path = st.session_state.get('hint_image_config', None)
@@ -199,7 +201,6 @@ def render_conversion_config():
                 "类型",
                 options=["text", "image"],
                 format_func=lambda x: "文本" if x == "text" else "图片",
-                index=0 if st.session_state.get('hint_type_config', 'text') == "text" else 1,
                 horizontal=True,
                 key="hint_type_config",
                 label_visibility="collapsed"

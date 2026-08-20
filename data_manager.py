@@ -1296,13 +1296,8 @@ def _get_supabase_engine():
     if _supabase_engine is None:
         from sqlalchemy import create_engine
 
-        # 将连接池器URL转换为直连URL（端口5432）
-        direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-        if ':6543' not in direct_url and ':5432' not in direct_url:
-            # 如果已经是直连URL，直接使用
-            direct_url = DATABASE_URL
-
-        _supabase_engine = create_engine(direct_url, pool_pre_ping=True)
+        # 保留 Supabase pooler 连接串（6543）；不要把 pooler 主机改成直连主机。
+        _supabase_engine = create_engine(DATABASE_URL, pool_pre_ping=True)
     return _supabase_engine
 
 

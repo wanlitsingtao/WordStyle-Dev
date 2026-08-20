@@ -4,6 +4,14 @@ WordStyle Pro - Web管理后台
 支持双模式数据源（本地SQLite/云端Supabase）
 """
 import streamlit as st
+
+st.set_page_config(
+    page_title="WordStyle Pro - 管理后台",
+    page_icon="🔧",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import sys
 import os
 from datetime import datetime, timedelta
@@ -57,14 +65,6 @@ with st.sidebar.expander("诊断信息"):
         else:
             safe_url = "***"
         st.write(f"**数据库连接**: {safe_url}")
-
-# ==================== 页面配置 ====================
-st.set_page_config(
-    page_title="WordStyle Pro - 管理后台",
-    page_icon="🔧",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # ==================== 样式优化 ====================
 st.markdown("""
