@@ -30,7 +30,6 @@ st.set_page_config(
 import os
 import sys
 import json
-import time
 import threading
 import logging
 from datetime import datetime, timedelta
@@ -56,15 +55,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger('WordStyle')
 
-# [OK] 服务级单例：Streamlit rerun 时复用清理任务和后台线程
+# [OK] 启动时文件清理 + 每日定时清理任务（进程级单例，仅初始化一次）
+# [PERF] 修复：旧代码每次 rerun 都新建 BackgroundScheduler 线程（线程泄漏），
+# 用户交互 N 次 → 进程内堆积 N 个调度器线程。改用 @st.cache_resource 保证只启动一次。
 @st.cache_resource
-def _start_file_cleanup_scheduler():
+def _start_background_services():
+    """
+    启动后台服务（进程级单例）：
+    1. 服务启动时执行文件清理
+    2. 每日定时清理任务（APScheduler，每天零点执行）
+    使用 @st.cache_resource 装饰，Streamlit 每次 rerun 复用同一实例，
+    避免线程/内存泄漏。
+    """
+    # 1. 服务启动时执行文件清理
     try:
-        from file_manager import cleanup_on_startup, schedule_daily_cleanup
+        from file_manager import cleanup_on_startup
         cleanup_on_startup()
+        logger.info("[OK] 启动时文件清理完成")
+    except Exception as e:
+        logger.warning(f"启动时文件清理失败（不影响服务）: {e}")
 
+    # 2. 每日定时清理任务（每天零点执行）
+    try:
         from apscheduler.schedulers.background import BackgroundScheduler
+        from file_manager import schedule_daily_cleanup
+
         scheduler = BackgroundScheduler()
+        # 每天零点执行清理（replace_existing 防止重复注册）
         scheduler.add_job(
             func=schedule_daily_cleanup,
             trigger='cron',
@@ -83,8 +100,7 @@ def _start_file_cleanup_scheduler():
         logger.warning(f"定时清理任务启动失败: {e}")
     return None
 
-
-_start_file_cleanup_scheduler()
+_start_background_services()
 
 # 添加当前目录到路径，以便导入其他模块
 sys.path.insert(0, os.path.dirname(__file__))
@@ -104,22 +120,8 @@ from utils import (
 
 # 导入用户管理
 from data_manager import (
-    load_user_data, save_user_data, claim_free_paragraphs, register_or_login_user,
-    get_config
+    load_user_data, save_user_data, claim_free_paragraphs, register_or_login_user
 )
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _get_cached_config(key):
-    """短期缓存不随页面 rerun 变化的系统配置。"""
-    return get_config(key)
-
-
-@st.cache_data(show_spinner=False)
-def _get_image_base64(image_path):
-    with open(image_path, 'rb') as image_file:
-        import base64
-        return base64.b64encode(image_file.read()).decode()
 
 # 导入评论管理
 from comments_manager import (
@@ -157,34 +159,44 @@ try:
         logger.warning(f"[WARN] User-Agent获取失败，使用备用方案: {e}")
         device_fingerprint = generate_device_fingerprint(f"fallback_{id(st.session_state)}")
     
-    # 第二步：通过设备指纹从数据库获取或创建用户
+    # 第二步：通过设备指纹从数据库获取或创建用户（带会话级缓存守卫）
     # 但是如果用户已通过账号登录，则保持登录身份不变
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)
-    _user_cache_key = f"account:{_logged_in_uid}" if _logged_in_uid else f"device:{device_fingerprint}"
-    _cached_user_data = st.session_state.get('user_data')
-    _use_cached_user_data = (
-        _cached_user_data is not None
-        and st.session_state.get('user_data_cache_key') == _user_cache_key
-        and not st.session_state.get('user_data_stale', False)
-    )
-    if _logged_in_uid:
-        # 已登录：使用账号身份，加载账号对应的用户数据（而非设备指纹数据）
-        app_state.set_user_id(_logged_in_uid)
-        app_state.set_device_fingerprint(device_fingerprint)
-        user_data = _cached_user_data if _use_cached_user_data else load_user_data(_logged_in_uid)
-        if not user_data:
-            # 降级：如果账号数据加载失败，回退到设备指纹
-            user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
-        logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}, 额度: {user_data.get('paragraphs_remaining', 0)}")
-    else:
-        user_data = _cached_user_data if _use_cached_user_data else get_or_create_user_by_device(device_fingerprint, user_agent)
+    
+    # [PERF] 身份标识：登录账号 或 设备指纹。身份变化（登录/退出/解绑）时强制重新加载
+    _identity_key = _logged_in_uid or f"device_{device_fingerprint}"
+    if st.session_state.get('_user_init_identity') != _identity_key:
+        # 身份已变化：清除旧缓存，强制重新初始化
+        st.session_state.pop('user_data', None)
+        st.session_state.pop('sidebar_user_data', None)
+        st.session_state._user_init_identity = _identity_key
+    
+    # [PERF] 用户数据会话级缓存：仅首次 rerun（或标记失效/身份变化）时才请求后端，
+    # 消除"每次交互都串行执行用户初始化请求"的性能瓶颈
+    if 'user_data' in st.session_state and not st.session_state.get('user_data_stale', False):
+        # 缓存命中：直接复用，不再发网络/数据库请求
+        user_data = st.session_state.user_data
         app_state.set_user_id(user_data['user_id'])
         app_state.set_device_fingerprint(device_fingerprint)
-        logger.info(f"[OK] 用户初始化成功 - ID: {app_state.get_user_id()}")
+    else:
+        if _logged_in_uid:
+            # 已登录：使用账号身份，加载账号对应的用户数据（而非设备指纹数据）
+            app_state.set_user_id(_logged_in_uid)
+            app_state.set_device_fingerprint(device_fingerprint)
+            user_data = load_user_data(_logged_in_uid)
+            if not user_data:
+                # 降级：如果账号数据加载失败，回退到设备指纹
+                user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+            logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}, 额度: {user_data.get('paragraphs_remaining', 0)}")
+        else:
+            user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+            app_state.set_user_id(user_data['user_id'])
+            app_state.set_device_fingerprint(device_fingerprint)
+            logger.info(f"[OK] 用户初始化成功 - ID: {app_state.get_user_id()}")
+        # 写入会话缓存，后续 rerun 直接复用
+        st.session_state.user_data = user_data
+        st.session_state.user_data_stale = False
     user_init_success = True
-    st.session_state.user_data = user_data
-    st.session_state.user_data_cache_key = _user_cache_key
-    st.session_state.user_data_stale = False
     
 except Exception as e:
     logger.error(f"[ERROR] 用户初始化失败: {e}", exc_info=True)
@@ -233,7 +245,6 @@ else:
     if not user_init_success:
         logger.warning("[WARN] 用户初始化失败，跳过额度领取")
 
-st.session_state.user_data = user_data
 logger.info(f"用户 {app_state.get_user_id()} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 
 
@@ -370,7 +381,22 @@ def add_comment(username, content, rating=5):
     return new_comment
 
 def like_comment(comment_id):
-    """点赞评论"""
+    """点赞评论（API模式下同步到数据库，保持数据一致性）"""
+    from config import BACKEND_URL
+    
+    if BACKEND_URL and DATA_SOURCE == 'api':
+        # API 模式：通过后端 API 点赞，确保写入数据库（多实例共享）
+        try:
+            import requests
+            api_url = f"{BACKEND_URL.rstrip('/')}/api/comments/comments/like/{comment_id}"
+            response = requests.put(api_url, timeout=10)
+            response.raise_for_status()
+            logger.info(f"[OK] 评论 {comment_id} 点赞成功（已同步到数据库）")
+            return
+        except Exception as e:
+            logger.error(f"[ERROR] API点赞失败: {e}，降级到本地文件")
+    
+    # 本地/Supabase 模式：使用本地文件（兜底逻辑）
     comments = load_comments()
     for comment in comments:
         if comment['id'] == comment_id:
@@ -381,16 +407,16 @@ def like_comment(comment_id):
 @st.fragment
 def show_comments_section():
     """显示评论区"""
-    # 检查是否需要刷新评论
+    # 检查是否需要刷新评论（发表/点赞后由操作分支置位，仅触发一次 rerun）
     if app_state.get_comment_refresh_needed():
         app_state.set_comment_refresh_needed(False)  # 清除标记
-        st.rerun()  # 刷新fragment以加载最新评论
+        st.session_state.comments_dirty = True  # 标记评论缓存失效
     
-    # 会话内复用评论列表，发表评论或点赞后由上方逻辑主动失效
-    comments = st.session_state.get('comments_cache')
-    if comments is None:
-        comments = load_comments()
-        st.session_state.comments_cache = comments
+    # [PERF] 加载评论（会话级缓存：仅首次渲染/发表/点赞后重新请求，避免每次 fragment 渲染都发 HTTP）
+    if 'comments_cache' not in st.session_state or st.session_state.get('comments_dirty', False):
+        st.session_state.comments_cache = load_comments()
+        st.session_state.comments_dirty = False
+    comments = st.session_state.comments_cache
     
     # 显示统计信息
     col1, col2, col3 = st.columns(3)
@@ -434,12 +460,9 @@ def show_comments_section():
                     
                     if new_comment:
                         st.success("✅ 评论发表成功！")
-                        st.session_state.comments_cache = None
-                        # [OK] 优化：设置标记，告诉侧边栏使用缓存数据
-                        st.session_state.comment_refresh_only = True
-                        # 使用session_state标记，通知fragment刷新
+                        # [PERF] 评论缓存失效 + 仅触发一次 fragment 刷新（移除旧的双重 rerun 逻辑）
+                        st.session_state.comments_dirty = True
                         app_state.set_comment_refresh_needed(True)
-                        # [OK] 修复：立即触发fragment刷新，确保评论立即显示
                         st.rerun()
                     else:
                         st.error("❌ 评论发表失败，请稍后重试")
@@ -458,22 +481,28 @@ def show_comments_section():
                 col_header, col_like = st.columns([4, 1])
                 
                 with col_header:
-                    # 显示评分（使用emoji星号）和时间
+                    # [PERF] 合并评分/时间/内容为单条 HTML，减少 Streamlit 元素数量（原每条约5个元素）
                     rating = comment.get('rating', 5)
                     stars = "⭐" * rating
-                    st.markdown(f"{stars}")
-                    st.caption(f"🕒 {comment.get('timestamp', '')}")
+                    _ts = sanitize_html(comment.get('timestamp', ''))
+                    _content = sanitize_html(comment.get('content', ''))
+                    st.markdown(
+                        f"<div style='padding: 10px; background-color: #f0f2f6; "
+                        f"border-radius: 5px; margin: 5px 0;'>"
+                        f"{stars}<br>"
+                        f"<span style='color: #666; font-size: 0.85em;'>🕒 {_ts}</span><br>"
+                        f"{_content}</div>",
+                        unsafe_allow_html=True
+                    )
                 
                 with col_like:
                     # 点赞按钮
                     likes = comment.get('likes', 0)
                     if st.button(f"👍 {likes}", key=f"like_{comment['id']}"):
+                        # [PERF] 点赞成功后标记评论缓存失效，fragment 重跑时重新加载
+                        st.session_state.comments_dirty = True
                         like_comment(comment['id'])
-                        st.session_state.comments_cache = None
                         # Streamlit会在按钮点击后自动重新运行脚本
-                
-                # 显示评论内容
-                st.markdown(f"<div style='padding: 10px; background-color: #f0f2f6; border-radius: 5px; margin: 5px 0;'>{sanitize_html(comment.get('content', ''))}</div>", unsafe_allow_html=True)
                 
                 st.markdown("---")
         
@@ -483,13 +512,41 @@ def show_comments_section():
 
 
 # ==================== 页面配置 ====================
+# ==================== 定期清理过期文件 ====================
+# 检查并清理7天前的转换结果文件（仅每个会话首次执行；每日定时清理任务持续兜底）
+# [PERF] 修复：旧代码每次 rerun 都全量遍历 conversion_results/*.docx 并 stat，
+# 与每日定时清理功能重复，改为会话级一次性扫描。
+if 'conversion_cleanup_done' not in st.session_state:
+    try:
+        import time
+        results_dir = Path("conversion_results")
+        if results_dir.exists():
+            now = time.time()
+            seven_days_ago = now - (7 * 24 * 3600)
+            cleaned_count = 0
+            for file_path in results_dir.glob("*.docx"):
+                if file_path.stat().st_mtime < seven_days_ago:
+                    try:
+                        file_path.unlink()
+                        cleaned_count += 1
+                    except Exception as e:
+                        logger.error(f"清理文件失败 {file_path}: {e}")
+            if cleaned_count > 0:
+                logger.info(f"已清理 {cleaned_count} 个过期的转换结果文件")
+    except Exception as e:
+        logger.error(f"清理过期文件失败: {e}")
+    finally:
+        # 无论成功与否都标记完成，避免每次 rerun 全量扫描
+        st.session_state.conversion_cleanup_done = True
+
 # ==================== 应用启动时清理临时文件 ====================
 # [WARN] 已禁用：cleanup_on_startup 函数已被移除
 # 临时文件清理功能已整合到其他模块中
 
 # ==================== 维护模式检查（每次页面渲染时执行）====================
 try:
-    maintenance_mode = _get_cached_config('maintenance_mode')
+    from data_manager import get_config
+    maintenance_mode = get_config('maintenance_mode')
     
     # 处理多种可能的值类型：字符串'true'、布尔值True、字符串'1'等
     is_maintenance = False
@@ -503,6 +560,8 @@ try:
     
     if is_maintenance:
         # 如果启用维护模式，显示维护页面并停止执行
+        import base64
+        
         # 获取当前脚本所在目录
         script_dir = Path(__file__).parent
         logo_path = script_dir / "resource" / "wh.jpg"
@@ -572,7 +631,8 @@ try:
         # 显示Logo图片（铺满全屏，完整显示不裁剪）
         if logo_path.exists():
             try:
-                encoded_image = _get_image_base64(str(logo_path))
+                with open(logo_path, 'rb') as f:
+                    encoded_image = base64.b64encode(f.read()).decode()
                 
                 st.markdown(f'''
                 <div style="width: 100vw; height: 100vh; margin: 0; padding: 0; position: fixed; top: 0; left: 0; z-index: 0; overflow: hidden;">
@@ -595,10 +655,26 @@ except Exception as e:
     logger.warning(f"维护模式检查失败（不影响服务）: {e}")
 
 # ==================== 主界面 ====================
-# 使用 resource/logo.png 替换 emoji 图标
-_logo_path = Path(__file__).parent / "resource" / "logo.png"
-if _logo_path.exists():
-    _logo_b64 = _get_image_base64(str(_logo_path))
+# 使用 resource/logo.png 替换 emoji 图标（base64 进程级缓存，避免每次 rerun 读文件+编码）
+@st.cache_resource
+def _get_logo_base64():
+    """读取 logo.png 并 base64 编码（进程级缓存，仅读取一次）"""
+    import base64 as _b64
+    _logo_path = Path(__file__).parent / "resource" / "logo.png"
+    if _logo_path.exists():
+        return _b64.b64encode(_logo_path.read_bytes()).decode()
+    return None
+
+@st.cache_resource
+def _get_ds_image_bytes():
+    """读取侧边栏宣传图字节（进程级缓存，仅读取一次）"""
+    _ds_image_path = Path("resource/ds.jpg")
+    if _ds_image_path.exists():
+        return _ds_image_path.read_bytes()
+    return None
+
+_logo_b64 = _get_logo_base64()
+if _logo_b64:
     st.markdown(f'''
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.5rem;">
         <img src="data:image/png;base64,{_logo_b64}" 
@@ -675,33 +751,6 @@ st.markdown("""
         max-height: 90vh !important;
     }
 </style>
-
-<script>
-// 监听侧边栏按钮点击并强制重新布局
-setTimeout(function() {
-    // 查找侧边栏切换按钮
-    const toggleButtons = document.querySelectorAll('button[title*="sidebar"], button[aria-label*="sidebar"], [data-testid="stSidebarCollapsedControl"]');
-    
-    toggleButtons.forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            // 延迟执行以确保DOM已更新
-            setTimeout(function() {
-                // 触发窗口resize事件
-                window.dispatchEvent(new Event('resize'));
-                
-                // 强制重新计算布局
-                const mainContainer = document.querySelector('.main');
-                if (mainContainer) {
-                    mainContainer.style.display = 'none';
-                    setTimeout(function() {
-                        mainContainer.style.display = '';
-                    }, 10);
-                }
-            }, 300);
-        });
-    });
-}, 2000);
-</script>
 """, unsafe_allow_html=True)
 
 # 侧边栏：用户信息
@@ -722,8 +771,11 @@ with st.sidebar:
     
     # [OK] 只有初始化成功才从 API 加载数据
     if not st.session_state.get('user_init_failed', False):
-        # 复用页面初始化阶段加载的数据，写操作通过 user_data_stale 触发刷新
-        user_data = st.session_state.get('user_data', user_data)
+        # [PERF] 复用顶层用户初始化块的会话缓存，避免每次 rerun 重复请求后端
+        user_data = st.session_state.get('user_data')
+        if user_data is None:
+            user_data = load_user_data(app_state.get_user_id())
+            st.session_state.user_data = user_data
         st.session_state.sidebar_user_data = user_data
     else:
         # 初始化失败：使用本地默认数据（额度为0）
@@ -814,7 +866,6 @@ with st.sidebar:
                         st.session_state.logged_in_username = None
                         st.session_state.logged_in_user_id = None
                         st.session_state.sidebar_user_data = None
-                        st.session_state.user_data_stale = True
                         st.session_state.show_unbind_confirm = False
                         st.success(msg + " 已恢复设备指纹身份。")
                         st.rerun()
@@ -834,7 +885,6 @@ with st.sidebar:
             st.session_state.logged_in_username = None
             st.session_state.logged_in_user_id = None
             st.session_state.sidebar_user_data = None  # 强制刷新用户数据
-            st.session_state.user_data_stale = True
             st.rerun()
     else:
         # 未登录状态：显示绑定/登录按钮
@@ -901,7 +951,6 @@ with st.sidebar:
                         st.session_state.logged_in_username = bind_username.strip()
                         st.session_state.logged_in_user_id = app_state.get_user_id()
                         st.session_state.sidebar_user_data = None
-                        st.session_state.user_data_stale = True
                         st.session_state.show_bind_dialog = False
                         for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
                             st.session_state.pop(k, None)
@@ -951,7 +1000,6 @@ with st.sidebar:
                         # 切换身份后刷新用户数据
                         app_state.set_user_id(user_id)
                         st.session_state.sidebar_user_data = None
-                        st.session_state.user_data_stale = True
                         st.session_state.show_login_dialog = False
                         for k in ('login_username_input', 'login_password_input'):
                             st.session_state.pop(k, None)
@@ -967,11 +1015,11 @@ with st.sidebar:
     st.markdown('**更好的体验，需要你的支持！**')
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 显示ds.jpg图片
+    # 显示ds.jpg图片（进程级缓存图片字节，避免每次 rerun 重复读文件）
     try:
-        ds_image_path = Path("resource/ds.jpg")
-        if ds_image_path.exists():
-            st.image(str(ds_image_path), use_container_width=True)
+        _ds_image_bytes = _get_ds_image_bytes()
+        if _ds_image_bytes:
+            st.image(_ds_image_bytes, use_container_width=True)
     except Exception as e:
         logger.warning(f"加载ds.jpg失败: {e}")
 
@@ -1033,6 +1081,8 @@ if current_source_files:
     # 始终创建进度条组件（避免作用域问题）
     progress_bar = st.progress(0)
     status_text = st.empty()
+    # [PERF] 进度条节流时间戳（大文档分析时避免 WebSocket delta 风暴）
+    _last_progress_ts = [0.0]
     
     # 如果需要分析，显示进度条（基于段落数量更新）
     if need_analyze:
@@ -1093,18 +1143,18 @@ if current_source_files:
                                     except ValueError:
                                         pass
                 
-                # 每处理10个段落或最后一个段落时更新进度
+                # 每处理10个段落或最后一个段落时更新进度（带0.2s节流，避免前端渲染风暴）
                 if (para_idx + 1) % 10 == 0 or para_idx == len(doc.paragraphs) - 1:
                     completed_files_progress = (idx - 1) * (100 / total_files)
                     current_file_progress = ((para_idx + 1) / current_file_total) * (100 / total_files)
                     total_progress = completed_files_progress + current_file_progress
-
-                    now = time.monotonic()
-                    last_progress_update = st.session_state.get('_analysis_progress_time', 0.0)
-                    if now - last_progress_update >= 0.2 or para_idx == len(doc.paragraphs) - 1:
+                    
+                    # [PERF] 节流：两次更新间隔 <0.2s 直接跳过（3000段文档原本 = 300 次往返）
+                    _now = time.time()
+                    if total_progress >= 99.9 or _now - _last_progress_ts[0] >= 0.2:
+                        _last_progress_ts[0] = _now
                         progress_bar.progress(min(total_progress / 100, 1.0))
-                        st.session_state._analysis_progress_time = now
-                
+            
             # 保存该文件的样式和段落数
             file_styles_map[source_file.name] = sorted(list(styles))
             
@@ -1140,9 +1190,9 @@ if current_source_files:
     total_paragraphs = sum(file_paragraph_counts.values())
     
     # 将所有信息整合到一个expander中
-    with st.expander(f"📄 源文档信息：{len(source_files)}个文件 | {len(all_styles)}种样式 | {total_paragraphs:,}段落", expanded=True):
+    with st.expander(f"📄 源文档信息：{len(current_source_files)}个文件 | {len(all_styles)}种样式 | {total_paragraphs:,}段落", expanded=True):
         # 第一行：基本信息
-        st.markdown(f"**✅ 已上传:** {len(source_files)} 个文件")
+        st.markdown(f"**✅ 已上传:** {len(current_source_files)} 个文件")
         st.markdown(f"**📋 检测到样式:** {len(all_styles)} 种 - {', '.join(all_styles[:10])}{'...' if len(all_styles) > 10 else ''}")
         
         # 第二行：文件详情
@@ -1246,27 +1296,28 @@ st.subheader("⚙️ 转换配置")
 # ====================================================================
 _user_defaults = {}
 _sm = {}  # ★ 修复：初始化，供下方 file_style_mappings 使用
+try:
+    _uid = app_state.get_user_id()
+    # [PERF] 仅首次 rerun（file_style_mappings 尚未恢复时）加载用户默认配置，
+    # 避免每次交互都重复请求后端（结果只在下方初始化 session_state 时使用一次）
+    if _uid and 'file_style_mappings' not in st.session_state:
+        _ud = load_user_data(_uid)
+        if _ud and 'style_mappings' in _ud:
+            _sm = _ud['style_mappings']
+            _user_defaults = {
+                'hint':      _sm.get('_default_hint_settings', {}) or {},
+                'answer':    _sm.get('_default_answer_config', {}) or {},
+                'list':      _sm.get('_default_list_config', {}) or {},
+                'tbl_img':   _sm.get('_default_tbl_img_config', {}) or {},
+                'rm_chapter': _sm.get('_default_remove_chapter_label', None),
+            }
+except Exception:
+    pass
 
 # ★ 修复：将 style_mappings 完整加载到 session_state
 # 桌面版/Web版"设为默认"保存的样式映射、表格/图片/列表兜底配置，
 # 页面刷新/重启后通过此处恢复到 session_state，供转换时回退使用
 if 'file_style_mappings' not in st.session_state:
-    # 仅首次会话初始化时读取持久化默认配置
-    try:
-        _uid = app_state.get_user_id()
-        if _uid:
-            _ud = load_user_data(_uid)
-            if _ud and 'style_mappings' in _ud:
-                _sm = _ud['style_mappings']
-                _user_defaults = {
-                    'hint':      _sm.get('_default_hint_settings', {}) or {},
-                    'answer':    _sm.get('_default_answer_config', {}) or {},
-                    'list':      _sm.get('_default_list_config', {}) or {},
-                    'tbl_img':   _sm.get('_default_tbl_img_config', {}) or {},
-                    'rm_chapter': _sm.get('_default_remove_chapter_label', None),
-                }
-    except Exception:
-        pass
     st.session_state.file_style_mappings = _sm if isinstance(_sm, dict) else {}
 
 _h  = _user_defaults.get('hint', {})
@@ -1479,7 +1530,10 @@ else:
                 # 更新进度提示
                 status_placeholder.text("⏳ 正在初始化转换器...")
                 progress_bar.progress(10)
-                                
+                
+                # [PERF] 转换进度节流时间戳（大文档转换期间避免 UI 卡顿）
+                _conv_progress_ts = [0.0]
+                
                 # 创建转换噀
                 converter = DocumentConverter()
                 progress_bar.progress(10)
@@ -1560,20 +1614,19 @@ else:
                     def warning_callback(msg):
                         warnings_list.append(msg)
                     
-                    # 进度回调函数 - 实时更新进度杀
+                    # 进度回调函数 - 实时更新进度杀（带0.2s节流，避免转换期间 UI 卡顿）
                     def make_progress_callback(file_idx, total_files):
-                        last_update = [0.0]
-
                         def callback(step, message):
                             # 计算总体进度 (10% - 80%)
                             base_progress = 10 + int((file_idx / total_files) * 70)
                             step_progress = int((step / 7) * (70 / total_files))
                             current_progress = min(base_progress + step_progress, 80)
-                            now = time.monotonic()
-                            if current_progress >= 80 or now - last_update[0] >= 0.2:
+                            # [PERF] 节流：两次更新间隔 <0.2s 直接跳过，减少前端渲染压力
+                            _now = time.time()
+                            if _now - _conv_progress_ts[0] >= 0.2:
+                                _conv_progress_ts[0] = _now
                                 progress_bar.progress(current_progress)
                                 status_placeholder.text(f"⏀{message}")
-                                last_update[0] = now
                         return callback
                     
                     # [HIGH_VOLTAGE] 性能优化：传递缓存的样式列表，避免重复分枀
@@ -1695,7 +1748,6 @@ else:
                     # 保存用户数据（使用统一数据接口（
                     from data_manager import save_user_data
                     save_user_data(user_data, st.session_state.user_id)
-                    st.session_state.user_data_stale = True
                     
                     # [OK] 修复：将转换结果文件路径保存刀session_state，防止刷新后丢失
                     if 'recent_results' not in st.session_state:
@@ -1882,15 +1934,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.expander("📖 使用说明", expanded=False):
-    # 动态获取免费额度配置
-    try:
-        free_paragraphs_value = _get_cached_config('free_paragraphs_daily')
-        if free_paragraphs_value:
-            free_paragraphs_display = f"{int(free_paragraphs_value):,}"
-        else:
-            free_paragraphs_display = "10,000"  # 默认值
-    except Exception:
-        free_paragraphs_display = "10,000"  # 降级方案
+    # 动态获取免费额度配置（会话级缓存：仅首次渲染请求，避免每次 rerun 重复调用）
+    if 'free_paragraphs_display' not in st.session_state:
+        try:
+            free_paragraphs_value = get_config('free_paragraphs_daily')
+            if free_paragraphs_value:
+                st.session_state.free_paragraphs_display = f"{int(free_paragraphs_value):,}"
+            else:
+                st.session_state.free_paragraphs_display = "10,000"  # 默认值
+        except Exception:
+            st.session_state.free_paragraphs_display = "10,000"  # 降级方案
+    free_paragraphs_display = st.session_state.free_paragraphs_display
     
     st.markdown(f"""
 

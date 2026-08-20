@@ -12,7 +12,6 @@ import os
 import sys
 import logging
 import requests
-from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -23,17 +22,6 @@ logger = logging.getLogger(__name__)
 # 导入配置
 sys.path.insert(0, os.path.dirname(__file__))
 from config import DATA_SOURCE, DATABASE_URL, BACKEND_URL, USER_DATA_FILE, TASKS_DB_FILE
-
-
-@lru_cache(maxsize=1)
-def _get_supabase_engine():
-    """复用 Supabase 直连引擎，避免每次请求重建连接池。"""
-    from sqlalchemy import create_engine
-
-    direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-    if ':6543' not in direct_url and ':5432' not in direct_url:
-        direct_url = DATABASE_URL
-    return create_engine(direct_url, pool_pre_ping=True)
 
 # ==================== 本地模式导入 ====================
 if DATA_SOURCE == "local":
@@ -1003,6 +991,14 @@ def load_user_data(user_id: str) -> Optional[Dict[str, Any]]:
 
 def save_user_data(user_data: Dict[str, Any], user_id: str = None):
     """保存用户数据"""
+    # [PERF] 保存成功后标记会话级用户数据缓存失效，下次 rerun 强制重新加载
+    # （覆盖转换扣额度、设为默认、充值等所有写路径，避免界面显示旧数据）
+    try:
+        import streamlit as st
+        if hasattr(st, 'session_state') and st.session_state is not None:
+            st.session_state.user_data_stale = True
+    except Exception:
+        pass
     return _save_user(user_data, user_id)
 
 def load_all_users_data() -> List[Dict[str, Any]]:
@@ -1282,6 +1278,46 @@ def get_storage_stats() -> Dict:
 
 # ==================== 系统配置管理 API ====================
 
+# ==================== Supabase 连接池单例 ====================
+_supabase_engine = None
+
+def _get_supabase_engine():
+    """
+    获取 Supabase SQLAlchemy 引擎（进程级单例）
+
+    [PERF] 修复：旧代码每次调用都 create_engine() 新建连接池 + TCP/TLS 握手，
+    Streamlit 高频 rerun 下会触发连接耗尽（Supabase 免费额度约 10 连接）。
+    改为进程级单例 + pool_pre_ping（连接被空闲回收时自动重连）。
+
+    Returns:
+        SQLAlchemy Engine 实例
+    """
+    global _supabase_engine
+    if _supabase_engine is None:
+        from sqlalchemy import create_engine
+
+        # 将连接池器URL转换为直连URL（端口5432）
+        direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
+        if ':6543' not in direct_url and ':5432' not in direct_url:
+            # 如果已经是直连URL，直接使用
+            direct_url = DATABASE_URL
+
+        _supabase_engine = create_engine(direct_url, pool_pre_ping=True)
+    return _supabase_engine
+
+
+# ==================== 系统配置缓存（30s TTL，避免每次 rerun 请求后端） ====================
+_config_cache: Dict[str, tuple] = {}  # {key: (value, expire_at)}
+CONFIG_CACHE_TTL_SECONDS = 30  # 配置缓存有效期（秒），维护模式/免费额度延迟30秒生效完全可接受
+
+def _invalidate_config_cache(key: str = None):
+    """清除配置缓存（配置更新后调用，保证新配置尽快生效）"""
+    global _config_cache
+    if key is None:
+        _config_cache.clear()
+    else:
+        _config_cache.pop(key, None)
+
 def get_all_configs() -> Dict:
     """
     获取所有系统配置
@@ -1301,16 +1337,10 @@ def get_all_configs() -> Dict:
             logger.error(traceback.format_exc())
             return {"success": False, "data": []}
     elif DATA_SOURCE == "supabase":
-        # Supabase模式直接使用SQLAlchemy连接PostgreSQL
+        # Supabase模式直接使用SQLAlchemy连接PostgreSQL（引擎为进程级单例）
         try:
-            from sqlalchemy import create_engine, text
-            
-            # 将连接池器URL转换为直连URL（端口5432）
-            direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-            if ':6543' not in direct_url and ':5432' not in direct_url:
-                # 如果已经是直连URL，直接使用
-                direct_url = DATABASE_URL
-            
+            from sqlalchemy import text
+
             engine = _get_supabase_engine()
             with engine.connect() as conn:
                 result = conn.execute(text("SELECT config_key, config_value, description, updated_at FROM system_config ORDER BY config_key"))
@@ -1368,9 +1398,9 @@ def get_all_configs() -> Dict:
             logger.error(f"[ERROR] SQLite获取配置列表失败: {e}")
             return {"success": False, "data": []}
 
-def get_config(key: str) -> Optional[str]:
+def _get_config_impl(key: str) -> Optional[str]:
     """
-    获取单个配置项的值
+    获取单个配置项的值（不缓存，直接查询数据源）
     
     Args:
         key: 配置键
@@ -1392,13 +1422,8 @@ def get_config(key: str) -> Optional[str]:
             return None
     elif DATA_SOURCE == "supabase":
         try:
-            from sqlalchemy import create_engine, text
-            
-            # 将连接池器URL转换为直连URL（端口5432）
-            direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-            if ':6543' not in direct_url and ':5432' not in direct_url:
-                direct_url = DATABASE_URL
-            
+            from sqlalchemy import text
+
             engine = _get_supabase_engine()
             with engine.connect() as conn:
                 result = conn.execute(
@@ -1437,6 +1462,29 @@ def get_config(key: str) -> Optional[str]:
             logger.error(f"[ERROR] SQLite获取配置失败: {e}")
             return None
 
+def get_config(key: str) -> Optional[str]:
+    """
+    获取单个配置项的值（带 30 秒 TTL 缓存）
+    
+    [PERF] 修复：旧代码无缓存，Streamlit 每次 rerun 都发 HTTP/数据库请求。
+    维护模式/免费额度等配置延迟 30 秒生效完全可接受。
+    配置更新（update_config/batch_update_configs/init_default_configs）后会主动清除缓存。
+    
+    Args:
+        key: 配置键
+        
+    Returns:
+        配置值，不存在则返回None
+    """
+    import time as _time
+    _now = _time.time()
+    _cached = _config_cache.get(key)
+    if _cached and _cached[1] > _now:
+        return _cached[0]
+    _value = _get_config_impl(key)
+    _config_cache[key] = (_value, _now + CONFIG_CACHE_TTL_SECONDS)
+    return _value
+
 def update_config(key: str, value: str, description: str = None) -> Dict:
     """
     更新配置项
@@ -1458,20 +1506,17 @@ def update_config(key: str, value: str, description: str = None) -> Dict:
             }
             response = requests.put(api_url, json=payload, timeout=10)
             response.raise_for_status()
+            # [PERF] 更新成功后清除配置缓存，让新配置尽快生效
+            _invalidate_config_cache(key)
             return response.json()
         except Exception as e:
             logger.error(f"[ERROR] API更新配置失败: {e}")
             return {"success": False, "message": str(e)}
     elif DATA_SOURCE == "supabase":
-        # Supabase模式直接使用SQLAlchemy连接PostgreSQL
+        # Supabase模式直接使用SQLAlchemy连接PostgreSQL（引擎为进程级单例）
         try:
-            from sqlalchemy import create_engine, text
-            
-            # 将连接池器URL转换为直连URL（端口5432）
-            direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-            if ':6543' not in direct_url and ':5432' not in direct_url:
-                direct_url = DATABASE_URL
-            
+            from sqlalchemy import text
+
             engine = _get_supabase_engine()
             with engine.connect() as conn:
                 # 检查是否存在
@@ -1500,6 +1545,8 @@ def update_config(key: str, value: str, description: str = None) -> Dict:
                 
                 conn.commit()
             
+            # [PERF] 更新成功后清除配置缓存，让新配置尽快生效
+            _invalidate_config_cache(key)
             return {"success": True, "message": f"配置 '{key}' 更新成功"}
         except Exception as e:
             logger.error(f"[ERROR] Supabase更新配置失败: {e}")
@@ -1544,6 +1591,8 @@ def update_config(key: str, value: str, description: str = None) -> Dict:
             conn.commit()
             conn.close()
             
+            # [PERF] 更新成功后清除配置缓存，让新配置尽快生效
+            _invalidate_config_cache(key)
             return {"success": True, "message": "配置已更新"}
         except Exception as e:
             logger.error(f"[ERROR] SQLite更新配置失败: {e}")
@@ -1565,6 +1614,8 @@ def batch_update_configs(configs: dict) -> Dict:
             payload = {"configs": configs}
             response = requests.post(api_url, json=payload, timeout=10)
             response.raise_for_status()
+            # [PERF] 批量更新成功后清除全部配置缓存
+            _invalidate_config_cache()
             return response.json()
         except Exception as e:
             logger.error(f"[ERROR] API批量更新配置失败: {e}")
@@ -1604,13 +1655,8 @@ def init_default_configs() -> Dict:
             return {"success": False, "message": str(e)}
     elif DATA_SOURCE == "supabase":
         try:
-            from sqlalchemy import create_engine, text
-            
-            # 将连接池器URL转换为直连URL（端口5432）
-            direct_url = DATABASE_URL.replace(':6543/', ':5432/').replace('/postgres?', '/postgres?')
-            if ':6543' not in direct_url and ':5432' not in direct_url:
-                direct_url = DATABASE_URL
-            
+            from sqlalchemy import text
+
             engine = _get_supabase_engine()
             
             default_configs = [
@@ -1644,6 +1690,8 @@ def init_default_configs() -> Dict:
                 
                 conn.commit()
             
+            # [PERF] 初始化后清除全部配置缓存
+            _invalidate_config_cache()
             return {
                 "success": True,
                 "message": f"成功初始化 {created_count} 个默认配置",
