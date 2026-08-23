@@ -96,6 +96,8 @@ _YING_DUI_VERBS = re.compile(
 REPLACE_MAP = {
     "卖方": "本投标人",
     "投标厂商": "本投标人",
+    "投标方": "本投标人",
+    "投标商": "本投标人",
     "投标人需要": "本投标人",
     "投标人需": "本投标人",
     "投标人": "本投标人",
@@ -153,6 +155,37 @@ class DocumentConverter:
         self.logger = logger
         return logger
     
+    def iter_all_paragraphs(self, doc):
+        """遍历文档中所有段落：主体段落 + 表格内段落 + 文本框内段落。
+
+        python-docx 的 doc.paragraphs 只返回文档主体的直接子段落，
+        不包含表格单元格内的段落。技术模板/招标文件常用表格排版，
+        表格内的标题、正文样式会被 doc.paragraphs 漏掉，导致样式提取不全。
+
+        Args:
+            doc: Document对象
+        Returns:
+            list: 所有段落对象（含表格内、文本框内），保证可按序遍历
+        """
+        paragraphs = list(doc.paragraphs)
+        # 表格内段落
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    paragraphs.extend(cell.paragraphs)
+        # 文本框内段落（w:txbxContent 内的 w:p）
+        try:
+            from docx.text.paragraph import Paragraph
+            # 用 body 作为 parent，保证 para.part / para.style 可正常解析
+            body_parent = doc.paragraphs[0]._parent if doc.paragraphs else None
+            if body_parent is not None:
+                for txbx in doc.element.body.iter(qn('w:txbxContent')):
+                    for p in txbx.findall(qn('w:p')):
+                        paragraphs.append(Paragraph(p, body_parent))
+        except Exception:
+            pass
+        return paragraphs
+    
     def get_list_virtual_styles(self, doc):
         """检测文档中具有编号/符号的列表段落，返回分类后的虚拟样式名称集合。
 
@@ -165,7 +198,7 @@ class DocumentConverter:
         """
         virtual_styles = set()
         # 先收集所有有 numPr 的段落
-        for para in doc.paragraphs:
+        for para in self.iter_all_paragraphs(doc):
             if self.has_numbering(para):
                 # 尝试获取编号格式信息
                 fmt = self._detect_numbering_format(para)
@@ -273,7 +306,7 @@ class DocumentConverter:
         else:
             doc = doc_or_path
         styles = set()
-        for para in doc.paragraphs:
+        for para in self.iter_all_paragraphs(doc):
             if para.style and para.style.name:
                 styles.add(para.style.name)
         # 额外收集具有 outlineLvl 但样式为 Normal 的段落，生成虚拟大纲样式名
@@ -299,7 +332,7 @@ class DocumentConverter:
             actual_heading_style_names.add(f'heading {i}')
             actual_heading_style_names.add(f'Heading{i}')
         
-        for para in doc.paragraphs:
+        for para in self.iter_all_paragraphs(doc):
             para_style_name = para.style.name if para.style and para.style.name else 'Normal'
             # 如果段落已经有已知的标题样式名，跳过
             if para_style_name in actual_heading_style_names:
@@ -324,7 +357,9 @@ class DocumentConverter:
         """获取模板文档中的所有可用样式"""
         styles = set()
         for style in template_doc.styles:
-            if style.type == WD_STYLE_TYPE.PARAGRAPH:
+            # 跳过 name 为 None 的样式（某些 WPS 文档存在缺 w:name 的样式，
+            # 会导致后续 sorted() 时 None 与 str 混排抛 TypeError）
+            if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
                 styles.add(style.name)
         return styles
     

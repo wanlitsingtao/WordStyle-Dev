@@ -1097,7 +1097,7 @@ class DocumentConverterGUI:
         for file in files:
             try:
                 doc = Document(file)
-                count = len(doc.paragraphs)
+                count = len(self.converter.iter_all_paragraphs(doc))
                 file_paragraph_counts[file] = count
                 total_paragraphs += count
             except:
@@ -1117,13 +1117,14 @@ class DocumentConverterGUI:
                     
                     doc = Document(file)
                     para_count = file_paragraph_counts.get(file, 0)
-                    current_file_total = len(doc.paragraphs)  # 当前文件的总段落数
+                    all_paras = self.converter.iter_all_paragraphs(doc)
+                    current_file_total = len(all_paras)  # 当前文件的总段落数
 
                     # 先收集列表段落虚拟样式（数字编号/符号编号）
                     list_virtual_styles = self.converter.get_list_virtual_styles(doc)
                     temp_styles.update(list_virtual_styles)
 
-                    for para_idx, para in enumerate(doc.paragraphs):
+                    for para_idx, para in enumerate(all_paras):
                         if para.style and para.style.name:
                             temp_styles.add(para.style.name)
                             # 检测大纲级别（outlineLvl）并生成虚拟样式名
@@ -1145,7 +1146,7 @@ class DocumentConverterGUI:
                                                 pass
                         
                         # 每处理10个段落或最后一个段落时更新进度
-                        if (para_idx + 1) % 10 == 0 or para_idx == len(doc.paragraphs) - 1:
+                        if (para_idx + 1) % 10 == 0 or para_idx == len(all_paras) - 1:
                             # 两层进度计算：
                             # 第一层：已完成 (idx-1) 个文件，每个占 100/total_files
                             # 第二层：当前文件已处理 (para_idx+1)/current_file_total
@@ -1253,7 +1254,7 @@ class DocumentConverterGUI:
         for file in files:
             try:
                 doc = Document(file)
-                count = len(doc.paragraphs)
+                count = len(self.converter.iter_all_paragraphs(doc))
                 file_paragraph_counts[file] = count
                 total_paragraphs += count
             except:
@@ -1274,13 +1275,14 @@ class DocumentConverterGUI:
                     doc = Document(file)
                     styles = set()
                     para_count = file_paragraph_counts.get(file, 0)
-                    current_file_total = len(doc.paragraphs)  # 当前文件的总段落数
+                    all_paras = self.converter.iter_all_paragraphs(doc)
+                    current_file_total = len(all_paras)  # 当前文件的总段落数
 
                     # 先收集列表段落虚拟样式（数字编号/符号编号）并合并到 styles 中
                     list_virtual_styles = self.converter.get_list_virtual_styles(doc)
                     styles.update(list_virtual_styles)
 
-                    for para_idx, para in enumerate(doc.paragraphs):
+                    for para_idx, para in enumerate(all_paras):
                         if para.style and para.style.name:
                             styles.add(para.style.name)
                             # 检测大纲级别（outlineLvl）并生成虚拟样式名
@@ -1301,7 +1303,7 @@ class DocumentConverterGUI:
                                                 pass
                         
                         # 每处理10个段落或最后一个段落时更新进度
-                        if (para_idx + 1) % 10 == 0 or para_idx == len(doc.paragraphs) - 1:
+                        if (para_idx + 1) % 10 == 0 or para_idx == len(all_paras) - 1:
                             # 两层进度计算：
                             # 第一层：已完成 (idx-1) 个文件，每个占 100/total_files
                             # 第二层：当前文件已处理 (para_idx+1)/current_file_total
@@ -1605,7 +1607,7 @@ class DocumentConverterGUI:
                 
                 temp_styles = set()
                 for idx, style in enumerate(styles_list, 1):
-                    if style.type == WD_STYLE_TYPE.PARAGRAPH:
+                    if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
                         temp_styles.add(style.name)
                     
                     # 每10个样式更新一次进度
@@ -1670,8 +1672,8 @@ class DocumentConverterGUI:
         try:
             for file in files:
                 doc = Document(file)
-                # 收集实际样式名
-                for para in doc.paragraphs:
+                # 收集实际样式名（含表格内、文本框内段落）
+                for para in self.converter.iter_all_paragraphs(doc):
                     if para.style and para.style.name:
                         self.source_styles.add(para.style.name)
                 # 收集列表段落虚拟样式
@@ -1693,7 +1695,7 @@ class DocumentConverterGUI:
         try:
             doc = Document(template_file)
             for style in doc.styles:
-                if style.type == WD_STYLE_TYPE.PARAGRAPH:
+                if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
                     self.template_styles.add(style.name)
             
             # 更新列表框
