@@ -1048,7 +1048,7 @@ if 'source_files_uploaded' not in st.session_state:
 st.subheader("📄 上传源文档")
 
 source_files = st.file_uploader(
-    "选择要转换的 Word 文档（可多选）",
+    "选择要转换的 Word 文档（支持 .docx，可多选）",
     type=['docx'],
     help="支持 .docx 格式，可同时选择多个文件",
     accept_multiple_files=True,

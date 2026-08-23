@@ -2727,6 +2727,7 @@ class DocumentConverter:
         """
         insert_count = 0
         total_heading_count = 0
+        has_started_chapter = False
         
         # 第一步：遍历所有元素，添加元素并统计标题
         for i, child in enumerate(children):
@@ -2738,6 +2739,7 @@ class DocumentConverter:
             # 统计标题数量
             if child.tag == qn('w:p') and self.is_heading_paragraph(child, doc):
                 total_heading_count += 1
+                has_started_chapter = True
             
             # 添加当前元素
             new_children.append(child)
@@ -2749,7 +2751,7 @@ class DocumentConverter:
                 
                 # 检查下一个元素是否为标题
                 if hasattr(next_elem, 'tag') and next_elem.tag == qn('w:p'):
-                    if self.is_heading_paragraph(next_elem, doc):
+                    if has_started_chapter and self.is_heading_paragraph(next_elem, doc):
                         # 下一个是标题，检查当前元素是否不是标题
                         is_not_heading = True
                         
@@ -2771,7 +2773,7 @@ class DocumentConverter:
                     if self.is_heading_paragraph(child, doc):
                         is_not_heading = False
                 
-                if is_not_heading:
+                if has_started_chapter and is_not_heading:
                     answer_elem = deepcopy(answer_template)
                     new_children.append(answer_elem)
                     insert_count += 1
