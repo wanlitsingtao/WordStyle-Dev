@@ -51,9 +51,18 @@ def _load_config_from_secrets():
     """
     try:
         import streamlit as st
-        # 检查是否在 Streamlit 环境中
-        if hasattr(st, 'secrets') and len(st.secrets) > 0:
+        # Streamlit 在没有 secrets.toml 时，访问 secrets 内容会抛出异常；
+        # 先检查标准路径，避免本地 .env 模式产生无意义的启动错误。
+        secrets_file = os.getenv('STREAMLIT_SECRETS_FILE')
+        secret_paths = [Path(secrets_file)] if secrets_file else []
+        secret_paths.extend([
+            Path.cwd() / '.streamlit' / 'secrets.toml',
+            Path.home() / '.streamlit' / 'secrets.toml',
+        ])
+        if any(path.is_file() for path in secret_paths):
             secrets = st.secrets
+            if len(secrets) == 0:
+                return None
             
             # ========== 1. 读取 USE_SUPABASE（顶层 + [supabase] 区块兼容）==========
             # 优先读取顶层 USE_SUPABASE

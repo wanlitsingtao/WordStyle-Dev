@@ -21,7 +21,7 @@ except Exception:
     # 如果query_params不可用（旧版本Streamlit），忽略
     pass
 st.set_page_config(
-    page_title="标书抄写神器",
+    page_title="标书编写神器",
     page_icon="📄",
     layout="wide",  # 使用宽屏布局
     initial_sidebar_state="expanded"
@@ -680,11 +680,11 @@ if _logo_b64:
     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.5rem;">
         <img src="data:image/png;base64,{_logo_b64}" 
              style="height: 2.5rem; vertical-align: middle;">
-        <span style="font-size: 2rem; font-weight: 700; color: #262730;">标书抄写神器</span>
+        <span style="font-size: 2rem; font-weight: 700; color: #262730;">标书编写神器</span>
     </div>
     ''', unsafe_allow_html=True)
 else:
-    st.title("📄 标书抄写神器")
+    st.title("📄 标书编写神器")
 
 # 全屏提示
 st.markdown("""
@@ -1034,7 +1034,7 @@ with st.sidebar:
     col1, col2, col3 = st.columns([1, 6, 1])
     with col2:
         st.markdown('<div style="text-align: center; white-space: nowrap;">', unsafe_allow_html=True)
-        st.markdown('<p style="text-align: center; margin: 0.5rem 0 0 0; color: #666; font-size: 0.875rem;">标书抄写神器2.0.0</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align: center; margin: 0.5rem 0 0 0; color: #666; font-size: 0.875rem;">标书编写神器2.0.0</p>', unsafe_allow_html=True)
         st.markdown('<p style="text-align: center; margin: 0.25rem 0 0 0; color: #666; font-size: 0.75rem; white-space: nowrap;">© 2026 文档转换工具 保留所有权利</p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1047,12 +1047,10 @@ if 'source_files_uploaded' not in st.session_state:
 
 st.subheader("📄 上传源文档")
 
-st.info("⚠️ 仅支持 **.docx** 格式（Word 2007 及以上）。如果您的文档是 **.doc** 格式（Word 97-2003），请先用 Word 打开后「另存为」**.docx** 格式再上传。", icon="💡")
-
 source_files = st.file_uploader(
     "选择要转换的 Word 文档（可多选）",
     type=['docx'],
-    help="仅支持 .docx 格式，可同时选择多个文件",
+    help="支持 .docx 格式，可同时选择多个文件",
     accept_multiple_files=True,
     key="source_uploader"
 )
@@ -1216,7 +1214,7 @@ if 'template_file_uploaded' not in st.session_state:
 
 st.subheader("📋 上传模板文档")
 template_file = st.file_uploader(
-    "选择模板文档（仅支持 .docx）",
+    "选择模板文档（支持 .docx）",
     type=['docx'],
     help="用于定义目标样式的 Word 文档",
     key="template_uploader"
