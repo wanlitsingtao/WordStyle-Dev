@@ -44,7 +44,8 @@ def get_template_styles_list(template_file):
         doc = Document(template_file)
         styles = []
         for style in doc.styles:
-            if style.type == WD_STYLE_TYPE.PARAGRAPH:
+            # 某些 WPS 模板存在缺少名称的样式，不能加入下拉框或排序列表。
+            if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
                 styles.append(style.name)
         return sorted(styles)
     except:
