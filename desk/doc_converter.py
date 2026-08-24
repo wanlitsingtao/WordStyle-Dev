@@ -896,13 +896,103 @@ class DocumentConverter:
         scale = target_width_emu / w_emu
         return int(w_emu * scale), int(h_px / dpi * 914400 * scale)
     
+    @staticmethod
+    def _detect_image_format(blob):
+        """根据魔数判断图片格式，返回 'wmf'/'emf'/'png'/'jpeg'/'gif'/'bmp'/'tiff' 或 None。"""
+        if blob[:4] == b'\xd7\xcd\xc6\x9a' or blob[:4] == b'\x01\x00\x09\x00':
+            return 'wmf'
+        if blob[:4] == b'\x01\x00\x00\x00':
+            return 'emf'
+        if blob[:8] == b'\x89PNG\r\n\x1a\n':
+            return 'png'
+        if blob[:3] == b'\xff\xd8\xff':
+            return 'jpeg'
+        if blob[:4] == b'GIF8':
+            return 'gif'
+        if blob[:2] == b'BM':
+            return 'bmp'
+        if blob[:4] in (b'II*\x00', b'MM\x00*'):
+            return 'tiff'
+        return None
+    
+    def _insert_metafile_as_picture(self, run, blob, fmt, emu_w, emu_h):
+        """把 WMF/EMF 原始字节作为图片直接插入（绕过 add_picture 的格式限制）。
+
+        Word 原生支持 WMF/EMF 矢量图，直接插入可无损保留、无需栅格化。
+        这既避免 Linux 上 Pillow 无法渲染 WMF/EMF 的问题，也避免引入 LibreOffice
+        等重量级系统依赖。
+        """
+        from docx.opc.part import Part
+        from docx.opc.packuri import PackURI
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT, CONTENT_TYPE as CT
+        from docx.oxml.ns import nsdecls
+
+        counter = getattr(self, '_ole_image_counter', 0) + 1
+        self._ole_image_counter = counter
+
+        content_type = CT.X_WMF if fmt == 'wmf' else CT.X_EMF
+        partname = PackURI('/word/media/ole_preview_%d.%s' % (counter, fmt))
+        image_part = Part(partname, content_type, blob, run.part.package)
+        rId = run.part.relate_to(image_part, RT.IMAGE)
+
+        docPr_id = counter + 1000
+        drawing_xml = (
+            '<w:drawing %s>'
+            '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+            '<wp:extent cx="%d" cy="%d"/>'
+            '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            '<wp:docPr id="%d" name="OLE %d"/>'
+            '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+            '<a:graphic>'
+            '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic>'
+            '<pic:nvPicPr><pic:cNvPr id="0" name="ole_preview_%d"/><pic:cNvPicPr/></pic:nvPicPr>'
+            '<pic:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm>'
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            '</pic:pic>'
+            '</a:graphicData>'
+            '</a:graphic>'
+            '</wp:inline>'
+            '</w:drawing>'
+        ) % (
+            nsdecls('w', 'wp', 'a', 'pic', 'r'),
+            emu_w, emu_h,
+            docPr_id, docPr_id,
+            counter,
+            rId,
+            emu_w, emu_h,
+        )
+        run._element.append(parse_xml(drawing_xml))
+    
     def add_picture(self, run, img_bytes, page_width_emu, available_width_emu, emu_width=None, emu_height=None):
         """
         添加图片。
         若提供了源文档的显示尺寸 (emu_width, emu_height)，则优先使用；
         当图片宽度超出可用宽度时，缩放到页面宽度的 IMAGE_SCALE_RATIO，高度等比缩放。
         如果未提供尺寸，则使用图片的像素尺寸（96 DPI 计算）并做相同处理。
+        WMF/EMF 等 python-docx 不支持的格式直接插入原始矢量字节，避免栅格化失真。
         """
+        # WMF/EMF 直接插入原始字节（python-docx 的 add_picture 不支持这两种格式）
+        fmt = self._detect_image_format(img_bytes)
+        if fmt in ('wmf', 'emf'):
+            if emu_width is None or emu_height is None:
+                w_px, h_px = self.get_image_size(img_bytes)
+                if w_px and h_px:
+                    emu_width = int(w_px / 96 * 914400)
+                    emu_height = int(h_px / 96 * 914400)
+                else:
+                    emu_width = int(available_width_emu * IMAGE_SCALE_RATIO)
+                    emu_height = int(emu_width * 0.2)
+            w_emu, h_emu = emu_width, emu_height
+            if w_emu > available_width_emu:
+                target_w = int(page_width_emu * IMAGE_SCALE_RATIO)
+                scale = target_w / w_emu
+                w_emu = int(w_emu * scale)
+                h_emu = int(h_emu * scale)
+            self._insert_metafile_as_picture(run, img_bytes, fmt, w_emu, h_emu)
+            return
+
         if not PIL_AVAILABLE:
             run.add_picture(io.BytesIO(img_bytes))
             return

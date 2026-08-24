@@ -890,7 +890,28 @@ class DocumentConverter:
         若提供了源文档的显示尺寸 (emu_width, emu_height)，则优先使用；
         当图片宽度超出可用宽度时，缩放到页面宽度的 IMAGE_SCALE_RATIO，高度等比缩放。
         如果未提供尺寸，则使用图片的像素尺寸（96 DPI 计算）并做相同处理。
+        WMF/EMF 等 python-docx 不支持的格式直接插入原始矢量字节，避免栅格化失真。
         """
+        # WMF/EMF 直接插入原始字节（python-docx 的 add_picture 不支持这两种格式）
+        fmt = self._detect_image_format(img_bytes)
+        if fmt in ('wmf', 'emf'):
+            if emu_width is None or emu_height is None:
+                w_px, h_px = self.get_image_size(img_bytes)
+                if w_px and h_px:
+                    emu_width = int(w_px / 96 * 914400)
+                    emu_height = int(h_px / 96 * 914400)
+                else:
+                    emu_width = int(available_width_emu * IMAGE_SCALE_RATIO)
+                    emu_height = int(emu_width * 0.2)
+            w_emu, h_emu = emu_width, emu_height
+            if w_emu > available_width_emu:
+                target_w = int(page_width_emu * IMAGE_SCALE_RATIO)
+                scale = target_w / w_emu
+                w_emu = int(w_emu * scale)
+                h_emu = int(h_emu * scale)
+            self._insert_metafile_as_picture(run, img_bytes, fmt, w_emu, h_emu)
+            return
+
         if not PIL_AVAILABLE:
             run.add_picture(io.BytesIO(img_bytes))
             return
