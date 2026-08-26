@@ -3422,44 +3422,214 @@ class DocumentConverter:
 
     def _insert_after_paragraphs(self, children, new_children, answer_template, doc):
         """
-        逐段后插入应答句（模式5：after_paragraph）- 支持语义段落分组
-        逻辑：
-        1. 将连续的语义相关段落分组（短句、引号上下文、列表）
-        2. 在每个语义单元后插入一个应答句
+        逐段后插入应答句（模式5：after_paragraph）
+        大原则：每一个段落后都插入应答句。
+        特殊处理：
+        1. 段落末尾带冒号"："，该段落后不插入应答句。
+        2. 段落最前面带数字编号或符号（普通段落手动编号/符号 + Word 列表段落）：
+           - 后一段编号/符号样式一致 → 当前段落后插入应答句；
+           - 后一段为普通段落（最前面不带编号/符号）→ 当前段落后也插入应答句；
+           - 否则（后一段编号/符号样式不一致）→ 当前段落后不插入。
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
         total_heading_count = 0
         
-        # 第一步：将元素分组为语义单元
-        semantic_groups = self._group_semantic_units(children, doc)
+        # 第一步：收集段落信息（只包含 w:p 元素，按原始顺序）
+        para_info = []
+        for idx, child in enumerate(children):
+            if not hasattr(child, 'tag') or child.tag != qn('w:p'):
+                continue
+            text = self._get_paragraph_text(child)
+            if self._is_empty_paragraph(text):
+                info = 'empty'
+                numbering = None
+            elif self.is_heading_paragraph(child, doc):
+                info = 'heading'
+                numbering = None
+                total_heading_count += 1
+            elif len(child.findall('.//' + qn('a:blip'))) > 0:
+                info = 'image'
+                numbering = None
+            else:
+                info = 'normal'
+                numbering = self._get_numbering_style_key(child, doc)
+            para_info.append({'idx': idx, 'info': info, 'text': text, 'numbering': numbering})
         
-        # 第二步：遍历每个语义单元，在单元后插入应答句
-        for group in semantic_groups:
-            if not group:
+        # 第二步：判断每个正文段落后是否插入应答句
+        insert_after = set()
+        n = len(para_info)
+        for i, p in enumerate(para_info):
+            if p['info'] != 'normal':
                 continue
             
-            first_elem = group[0]
+            # 特殊处理1：段落末尾带冒号，不插入
+            if self._ends_with_colon(p['text']):
+                continue
             
-            # 统计标题数量
-            if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
-                if self.is_heading_paragraph(first_elem, doc):
-                    total_heading_count += len([e for e in group if hasattr(e, 'tag') and e.tag == qn('w:p') and self.is_heading_paragraph(e, doc)])
+            next_p = para_info[i + 1] if i + 1 < n else None
             
-            # 先添加语义单元中的所有元素
-            for elem in group:
-                new_children.append(elem)
-            
-            # 判断是否为需要插入应答句的语义单元
-            should_insert = self._should_insert_answer_for_group(group, doc)
-            
-            if should_insert:
-                # 在语义单元后插入应答句
+            if p['numbering'] is not None:
+                # 特殊处理2：编号/符号段落
+                if next_p is None:
+                    # 文档末尾（无后一段），插入
+                    insert_after.add(p['idx'])
+                else:
+                    next_numbering = next_p['numbering']
+                    if next_numbering is not None:
+                        # 后一段也是编号/符号
+                        if next_numbering == p['numbering']:
+                            # 编号/符号样式一致 → 插入
+                            insert_after.add(p['idx'])
+                        # 样式不一致 → 不插入
+                    else:
+                        # 后一段不是编号/符号（普通段落、空行、标题、图片等）→ 插入
+                        insert_after.add(p['idx'])
+            else:
+                # 普通正文段落（无编号/符号），插入
+                insert_after.add(p['idx'])
+        
+        # 第三步：按原始顺序构建 new_children
+        for idx, child in enumerate(children):
+            new_children.append(child)
+            if idx in insert_after:
                 answer_elem = deepcopy(answer_template)
                 new_children.append(answer_elem)
                 insert_count += 1
         
         return insert_count, total_heading_count
+
+    def _ends_with_colon(self, text):
+        """判断文本是否以冒号结尾（中文"："或英文":"）"""
+        if not text:
+            return False
+        text = text.rstrip()
+        return text.endswith('\uff1a') or text.endswith(':')
+
+    def _get_list_numbering_id(self, elem):
+        """获取列表段落的 numId 和 ilvl。
+        numId=0 或无 numPr 视为无编号。
+        返回 (numId, ilvl)，无编号返回 (None, None)。
+        """
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return None, None
+        pPr = elem.find(qn('w:pPr'))
+        if pPr is None:
+            return None, None
+        numPr = pPr.find(qn('w:numPr'))
+        if numPr is None:
+            return None, None
+        numId_elem = numPr.find(qn('w:numId'))
+        ilvl_elem = numPr.find(qn('w:ilvl'))
+        if numId_elem is None:
+            return None, None
+        numId = numId_elem.get(qn('w:val'))
+        ilvl = ilvl_elem.get(qn('w:val')) if ilvl_elem is not None else '0'
+        if numId is None or numId == '0':
+            return None, None
+        return numId, ilvl
+
+    def _get_numbering_numfmt(self, elem, doc):
+        """解析列表段落的 numFmt（如 'bullet'、'decimal'）。
+        无法解析返回 None。
+        """
+        numId, ilvl = self._get_list_numbering_id(elem)
+        if numId is None:
+            return None
+        try:
+            numbering_part = doc.part.numbering_part
+            if numbering_part is None:
+                return None
+            root = numbering_part.element
+            if root is None:
+                return None
+
+            num_elem = None
+            for n in root.findall(qn('w:num')):
+                if n.get(qn('w:numId')) == numId:
+                    num_elem = n
+                    break
+            if num_elem is None:
+                return None
+
+            abstractNumId_elem = num_elem.find(qn('w:abstractNumId'))
+            if abstractNumId_elem is None:
+                return None
+            abstractNumId = abstractNumId_elem.get(qn('w:val'))
+
+            abs_num = None
+            for an in root.findall(qn('w:abstractNum')):
+                if an.get(qn('w:abstractNumId')) == abstractNumId:
+                    abs_num = an
+                    break
+            if abs_num is None:
+                return None
+
+            target_lvl = None
+            for l in abs_num.findall(qn('w:lvl')):
+                if l.get(qn('w:ilvl')) == ilvl:
+                    target_lvl = l
+                    break
+            if target_lvl is None:
+                target_lvl = abs_num.find(qn('w:lvl'))
+            if target_lvl is None:
+                return None
+
+            numFmt = target_lvl.find(qn('w:numFmt'))
+            if numFmt is not None:
+                return numFmt.get(qn('w:val'))
+        except Exception:
+            pass
+        return None
+
+    def _get_numbering_style_key(self, elem, doc=None):
+        """获取段落开头的编号/符号样式标识。
+        返回 (kind, style_key)：
+          kind: 'number'（数字编号）| 'bullet'（符号）| None（无编号/符号）
+          style_key: 归一化样式字符串，用于比较两个段落编号/符号样式是否一致。
+        Word 列表段落（numPr）用 numId+ilvl 区分；手动编号/符号用归一化文本前缀区分。
+        """
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return None
+
+        text = self._get_paragraph_text(elem)
+        text_stripped = text.strip() if text else ""
+
+        # 1. Word 自动编号列表段落（numPr）
+        numId, ilvl = self._get_list_numbering_id(elem)
+        if numId is not None:
+            numFmt = self._get_numbering_numfmt(elem, doc) if doc is not None else None
+            if numFmt == 'bullet':
+                return ('bullet', f'autonum:{numId}:{ilvl}')
+            return ('number', f'autonum:{numId}:{ilvl}')
+
+        # 2. 手动符号（项目符号）
+        bullet_symbols = ['\u25cf', '\u25cb', '\u25a0', '\u25a1', '\u25c6', '\u25c7',
+                          '\u25b2', '\u25b3', '\u25ba', '\u25b6', '\u2022', '-', '*']
+        for sym in bullet_symbols:
+            if text_stripped.startswith(sym):
+                return ('bullet', f'manual:{sym}')
+
+        # 3. 手动数字/字母编号
+        number_patterns = [
+            r'^[（(]\d+[）)]',              # （1）(1)
+            r'^[（(][a-zA-Z][）)]',         # （A）(a)
+            r'^\d+[、\.．]',                # 1. 1、1．
+            r'^\d+[）)]',                   # 1）1)
+            r'^[一二三四五六七八九十百]+[、\.．]',  # 一、二、
+            r'^[a-zA-Z][、\.．]',           # a. A、
+            r'^[a-zA-Z][）)]',              # a）A)
+        ]
+        for pat in number_patterns:
+            m = re.match(pat, text_stripped)
+            if m:
+                token = m.group(0)
+                style_key = re.sub(r'\d+', '#', token)
+                style_key = re.sub(r'[一二三四五六七八九十百]+', '#', style_key)
+                style_key = re.sub(r'[A-Za-z]', 'L', style_key)
+                return ('number', f'manual:{style_key}')
+
+        return None
     
     # ==================== 语义分组辅助方法 ====================
     
@@ -3524,6 +3694,7 @@ class DocumentConverter:
             r'^\d+）',
             r'^\d+\)',
             r'^[（(]\d+[）)]',
+            r'^[（(][a-zA-Z][）)]',
             r'^[一二三四五六七八九十]+[、\.．]',
             r'^[a-zA-Z][、\.．]',
             r'^[a-zA-Z]）',
