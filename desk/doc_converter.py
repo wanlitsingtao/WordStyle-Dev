@@ -3426,10 +3426,12 @@ class DocumentConverter:
         大原则：每一个段落后都插入应答句。
         特殊处理：
         1. 段落末尾带冒号"："，该段落后不插入应答句。
-        2. 段落最前面带数字编号或符号（普通段落手动编号/符号 + Word 列表段落）：
-           - 后一段编号/符号样式一致 → 当前段落后插入应答句；
-           - 后一段为普通段落（最前面不带编号/符号）→ 当前段落后也插入应答句；
-           - 否则（后一段编号/符号样式不一致）→ 当前段落后不插入。
+        2. 段落最前面带数字/字母编号或符号（普通段落手动编号/符号 + Word 列表段落）：
+           先全盘解析编号层级（样式栈，不依赖缩进），再按后一段关系判断：
+           - 后一段编号/符号样式一致（同层连续）→ 插入；
+           - 后一段编号/符号样式不一致，但回到了上层（后一段是当前段的父级样式）→ 插入；
+           - 后一段编号/符号样式不一致，且进入更深的新子层 → 不插入；
+           - 后一段为普通段落（最前面不带编号/符号）→ 插入。
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
@@ -3454,9 +3456,12 @@ class DocumentConverter:
             else:
                 info = 'normal'
                 numbering = self._get_numbering_style_key(child, doc)
-            para_info.append({'idx': idx, 'info': info, 'text': text, 'numbering': numbering})
+            para_info.append({'idx': idx, 'info': info, 'text': text, 'numbering': numbering, 'level': 0})
         
-        # 第二步：判断每个正文段落后是否插入应答句
+        # 第二步：全盘解析编号层级（基于编号样式栈，缩进仅作为兜底不参与判断）
+        self._assign_numbering_levels(para_info)
+        
+        # 第三步：判断每个正文段落后是否插入应答句
         insert_after = set()
         n = len(para_info)
         for i, p in enumerate(para_info):
@@ -3474,22 +3479,23 @@ class DocumentConverter:
                 if next_p is None:
                     # 文档末尾（无后一段），插入
                     insert_after.add(p['idx'])
+                elif next_p['numbering'] is None:
+                    # 后一段不是编号/符号（普通段落、空行、标题、图片等）→ 插入
+                    insert_after.add(p['idx'])
                 else:
-                    next_numbering = next_p['numbering']
-                    if next_numbering is not None:
-                        # 后一段也是编号/符号
-                        if next_numbering == p['numbering']:
-                            # 编号/符号样式一致 → 插入
-                            insert_after.add(p['idx'])
-                        # 样式不一致 → 不插入
-                    else:
-                        # 后一段不是编号/符号（普通段落、空行、标题、图片等）→ 插入
+                    # 后一段也是编号/符号
+                    if next_p['numbering'] == p['numbering']:
+                        # 编号样式一致（同层连续）→ 插入
                         insert_after.add(p['idx'])
+                    elif next_p['level'] < p['level']:
+                        # 样式不一致但回到上层（后一段是当前段的父级样式）→ 插入
+                        insert_after.add(p['idx'])
+                    # 进入更深的新子层 → 不插入
             else:
                 # 普通正文段落（无编号/符号），插入
                 insert_after.add(p['idx'])
         
-        # 第三步：按原始顺序构建 new_children
+        # 第四步：按原始顺序构建 new_children
         for idx, child in enumerate(children):
             new_children.append(child)
             if idx in insert_after:
@@ -3498,6 +3504,48 @@ class DocumentConverter:
                 insert_count += 1
         
         return insert_count, total_heading_count
+
+    def _assign_numbering_levels(self, para_info):
+        """全盘解析编号段落的层级关系（基于编号样式栈，不依赖缩进）。
+
+        用"样式栈"推断层级：
+        - 遇到标题（heading）→ 清空样式栈（章节边界，编号序列重新开始）；
+        - 当前样式 == 栈顶样式 → 同层连续；
+        - 当前样式在栈中（非栈顶）→ 回到上层，弹出栈顶直到该样式成为栈顶；
+        - 当前样式不在栈中 → 新层级，压栈。
+
+        额外启发式：当新样式是数字/字母编号，而栈顶是符号（bullet）时，
+        视为切换到全新的顶层编号序列（清空栈），而非进入符号的子层。
+        例如「•…■…」之后出现「A. B. C.」，A. 应回到顶层而非成为 ■ 的子层。
+
+        给每个编号段落写入 'level' 字段（0 为最顶层，越大越深）。
+        普通段落（numbering 为 None）保持 level 不变，不参与栈运算。
+        """
+        style_stack = []  # 存 (kind, style_key) 元组
+        for p in para_info:
+            if p['info'] == 'heading':
+                # 标题表示章节边界，编号序列重新开始，清空样式栈
+                style_stack = []
+                continue
+            if p['info'] != 'normal' or p['numbering'] is None:
+                continue
+            key = p['numbering']
+            kind = key[0]  # 'number' 或 'bullet'
+            if style_stack and style_stack[-1] == key:
+                # 同层连续
+                p['level'] = len(style_stack) - 1
+            elif key in style_stack:
+                # 回到上层：弹出直到栈顶 == key
+                while style_stack and style_stack[-1] != key:
+                    style_stack.pop()
+                p['level'] = len(style_stack) - 1
+            else:
+                # 新样式：从符号切到数字/字母编号 → 视为全新顶层序列
+                if style_stack and style_stack[-1][0] == 'bullet' and kind == 'number':
+                    style_stack = []
+                # 压栈
+                style_stack.append(key)
+                p['level'] = len(style_stack) - 1
 
     def _ends_with_colon(self, text):
         """判断文本是否以冒号结尾（中文"："或英文":"）"""
@@ -3630,6 +3678,43 @@ class DocumentConverter:
                 return ('number', f'manual:{style_key}')
 
         return None
+
+    def _get_indent_level(self, elem):
+        """获取段落层级（数值越大越深）。
+        优先使用列表编号层级 ilvl（编号定义），左缩进 w:ind 作为辅助兜底。
+        ilvl 按每级 720 twips 折算，与缩进尺度对齐，便于混用比较。
+        """
+        if not hasattr(elem, 'tag') or elem.tag != qn('w:p'):
+            return 0
+        # 1. 优先：Word 列表编号层级 ilvl
+        numId, ilvl = self._get_list_numbering_id(elem)
+        if numId is not None:
+            try:
+                return int(ilvl) * 720
+            except (ValueError, TypeError):
+                pass
+        # 2. 辅助：段落左缩进
+        pPr = elem.find(qn('w:pPr'))
+        if pPr is not None:
+            ind = pPr.find(qn('w:ind'))
+            if ind is not None:
+                left = ind.get(qn('w:left'))
+                if left is not None:
+                    try:
+                        v = int(left)
+                        if v != 0:
+                            return v
+                    except (ValueError, TypeError):
+                        pass
+                left_chars = ind.get(qn('w:leftChars'))
+                if left_chars is not None:
+                    try:
+                        v = int(left_chars)
+                        if v != 0:
+                            return v * 240
+                    except (ValueError, TypeError):
+                        pass
+        return 0
     
     # ==================== 语义分组辅助方法 ====================
     
