@@ -3381,42 +3381,81 @@ class DocumentConverter:
     
     def _insert_before_paragraphs(self, children, new_children, answer_template, doc):
         """
-        逐段前插入应答句（模式4：before_paragraph）- 支持语义段落分组
-        逻辑：
-        1. 将连续的语义相关段落分组（短句、引号上下文、列表）
-        2. 在每个语义单元前插入一个应答句
+        逐段前插入应答句（模式4：before_paragraph）
+        大原则：每一个段落前都插入应答句。
+        段落/列表段落编号的识别与层级解析参考逐段后插入模式（after_paragraph）：
+        - 前一段为空（文档开头）→ 插入；
+        - 前一段不是编号/符号（普通段落、空行、标题、图片等）→ 插入；
+        - 前一段编号/符号样式一致（同层连续）→ 插入；
+        - 前一段编号/符号样式不一致，但前一段层级更深（当前段回到上层）→ 插入；
+        - 前一段编号/符号样式不一致，且进入更深的新子层 → 不插入。
+        与逐段后插入的区别：段落后带冒号"："的段落不做特殊处理（同样插入应答句）。
         :return: (insert_count, total_heading_count)
         """
         insert_count = 0
         total_heading_count = 0
         
-        # 第一步：将元素分组为语义单元
-        semantic_groups = self._group_semantic_units(children, doc)
+        # 第一步：收集段落信息（只包含 w:p 元素，按原始顺序），与逐段后插入一致
+        para_info = []
+        for idx, child in enumerate(children):
+            if not hasattr(child, 'tag') or child.tag != qn('w:p'):
+                continue
+            text = self._get_paragraph_text(child)
+            if self._is_empty_paragraph(text):
+                info = 'empty'
+                numbering = None
+            elif self.is_heading_paragraph(child, doc):
+                info = 'heading'
+                numbering = None
+                total_heading_count += 1
+            elif len(child.findall('.//' + qn('a:blip'))) > 0:
+                info = 'image'
+                numbering = None
+            else:
+                info = 'normal'
+                numbering = self._get_numbering_style_key(child, doc)
+            para_info.append({'idx': idx, 'info': info, 'text': text, 'numbering': numbering, 'level': 0})
         
-        # 第二步：遍历每个语义单元，在单元前插入应答句
-        for group in semantic_groups:
-            if not group:
+        # 第二步：全盘解析编号层级（基于编号样式栈），与逐段后插入一致
+        self._assign_numbering_levels(para_info)
+        
+        # 第三步：判断每个正文段落前是否插入应答句
+        insert_before = set()
+        n = len(para_info)
+        for i, p in enumerate(para_info):
+            if p['info'] != 'normal':
                 continue
             
-            first_elem = group[0]
+            prev_p = para_info[i - 1] if i - 1 >= 0 else None
             
-            # 统计标题数量
-            if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
-                if self.is_heading_paragraph(first_elem, doc):
-                    total_heading_count += len([e for e in group if hasattr(e, 'tag') and e.tag == qn('w:p') and self.is_heading_paragraph(e, doc)])
-            
-            # 判断是否为需要插入应答句的语义单元
-            should_insert = self._should_insert_answer_for_group(group, doc)
-            
-            if should_insert:
-                # 在语义单元前插入应答句
+            if p['numbering'] is not None:
+                # 编号/符号段落
+                if prev_p is None:
+                    # 文档开头（无前一段），插入
+                    insert_before.add(p['idx'])
+                elif prev_p['numbering'] is None:
+                    # 前一段不是编号/符号（普通段落、空行、标题、图片等）→ 插入
+                    insert_before.add(p['idx'])
+                else:
+                    # 前一段也是编号/符号
+                    if prev_p['numbering'] == p['numbering']:
+                        # 编号样式一致（同层连续）→ 插入
+                        insert_before.add(p['idx'])
+                    elif prev_p['level'] > p['level']:
+                        # 样式不一致但前一段层级更深（当前段回到上层）→ 插入
+                        insert_before.add(p['idx'])
+                    # 进入更深的新子层（前一段层级更浅）→ 不插入
+            else:
+                # 普通正文段落（无编号/符号），插入
+                insert_before.add(p['idx'])
+        
+        # 第四步：按原始顺序构建 new_children
+        for idx, child in enumerate(children):
+            if idx in insert_before:
                 answer_elem = deepcopy(answer_template)
                 new_children.append(answer_elem)
                 insert_count += 1
-            
-            # 添加语义单元中的所有元素
-            for elem in group:
-                new_children.append(elem)
+            new_children.append(child)
         
         return insert_count, total_heading_count
 
