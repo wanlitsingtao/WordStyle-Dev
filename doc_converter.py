@@ -3629,45 +3629,83 @@ class DocumentConverter:
     
     def _insert_after_paragraphs(self, children, new_children, answer_template, doc):
         """
-        逐段后应答（需求5）- 改进版：支持语义段落分组
-        逻辑：
-        1. 将连续的语义相关段落分组（短句、引号上下文、列表）
-        2. 在每个语义单元后插入一个应答句
+        逐段后插入应答句（模式5：after_paragraph）
+        与桌面版保持一致：按编号/符号层级判定，而不是语义分组。
+        特殊处理：
+        1. 段落末尾带冒号“：”，该段落后不插入应答句。
+        2. 对列表段落/手动编号，按“后一段关系”判断是否插入：
+           - 后一段编号/符号样式一致（同层连续）→ 插入；
+           - 后一段编号/符号样式不一致，但回到了上层 → 插入；
+           - 进入更深的新子层 → 不插入；
+           - 后一段为普通段落/标题/图片等 → 插入。
         :return: (insert_count, total_heading_count)
         """
-        from copy import deepcopy as deep_copy
-        
         insert_count = 0
         total_heading_count = 0
-        
-        # 第一步：将元素分组为语义单元
-        semantic_groups = self._group_semantic_units(children, doc)
-        
-        # 第二步：遍历每个语义单元，在单元后插入应答句
-        for group in semantic_groups:
-            if not group:
+
+        # 第一步：收集段落信息（只包含 w:p 元素，按原始顺序）
+        para_info = []
+        for idx, child in enumerate(children):
+            if not hasattr(child, 'tag') or child.tag != qn('w:p'):
                 continue
-            
-            first_elem = group[0]
-            
-            # 统计标题数量
-            if hasattr(first_elem, 'tag') and first_elem.tag == qn('w:p'):
-                if self.is_heading_paragraph(first_elem, doc):
-                    total_heading_count += len([e for e in group if hasattr(e, 'tag') and e.tag == qn('w:p') and self.is_heading_paragraph(e, doc)])
-            
-            # 先添加语义单元中的所有元素
-            for elem in group:
-                new_children.append(elem)
-            
-            # 判断是否为需要插入应答句的语义单元
-            should_insert = self._should_insert_answer_for_group(group, doc)
-            
-            if should_insert:
-                # 在语义单元后插入应答句
-                answer_elem = deep_copy(answer_template)
+            text = self._get_paragraph_text(child)
+            if self._is_empty_paragraph(text):
+                info = 'empty'
+                numbering = None
+            elif self.is_heading_paragraph(child, doc):
+                info = 'heading'
+                numbering = None
+                total_heading_count += 1
+            elif len(child.findall('.//' + qn('a:blip'))) > 0:
+                info = 'image'
+                numbering = None
+            else:
+                info = 'normal'
+                numbering = self._get_numbering_style_key(child, doc)
+            para_info.append({
+                'idx': idx,
+                'info': info,
+                'text': text,
+                'numbering': numbering,
+                'level': 0,
+            })
+
+        # 第二步：全盘解析编号层级（基于编号样式栈，缩进仅作为兜底不参与判断）
+        self._assign_numbering_levels(para_info)
+
+        # 第三步：判断每个正文段落后是否插入应答句
+        insert_after = set()
+        n = len(para_info)
+        for i, p in enumerate(para_info):
+            if p['info'] != 'normal':
+                continue
+
+            if self._ends_with_colon(p['text']):
+                continue
+
+            next_p = para_info[i + 1] if i + 1 < n else None
+
+            if p['numbering'] is not None:
+                if next_p is None:
+                    insert_after.add(p['idx'])
+                elif next_p['numbering'] is None:
+                    insert_after.add(p['idx'])
+                else:
+                    if next_p['numbering'] == p['numbering']:
+                        insert_after.add(p['idx'])
+                    elif next_p['level'] < p['level']:
+                        insert_after.add(p['idx'])
+            else:
+                insert_after.add(p['idx'])
+
+        # 第四步：按原始顺序构建 new_children
+        for idx, child in enumerate(children):
+            new_children.append(child)
+            if idx in insert_after:
+                answer_elem = deepcopy(answer_template)
                 new_children.append(answer_elem)
                 insert_count += 1
-        
+
         return insert_count, total_heading_count
     
     def full_convert(self, source_file, template_file, output_file, 
