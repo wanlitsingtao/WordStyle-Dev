@@ -3441,7 +3441,45 @@ class DocumentConverter:
         if not text:
             return True
         return len(text.strip()) == 0
-    
+
+    def _ends_with_colon(self, text):
+        """判断文本是否以冒号结尾（中文“：”或英文“:”）"""
+        if not text:
+            return False
+        text = text.rstrip()
+        return text.endswith('：') or text.endswith(':')
+
+    def _assign_numbering_levels(self, para_info):
+        """全盘解析编号段落的层级关系（基于编号样式栈，不依赖缩进）。
+
+        逻辑与桌面版保持一致：
+        - 遇到标题 -> 清空样式栈
+        - 当前样式与栈顶相同 -> 同层连续
+        - 当前样式已在栈中 -> 回到上层
+        - 当前样式不在栈中 -> 新层级压栈
+        - 从符号切到数字编号 -> 视为新顶层序列
+        """
+        style_stack = []
+        for p in para_info:
+            if p['info'] == 'heading':
+                style_stack = []
+                continue
+            if p['info'] != 'normal' or p['numbering'] is None:
+                continue
+            key = p['numbering']
+            kind = key[0]
+            if style_stack and style_stack[-1] == key:
+                p['level'] = len(style_stack) - 1
+            elif key in style_stack:
+                while style_stack and style_stack[-1] != key:
+                    style_stack.pop()
+                p['level'] = len(style_stack) - 1
+            else:
+                if style_stack and style_stack[-1][0] == 'bullet' and kind == 'number':
+                    style_stack = []
+                style_stack.append(key)
+                p['level'] = len(style_stack) - 1
+
     def _group_semantic_units(self, children, doc):
         """
         将元素分组为语义单元
