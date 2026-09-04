@@ -12,6 +12,36 @@ import streamlit as st
 from state import app_state
 
 logger = logging.getLogger('WordStyle')
+_NAVIGATION_PAGES = {}
+
+
+def configure_navigation_pages(pages):
+    """保存主入口创建的页面对象，供侧栏导航链接使用。"""
+    global _NAVIGATION_PAGES
+    _NAVIGATION_PAGES = pages
+
+
+def _render_feature_menu():
+    """在额度信息之后渲染侧栏页面导航。"""
+    st.markdown("**功能菜单**")
+    for page_key, label in (
+        ("conversion", "文档转换"),
+        ("toolbox", "工具箱"),
+        ("tone_config", "祈使语气配置"),
+        ("comments", "用户评价"),
+    ):
+        st.page_link(_NAVIGATION_PAGES[page_key], label=label, use_container_width=True)
+
+
+@st.cache_resource
+def _get_logo_base64():
+    """读取侧边栏顶部品牌图标。"""
+    import base64
+
+    logo_path = Path("resource/logo.png")
+    if logo_path.exists():
+        return base64.b64encode(logo_path.read_bytes()).decode()
+    return None
 
 
 def render_top_nav(active_page: str = "conversion"):
@@ -119,9 +149,15 @@ def render_sidebar(active_page: str = "conversion"):
             color: #374151;
             margin: 0.2rem 0.2rem 0 0;
         }
+        [data-testid="stSidebar"] button {
+            white-space: nowrap;
+        }
+        [data-testid="stSidebar"] [data-testid="stMetricValue"] {
+            font-size: 1.8rem;
+        }
         div.block-container {
             max-width: 1400px;
-            padding-top: 1.2rem;
+            padding-top: 3rem;
             padding-left: 1.5rem;
             padding-right: 1.5rem;
         }
@@ -142,6 +178,16 @@ def render_sidebar(active_page: str = "conversion"):
     )
 
     with st.sidebar:
+        logo_b64 = _get_logo_base64()
+        if logo_b64:
+            st.markdown(
+                f'''<div style="display:flex;align-items:center;gap:8px;margin:0 0 0.8rem 0;">
+                <img src="data:image/png;base64,{logo_b64}" style="height:2.2rem;width:auto;">
+                <span style="font-size:1.35rem;font-weight:700;color:#262730;white-space:nowrap;">标书编写神器</span>
+                </div>''',
+                unsafe_allow_html=True,
+            )
+
         st.markdown('<div class="user-card">', unsafe_allow_html=True)
         st.markdown("<div style='display:flex;align-items:center;gap:10px;font-size:1.02rem;font-weight:700;color:#1f2937;'><span style='display:inline-flex;width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#4f46e5,#8b5cf6);color:white;align-items:center;justify-content:center;font-size:0.9rem;'>U</span> 用户信息</div>", unsafe_allow_html=True)
         st.caption(f"用户ID: {app_state.get_user_id()[:12]}...")
@@ -151,11 +197,58 @@ def render_sidebar(active_page: str = "conversion"):
         if st.session_state.get('user_init_failed', False):
             st.error("❌ 获取用户ID失败")
             st.caption("用户服务暂时不可用，请稍后刷新页面重试")
-        else:
-            if _logged_in_name:
-                st.caption(f"👤 {_logged_in_name}")
+        elif _logged_in_name:
+            st.caption(f"👤 {_logged_in_name}")
+
+        # ==================== 账号绑定 / 登录按钮 ====================
+        from account_manager import create_account_manager
+
+        _device_fp = st.session_state.get('device_fingerprint', '')
+        _logged_in_user = st.session_state.get('logged_in_username', None)
+
+        if _logged_in_user:
+            st.markdown(f"👤 **{_logged_in_user}**")
+
+            if st.session_state.get('show_unbind_confirm', False):
+                st.warning("确定要解绑账号吗？解绑后用户名和密码将被清除，恢复设备指纹身份。")
+                col_ub1, col_ub2 = st.columns(2)
+                with col_ub1:
+                    if st.button("确认解绑", key="confirm_unbind_btn", use_container_width=True):
+                        mgr = create_account_manager()
+                        success, msg = mgr.unbind_account(_device_fp)
+                        if success:
+                            st.session_state.logged_in_username = None
+                            st.session_state.logged_in_user_id = None
+                            st.session_state.sidebar_user_data = None
+                            st.session_state.show_unbind_confirm = False
+                            st.success(msg + " 已恢复设备指纹身份。")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                with col_ub2:
+                    if st.button("取消", key="cancel_unbind_btn", use_container_width=True):
+                        st.session_state.show_unbind_confirm = False
+                        st.rerun()
             else:
-                st.caption(f"用户ID: {app_state.get_user_id()[:12]}...")
+                if st.button("解绑用户", key="unbind_account_btn", use_container_width=True):
+                    st.session_state.show_unbind_confirm = True
+                    st.rerun()
+
+            if st.button("退出登录", key="logout_btn", use_container_width=True):
+                st.session_state.logged_in_username = None
+                st.session_state.logged_in_user_id = None
+                st.session_state.sidebar_user_data = None
+                st.rerun()
+        else:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("绑定账号", key="bind_account_btn", use_container_width=True):
+                    st.session_state.show_bind_dialog = True
+                    st.session_state.show_login_dialog = False
+            with col_b:
+                if st.button("账号登录", key="login_account_btn", use_container_width=True):
+                    st.session_state.show_login_dialog = True
+                    st.session_state.show_bind_dialog = False
 
         # 用户数据加载（复用 app.py 入口统一初始化的会话缓存）
         if not st.session_state.get('user_init_failed', False):
@@ -217,55 +310,7 @@ def render_sidebar(active_page: str = "conversion"):
         st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
         st.metric("累计转换文档", user_data['total_converted'])
 
-        # ==================== 账号绑定 / 登录 ====================
-        from account_manager import create_account_manager
-
-        _device_fp = st.session_state.get('device_fingerprint', '')
-        _logged_in_user = st.session_state.get('logged_in_username', None)
-
-        if _logged_in_user:
-            st.markdown(f"👤 **{_logged_in_user}**")
-
-            if st.session_state.get('show_unbind_confirm', False):
-                st.warning("确定要解绑账号吗？解绑后用户名和密码将被清除，恢复设备指纹身份。")
-                col_ub1, col_ub2 = st.columns(2)
-                with col_ub1:
-                    if st.button("✅ 确认解绑", key="confirm_unbind_btn", use_container_width=True):
-                        mgr = create_account_manager()
-                        success, msg = mgr.unbind_account(_device_fp)
-                        if success:
-                            st.session_state.logged_in_username = None
-                            st.session_state.logged_in_user_id = None
-                            st.session_state.sidebar_user_data = None
-                            st.session_state.show_unbind_confirm = False
-                            st.success(msg + " 已恢复设备指纹身份。")
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                with col_ub2:
-                    if st.button("取消", key="cancel_unbind_btn", use_container_width=True):
-                        st.session_state.show_unbind_confirm = False
-                        st.rerun()
-            else:
-                if st.button("🔓 解绑用户", key="unbind_account_btn", use_container_width=True):
-                    st.session_state.show_unbind_confirm = True
-                    st.rerun()
-
-            if st.button("🚪 退出登录", key="logout_btn", use_container_width=True):
-                st.session_state.logged_in_username = None
-                st.session_state.logged_in_user_id = None
-                st.session_state.sidebar_user_data = None
-                st.rerun()
-        else:
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("🔗 绑定账号", key="bind_account_btn", use_container_width=True):
-                    st.session_state.show_bind_dialog = True
-                    st.session_state.show_login_dialog = False
-            with col_b:
-                if st.button("🔑 账号登录", key="login_account_btn", use_container_width=True):
-                    st.session_state.show_login_dialog = True
-                    st.session_state.show_bind_dialog = False
+        _render_feature_menu()
 
         # ==================== 绑定账号对话框 ====================
         if st.session_state.get('show_bind_dialog', False):

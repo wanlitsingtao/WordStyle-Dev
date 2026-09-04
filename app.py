@@ -313,10 +313,18 @@ from pages.toolbox import render_toolbox_page
 from pages.tone_config import render_tone_config_page
 from pages.comments import render_comments_page
 
+navigation_pages = {
+    "conversion": st.Page(render_conversion_page, title="文档转换", icon="📄", default=True),
+    "toolbox": st.Page(render_toolbox_page, title="工具箱", icon="🛠️"),
+    "tone_config": st.Page(render_tone_config_page, title="祈使语气配置", icon="⚙️"),
+    "comments": st.Page(render_comments_page, title="用户评价", icon="💬"),
+}
+from components.sidebar import configure_navigation_pages
+configure_navigation_pages(navigation_pages)
 pg = st.navigation([
-    st.Page(render_conversion_page, title="文档转换", icon="📄", default=True),
-    st.Page(render_toolbox_page, title="工具箱", icon="🛠️"),
-    st.Page(render_tone_config_page, title="祈使语气配置", icon="⚙️"),
-    st.Page(render_comments_page, title="用户评价", icon="💬"),
-])
+    navigation_pages["conversion"],
+    navigation_pages["toolbox"],
+    navigation_pages["tone_config"],
+    navigation_pages["comments"],
+], position="hidden")
 pg.run()

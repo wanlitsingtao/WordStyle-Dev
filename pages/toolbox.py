@@ -11,8 +11,6 @@ def render_toolbox_page():
     from components.sidebar import render_sidebar
     render_sidebar("toolbox")
 
-    st.title("🛠️ 工具箱")
-
     tab_title, tab_style = st.tabs(["📑 源文档标题预处理", "🧹 模板样式精简"])
 
     with tab_title:

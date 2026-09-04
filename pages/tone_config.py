@@ -56,7 +56,6 @@ def render_tone_config_page():
     from components.sidebar import render_sidebar
     render_sidebar("tone_config")
 
-    st.title("⚙️ 祈使语气转换规则配置")
     st.markdown(
         "管理文档转换时的祈使语气替换规则。修改后保存到您的账户，"
         "所有转换均使用您的自定义规则。"

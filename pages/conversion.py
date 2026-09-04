@@ -46,19 +46,7 @@ def _get_user_data():
 
 
 def _render_header():
-    """渲染标题 / 全屏提示 / 说明信息。"""
-    _logo_b64 = _get_logo_base64()
-    if _logo_b64:
-        st.markdown(f'''
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.5rem;">
-            <img src="data:image/png;base64,{_logo_b64}"
-                 style="height: 2.5rem; vertical-align: middle;">
-            <span style="font-size: 2rem; font-weight: 700; color: #262730;">标书编写神器</span>
-        </div>
-        ''', unsafe_allow_html=True)
-    else:
-        st.title("📄 标书编写神器")
-
+    """渲染全屏提示和说明信息。"""
     st.markdown("""
     <div style='background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
     💡 <strong>提示：</strong>按 <kbd>F11</kbd> 键可以让浏览器全屏显示，获得更好的体验

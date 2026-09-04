@@ -140,8 +140,6 @@ def render_comments_page():
     from components.sidebar import render_sidebar
     render_sidebar("comments")
 
-    st.title("💬 用户评价")
-
     if app_state.get_comment_refresh_needed():
         app_state.set_comment_refresh_needed(False)
         st.session_state.comments_dirty = True
