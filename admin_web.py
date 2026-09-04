@@ -70,11 +70,12 @@ with st.sidebar.expander("诊断信息"):
 st.markdown("""
 <style>
     .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 55%, #60a5fa 100%);
         padding: 20px;
-        border-radius: 10px;
+        border-radius: 14px;
         color: white;
         margin: 10px 0;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.18);
     }
     .metric-value {
         font-size: 2.5em;

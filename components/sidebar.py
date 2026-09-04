@@ -23,7 +23,16 @@ def configure_navigation_pages(pages):
 
 def _render_feature_menu():
     """在额度信息之后渲染侧栏页面导航。"""
-    st.markdown("**功能菜单**")
+    st.markdown(
+        """
+        <div class="sidebar-section-divider"></div>
+        <div class="sidebar-section-title">
+            <span class="sidebar-section-mark"></span>
+            <span>功能菜单</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     for page_key, label in (
         ("conversion", "文档转换"),
         ("toolbox", "工具箱"),
@@ -66,13 +75,13 @@ def render_sidebar(active_page: str = "conversion"):
         """
         <style>
         section[data-testid="stSidebar"] {
-            background: #f3f0ea;
-            border-right: 1px solid #d5d0c8;
-            width: 280px !important;
-            min-width: 280px !important;
+            background: linear-gradient(180deg, #eef4ff 0%, #f8fafc 48%, #f8fafc 100%);
+            border-right: 1px solid #dbe5f2;
+            width: 286px !important;
+            min-width: 286px !important;
         }
         div[data-testid="stSidebarContent"] {
-            padding: 0.5rem 0.7rem 1rem;
+            padding: 0.8rem 0.85rem 1.2rem;
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] {
             margin: 0.18rem 0;
@@ -83,9 +92,9 @@ def render_sidebar(active_page: str = "conversion"):
             justify-content: flex-start;
             width: 100%;
             border-radius: 12px;
-            background: rgba(255,255,255,0.25);
-            border: 1px solid rgba(148,163,184,0.18);
-            color: #374151;
+            background: rgba(255,255,255,0.62);
+            border: 1px solid rgba(148,163,184,0.22);
+            color: #334155;
             font-size: 0.98rem;
             font-weight: 500;
             padding: 0.7rem 0.8rem;
@@ -94,84 +103,119 @@ def render_sidebar(active_page: str = "conversion"):
             margin: 0;
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] > a:hover {
-            background: rgba(255,255,255,0.7);
-            border-color: rgba(109, 120, 138, 0.2);
-            color: #111827;
+            background: #ffffff;
+            border-color: #93c5fd;
+            color: #1d4ed8;
+            transform: translateX(2px);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="app.py"] {
-            background: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.82);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="toolbox.py"] {
-            background: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.82);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="tone_config.py"] {
-            background: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.82);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="comments.py"] {
-            background: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.82);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="app.py"][href*="app.py"] {
-            background: linear-gradient(135deg, #e0e7ff, #f3f4f6);
-            border: 1px solid rgba(99,102,241,0.4);
-            color: #312e81;
+            background: linear-gradient(135deg, #dbeafe, #eff6ff);
+            border: 1px solid #93c5fd;
+            color: #1d4ed8;
             font-weight: 600;
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="toolbox.py"] {
-            background: rgba(255,255,255,0.35);
+            background: rgba(255,255,255,0.52);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="tone_config.py"] {
-            background: rgba(255,255,255,0.35);
+            background: rgba(255,255,255,0.52);
         }
         [data-testid="stSidebar"] [data-testid="stPageLink"] a[href*="comments.py"] {
-            background: rgba(255,255,255,0.35);
+            background: rgba(255,255,255,0.52);
         }
         [data-testid="stSidebar"] .user-card {
-            background: rgba(255,255,255,0.42);
-            border: 1px solid rgba(148,163,184,0.25);
+            background: rgba(255,255,255,0.78);
+            border: 1px solid #dbe5f2;
             border-radius: 14px;
             padding: 0.8rem 0.9rem;
             margin: 0.6rem 0 1rem;
         }
         [data-testid="stSidebar"] .kpi-box {
-            background: rgba(255,255,255,0.18);
-            border: 1px solid rgba(148,163,184,0.18);
+            background: rgba(255,255,255,0.6);
+            border: 1px solid #dbe5f2;
             border-radius: 10px;
             padding: 0.55rem 0.7rem;
             margin: 0.4rem 0;
         }
         [data-testid="stSidebar"] .mini-btn {
-            background: rgba(255,255,255,0.7);
-            border: 1px solid rgba(148,163,184,0.25);
+            background: rgba(255,255,255,0.86);
+            border: 1px solid #dbe5f2;
             border-radius: 10px;
             padding: 0.45rem 0.6rem;
             text-align: center;
             font-size: 0.88rem;
-            color: #374151;
+            color: #334155;
             margin: 0.2rem 0.2rem 0 0;
         }
         [data-testid="stSidebar"] button {
             white-space: nowrap;
         }
         [data-testid="stSidebar"] [data-testid="stMetricValue"] {
-            font-size: 1.8rem;
+            font-size: 1.25rem;
         }
-        div.block-container {
-            max-width: 1400px;
-            padding-top: 3rem;
-            padding-left: 1.5rem;
-            padding-right: 1.5rem;
+        [data-testid="stSidebar"] .sidebar-kpi-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            margin: 0.65rem 0 0.9rem;
         }
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div[data-testid="stHorizontalBlock"] > div[data-testid="stVerticalBlock"] {
-            background: rgba(255,255,255,0.78);
-            border: 1px solid rgba(203, 213, 225, 0.9);
-            border-radius: 18px;
-            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.04);
-            padding: 0.9rem 1rem;
+        [data-testid="stSidebar"] .sidebar-kpi {
+            min-width: 0;
+            padding: 0.65rem 0.7rem;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid #dbe5f2;
+            border-radius: 10px;
         }
-        [data-testid="stAppViewContainer"] {
-            background: #f6f5f3;
+        [data-testid="stSidebar"] .sidebar-kpi-label {
+            color: #64748b;
+            font-size: 0.72rem;
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
+        [data-testid="stSidebar"] .sidebar-kpi-value {
+            color: #172b4d;
+            font-size: 1.25rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-top: 0.2rem;
+        }
+        [data-testid="stSidebar"] .sidebar-section-divider {
+            height: 1px;
+            margin: 0.35rem 0 0.9rem;
+            background: linear-gradient(90deg, #bfdbfe 0%, #dbe5f2 65%, transparent 100%);
+        }
+        [data-testid="stSidebar"] .sidebar-section-title {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            margin: 0 0 0.55rem 0.1rem;
+            color: #334155;
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        [data-testid="stSidebar"] .sidebar-section-mark {
+            width: 4px;
+            height: 15px;
+            border-radius: 999px;
+            background: #2563eb;
+        }
+        [data-testid="stAppViewContainer"] { background: transparent; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -307,8 +351,21 @@ def render_sidebar(active_page: str = "conversion"):
                     'conversion_history': [],
                 }
 
-        st.metric("剩余段落数", f"{user_data['paragraphs_remaining']:,}")
-        st.metric("累计转换文档", user_data['total_converted'])
+        st.markdown(
+            f"""
+            <div class="sidebar-kpi-grid">
+                <div class="sidebar-kpi">
+                    <div class="sidebar-kpi-label">剩余段落数</div>
+                    <div class="sidebar-kpi-value">{user_data['paragraphs_remaining']:,}</div>
+                </div>
+                <div class="sidebar-kpi">
+                    <div class="sidebar-kpi-label">累计转换文档</div>
+                    <div class="sidebar-kpi-value">{user_data['total_converted']:,}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         _render_feature_menu()
 

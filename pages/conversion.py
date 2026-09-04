@@ -48,13 +48,13 @@ def _get_user_data():
 def _render_header():
     """渲染全屏提示和说明信息。"""
     st.markdown("""
-    <div style='background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
+    <div style='background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; padding: 12px 14px; border-radius: 12px; margin-bottom: 12px;'>
     💡 <strong>提示：</strong>按 <kbd>F11</kbd> 键可以让浏览器全屏显示，获得更好的体验
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("""
-    <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
+    <div style='background: #fffbeb; border: 1px solid #fde68a; color: #78350f; padding: 12px 14px; border-radius: 12px; margin-bottom: 12px;'>
      <strong>说明：</strong>文档转换完成后，请及时下载，源文档和结果文档会被自动清理。自行做好标书检查，Good luck！
     </div>
     """, unsafe_allow_html=True)
@@ -398,13 +398,12 @@ def render_conversion_page():
     # ==================== 转换配置 ====================
     st.markdown("---")
     st.subheader("⚙️ 转换配置")
-
     _load_user_defaults()
 
     if 'do_mood_config' not in st.session_state:
         app_state.set_do_mood_config(True)
 
-    st.markdown("---")
+    #st.markdown("---")
     map_col1, map_col2 = st.columns([2, 8])
     with map_col1:
         if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,

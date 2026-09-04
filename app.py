@@ -35,6 +35,170 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==================== 全局视觉主题 ====================
+# 保持业务组件不变，仅统一页面层级、留白和控件状态，形成现代办公风格。
+st.markdown(
+    """
+    <style>
+        :root {
+            --office-ink: #172b4d;
+            --office-muted: #64748b;
+            --office-blue: #2563eb;
+            --office-blue-dark: #1d4ed8;
+            --office-surface: #ffffff;
+            --office-canvas: #f5f7fb;
+            --office-border: #e2e8f0;
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at 85% 0%, rgba(37, 99, 235, 0.07), transparent 30rem),
+                var(--office-canvas);
+            color: var(--office-ink);
+        }
+        [data-testid="stHeader"] {
+            background: rgba(245, 247, 251, 0.86);
+        }
+        div.block-container {
+            max-width: 1440px;
+            padding-top: 2.6rem;
+            padding-bottom: 3rem;
+        }
+        h1, h2, h3 {
+            color: var(--office-ink);
+            letter-spacing: -0.02em;
+        }
+        h1 {
+            font-size: clamp(1.8rem, 3vw, 2.5rem) !important;
+            font-weight: 750 !important;
+            margin-bottom: 0.35rem !important;
+        }
+        h2, h3 {
+            font-weight: 700 !important;
+        }
+        /* 主区域控件提示采用更紧凑的办公界面字号，侧边栏保持原有层级。 */
+        [data-testid="stAppViewContainer"] main h2 {
+            font-size: 1.12rem !important;
+            margin-top: 1.15rem !important;
+            margin-bottom: 0.45rem !important;
+        }
+        [data-testid="stAppViewContainer"] main h3 {
+            font-size: 0.98rem !important;
+            margin-top: 0.95rem !important;
+            margin-bottom: 0.35rem !important;
+        }
+        [data-testid="stAppViewContainer"] main [data-testid="stHeading"] h1,
+        [data-testid="stAppViewContainer"] main [data-testid="stHeading"] h2,
+        [data-testid="stAppViewContainer"] main [data-testid="stHeading"] h3,
+        [data-testid="stAppViewContainer"] main [data-testid="stMarkdownContainer"] h1,
+        [data-testid="stAppViewContainer"] main [data-testid="stMarkdownContainer"] h2,
+        [data-testid="stAppViewContainer"] main [data-testid="stMarkdownContainer"] h3 {
+            color: var(--office-ink) !important;
+            font-size: 1rem !important;
+            font-weight: 650 !important;
+            line-height: 1.25 !important;
+            margin-top: 0.85rem !important;
+            margin-bottom: 0.35rem !important;
+        }
+        [data-testid="stAppViewContainer"] main [data-testid="stWidgetLabel"] label,
+        [data-testid="stAppViewContainer"] main [data-testid="stFileUploaderDropzone"] span,
+        [data-testid="stAppViewContainer"] main [data-testid="stFileUploaderDropzone"] small {
+            font-size: 0.78rem !important;
+            line-height: 1.35 !important;
+        }
+        [data-testid="stAppViewContainer"] main [data-testid="stCaptionContainer"],
+        [data-testid="stAppViewContainer"] main [data-testid="stMarkdownContainer"] p {
+            font-size: 0.78rem;
+            line-height: 1.45;
+        }
+        [data-testid="stAppViewContainer"] main .stButton > button,
+        [data-testid="stAppViewContainer"] main .stDownloadButton > button {
+            font-size: 0.82rem;
+        }
+        [data-testid="stCaptionContainer"] {
+            color: var(--office-muted);
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--office-border);
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.045);
+        }
+        div[data-testid="stFileUploaderDropzone"] {
+            background: #f8fafc;
+            border: 1px dashed #b8c7dc;
+            border-radius: 14px;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+        div[data-testid="stFileUploaderDropzone"]:hover {
+            background: #eff6ff;
+            border-color: #60a5fa;
+        }
+        .stButton > button, .stDownloadButton > button {
+            border-radius: 10px;
+            border: 1px solid #cbd5e1;
+            color: var(--office-ink);
+            font-weight: 600;
+            min-height: 2.65rem;
+            transition: all 0.18s ease;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            border-color: #93c5fd;
+            color: var(--office-blue-dark);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+        }
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, var(--office-blue), var(--office-blue-dark));
+            border-color: var(--office-blue);
+            color: white;
+        }
+        .stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+        [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] > div,
+        [data-baseweb="select"] > div {
+            border-radius: 10px;
+            border-color: #cbd5e1;
+            background: var(--office-surface);
+        }
+        [data-baseweb="input"] > div:focus-within,
+        [data-baseweb="textarea"] > div:focus-within,
+        [data-baseweb="select"] > div:focus-within {
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 1px #60a5fa;
+        }
+        [data-testid="stExpander"] {
+            border: 1px solid var(--office-border);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.72);
+        }
+        [data-testid="stAlert"] {
+            border-radius: 12px;
+            border-width: 1px;
+        }
+        [data-testid="stMetric"] {
+            background: var(--office-surface);
+            border: 1px solid var(--office-border);
+            border-radius: 14px;
+            padding: 0.8rem 1rem;
+            box-shadow: 0 5px 16px rgba(15, 23, 42, 0.035);
+        }
+        [data-testid="stMetricLabel"] {
+            color: var(--office-muted);
+        }
+        [data-testid="stMetricValue"] {
+            color: var(--office-ink);
+        }
+        hr {
+            border-color: var(--office-border);
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 import os
 import json
 import time
@@ -314,10 +478,18 @@ from pages.tone_config import render_tone_config_page
 from pages.comments import render_comments_page
 
 navigation_pages = {
-    "conversion": st.Page(render_conversion_page, title="文档转换", icon="📄", default=True),
-    "toolbox": st.Page(render_toolbox_page, title="工具箱", icon="🛠️"),
-    "tone_config": st.Page(render_tone_config_page, title="祈使语气配置", icon="⚙️"),
-    "comments": st.Page(render_comments_page, title="用户评价", icon="💬"),
+    "conversion": st.Page(
+        render_conversion_page, title="文档转换", icon="📄", default=True, url_path="conversion"
+    ),
+    "toolbox": st.Page(
+        render_toolbox_page, title="工具箱", icon="🛠️", url_path="toolbox"
+    ),
+    "tone_config": st.Page(
+        render_tone_config_page, title="祈使语气配置", icon="⚙️", url_path="tone-config"
+    ),
+    "comments": st.Page(
+        render_comments_page, title="用户评价", icon="💬", url_path="comments"
+    ),
 }
 from components.sidebar import configure_navigation_pages
 configure_navigation_pages(navigation_pages)

@@ -133,7 +133,7 @@ def render_conversion_config():
     """, unsafe_allow_html=True)
 
     # ========== 转换选项（与桌面版"转换选项"区域一致：仅祈使语气转换） ==========
-    st.markdown("**转换选项**")
+    #st.markdown("**转换选项**")
 
     do_mood = st.checkbox(
         "进行祈使语气转换",
@@ -145,8 +145,8 @@ def render_conversion_config():
         st.session_state.do_mood_config = do_mood
 
     # ========== 章节提示语配置（独立配置区） ==========
-    st.markdown("---")
-    st.markdown("**章节提示语**")
+    #st.markdown("---")
+    #st.markdown("**章节提示语**")
 
     # 模板样式列表
     template_styles = st.session_state.get('template_styles', ["Normal"])
