@@ -568,6 +568,40 @@ class AppState:
         """设置评论刷新标志"""
         st.session_state.comment_refresh_needed = refresh
     
+    # ==================== 语气规则配置相关 ====================
+    
+    @staticmethod
+    def get_tone_rules() -> Optional[Dict]:
+        """获取当前编辑中的语气规则（会话级，未保存）"""
+        return st.session_state.get('tone_rules')
+    
+    @staticmethod
+    def set_tone_rules(rules: Dict):
+        """设置当前编辑中的语气规则"""
+        st.session_state.tone_rules = rules
+    
+    @staticmethod
+    def get_tone_rules_dirty() -> bool:
+        """检查语气规则是否有未保存的修改"""
+        return st.session_state.get('tone_rules_dirty', False)
+    
+    @staticmethod
+    def set_tone_rules_dirty(dirty: bool):
+        """设置语气规则未保存标记"""
+        st.session_state.tone_rules_dirty = dirty
+    
+    # ==================== 工具箱结果传递 ====================
+    
+    @staticmethod
+    def get_toolbox_result() -> Optional[Dict]:
+        """获取工具箱处理结果（供 P2 跨页面传递预留）"""
+        return st.session_state.get('toolbox_result')
+    
+    @staticmethod
+    def set_toolbox_result(result: Optional[Dict]):
+        """设置工具箱处理结果"""
+        st.session_state.toolbox_result = result
+    
     # ==================== 引导相关 ====================
     
     @staticmethod
@@ -626,6 +660,10 @@ class AppState:
             'feedback_form_reset': 0,
             'comment_refresh_needed': False,
             'has_seen_guide': False,
+            # 语气规则配置（会话级编辑状态）
+            'tone_rules': None,
+            'tone_rules_dirty': False,
+            'toolbox_result': None,
             # 新增配置键（与桌面版同步）
             'answer_source_style_config': '',
             'answer_copy_style_config': '',

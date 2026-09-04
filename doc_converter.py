@@ -62,49 +62,84 @@ OUTLINE_STYLE_MAP = {
     7: "Heading 7", 8: "Heading 8", 9: "Heading 9",
 }
 
-# 祈使语气替换规则
-MULTI_IMPERATIVE_TO_STATEMENT = {
+# ==================== 祈使语气替换规则（默认值，作为"恢复默认"数据源）====================
+# [REFACTOR v2.1.0] 原 MULTI_IMPERATIVE_TO_STATEMENT 等模块级常量重命名为 DEFAULT_ 前缀，
+# 作为 ToneRulesManager 恢复默认 + DocumentConverter 无参初始化的数据源。
+# 实例级动态正则在 _build_tone_regexes() 中从 self.tone_rules 编译，不再依赖模块级正则。
+DEFAULT_MULTI_IMPERATIVE = {
     "必须": "将", "不得": "不会", "不应": "不会", "不可": "不会",
     "不能": "无法", "切勿": "不要", "严禁": "禁止", "请勿": "请避免",
     "不许": "不允许",
 }
 
-MULTI_EXCEPTIONS = [
+DEFAULT_MULTI_EXCEPTIONS = [
     "不可抗力", "不得已", "不由得", "不可通行", "不可开交", "不可理喻", "不可或缺",
     "不得少于", "不得大于", "不得超过", "不得低于", "不得高于", "不得小于", "不得用于",
     "不可否认", "不可避免", "不可逆", "不可分割",
 ]
 
-SINGLE_REPLACE = {"应": "将", "须": "将"}
+DEFAULT_SINGLE_REPLACE = {"应": "将", "须": "将"}
 
-EXCEPTION_WORDS_YING = [
+DEFAULT_EXCEPTION_WORDS_YING = [
     "响应", "应用", "适应", "相应", "供应", "反应", "效应", "对应", "有应", "报应",
     "呼应", "感应", "应邀", "应酬", "应允", "应声", "应景", "应试", "应变", "应付",
     "应急", "应验", "应战", "应征", "应运", "应答", "应对", "应接", "应诺", "应求",
     "应时", "应需",
 ]
-EXCEPTION_WORDS_XU = ["必须", "无须", "无需","须知"]
+DEFAULT_EXCEPTION_WORDS_XU = ["必须", "无须", "无需", "须知"]
 
-# "应+对"分离结构标志动词：用于区分复合词"应对"(yìng duì) 和 情态动词"应"+介词"对"(yīng+duì)
+# "应+对"分离结构标志动词列表（原 _YING_DUI_VERBS 正则的动词列表，暴露为可配置）
+# 用于区分复合词"应对"(yìng duì = 处理/对付) 和 情态动词"应"+介词"对"(yīng + duì = 应该 + 对于)
 # 模式：应 + 对 + <名词短语> + [动词] → 类型B，不应视为例外
-_YING_DUI_VERBS = re.compile(
-    r'(负责|进行|予以|加以|负有|承担|提供|作出|做出|提交|出示'
-    r'|说明|描述|解释|保证|给予|出具|支付|赔偿|归还|返还|退回'
-    r'|履行|执行|实施|开展|组织|落实|协调|处理|管理|审核|审批'
-    r')'
-)
-REPLACE_MAP = {
+DEFAULT_YING_DUI_VERBS = [
+    "负责", "进行", "予以", "加以", "负有", "承担", "提供",
+    "作出", "做出", "提交", "出示", "说明", "描述", "解释",
+    "保证", "给予", "出具", "支付", "赔偿", "归还", "返还",
+    "退回", "履行", "执行", "实施", "开展", "组织", "落实",
+    "协调", "处理", "管理", "审核", "审批",
+]
+
+DEFAULT_REPLACE_MAP = {
     "卖方": "本投标人",
     "投标厂商": "本投标人",
     "投标方": "本投标人",
     "投标商": "本投标人",
+    "请投标人": "本投标人",
     "投标人需要": "本投标人",
     "投标人需": "本投标人",
     "投标人": "本投标人",
 }
 
 
+def get_default_tone_rules() -> dict:
+    """返回完整默认语气规则字典。
+
+    供 ToneRulesManager 恢复默认、DocumentConverter 无参初始化、
+    以及 components/tone_rules.py 渲染初始状态使用。
+
+    Returns:
+        dict: 完整语气规则字典，结构如下：
+            multi_imperative: {原词: 替换词}
+            single_imperative: {原词: 替换词}
+            bidder_terms: {原词: 替换词}
+            exceptions: {multi: [...], ying: [...], xu: [...]}
+            ying_dui_verbs: [...]
+    """
+    return {
+        "multi_imperative": dict(DEFAULT_MULTI_IMPERATIVE),
+        "single_imperative": dict(DEFAULT_SINGLE_REPLACE),
+        "bidder_terms": dict(DEFAULT_REPLACE_MAP),
+        "exceptions": {
+            "multi": list(DEFAULT_MULTI_EXCEPTIONS),
+            "ying": list(DEFAULT_EXCEPTION_WORDS_YING),
+            "xu": list(DEFAULT_EXCEPTION_WORDS_XU),
+        },
+        "ying_dui_verbs": list(DEFAULT_YING_DUI_VERBS),
+    }
+
+
 def build_word_pattern(word):
+    """构建单词匹配正则（前后用非字母数字边界限定）"""
     return r'(?<![a-zA-Z0-9])' + re.escape(word) + r'(?![a-zA-Z0-9])'
 
 
@@ -115,33 +150,101 @@ def clean_list_numbering(text):
     return cleaned
 
 
-MULTI_IMPERATIVE_PATTERNS = [build_word_pattern(w) for w in MULTI_IMPERATIVE_TO_STATEMENT.keys()]
-MULTI_IMPERATIVE_REGEX = re.compile('|'.join(MULTI_IMPERATIVE_PATTERNS))
+# [BACKCOMPAT] 保留模块级正则（基于 DEFAULT_ 常量构建），供可能的外部直接引用；
+# DocumentConverter 实例方法不再使用这些模块级正则，改用 self.xxx_regex（实例级动态构建）。
+MULTI_IMPERATIVE_REGEX = re.compile('|'.join(
+    build_word_pattern(w) for w in DEFAULT_MULTI_IMPERATIVE.keys()
+))
 
-SINGLE_IMPERATIVE_PATTERNS = [build_word_pattern(w) for w in SINGLE_REPLACE.keys()]
-SINGLE_IMPERATIVE_REGEX = re.compile('|'.join(SINGLE_IMPERATIVE_PATTERNS))
+SINGLE_IMPERATIVE_REGEX = re.compile('|'.join(
+    build_word_pattern(w) for w in DEFAULT_SINGLE_REPLACE.keys()
+))
 
 REPLACE_REGEX = None
-if REPLACE_MAP:
-    patterns = []
-    for word, repl in REPLACE_MAP.items():
+if DEFAULT_REPLACE_MAP:
+    _replace_patterns = []
+    for word, repl in DEFAULT_REPLACE_MAP.items():
         if word.startswith("投标人"):
             pat = r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])'
         else:
             pat = build_word_pattern(word)
-        patterns.append(pat)
-    REPLACE_REGEX = re.compile('|'.join(patterns))
+        _replace_patterns.append(pat)
+    REPLACE_REGEX = re.compile('|'.join(_replace_patterns))
 
 
 class DocumentConverter:
     """文档转换器主类"""
     
-    def __init__(self):
+    def __init__(self, tone_rules: dict = None):
+        """初始化文档转换器。
+
+        Args:
+            tone_rules: 语气规则字典（结构见 get_default_tone_rules()）。
+                None 时加载默认规则（向后兼容：无参调用行为与重构前完全一致）。
+                传入用户自定义规则时，实例级正则从该规则动态编译。
+        """
         self.logger = None
         self.stats = {"para": 0, "table": 0, "heading": 0}
         self.source_styles = set()  # 源文档中使用的样式
         self.template_styles = set()  # 模板文档中的样式
         self.list_bullet = LIST_BULLET_SYMBOL  # 列表段落符号，默认为配置常量
+        # 语气规则：None → 默认；dict → 用户自定义（注入后不可变，同实例可处理多文件）
+        self.tone_rules = tone_rules if tone_rules is not None else get_default_tone_rules()
+        self._build_tone_regexes()
+
+    def _build_tone_regexes(self):
+        """从 self.tone_rules 动态构建实例级正则（替代模块级常量正则）。
+
+        构建以下实例属性：
+            self.multi_imperative_map / self.multi_imperative_regex
+            self.single_replace_map / self.single_imperative_regex
+            self.replace_map / self.replace_regex
+            self.multi_exceptions / self.exception_words_ying / self.exception_words_xu
+            self.ying_dui_verbs_regex
+        """
+        tr = self.tone_rules or {}
+
+        # 多字祈使词
+        multi_map = tr.get("multi_imperative", {}) or {}
+        multi_keys = list(multi_map.keys())
+        self.multi_imperative_map = multi_map
+        self.multi_imperative_regex = (
+            re.compile('|'.join(build_word_pattern(w) for w in multi_keys))
+            if multi_keys else None
+        )
+
+        # 单字祈使词
+        single_map = tr.get("single_imperative", {}) or {}
+        single_keys = list(single_map.keys())
+        self.single_replace_map = single_map
+        self.single_imperative_regex = (
+            re.compile('|'.join(build_word_pattern(w) for w in single_keys))
+            if single_keys else None
+        )
+
+        # 投标人称谓
+        bidder_map = tr.get("bidder_terms", {}) or {}
+        self.replace_map = bidder_map
+        _patterns = []
+        for word in bidder_map.keys():
+            if word.startswith("投标人"):
+                _patterns.append(r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])')
+            else:
+                _patterns.append(build_word_pattern(word))
+        self.replace_regex = re.compile('|'.join(_patterns)) if _patterns else None
+
+        # 例外词
+        exc = tr.get("exceptions", {}) or {}
+        self.multi_exceptions = exc.get("multi", []) or []
+        self.exception_words_ying = exc.get("ying", []) or []
+        self.exception_words_xu = exc.get("xu", []) or []
+
+        # "应+对"分离结构标志动词（存储为列表，运行时动态编译正则）
+        verbs = tr.get("ying_dui_verbs", []) or []
+        self.ying_dui_verbs_regex = (
+            re.compile('(' + '|'.join(re.escape(v) for v in verbs) + ')')
+            if verbs else None
+        )
         
     def setup_logger(self, source_file):
         log_filename = os.path.splitext(source_file)[0] + "_err.log"
@@ -2012,9 +2115,9 @@ class DocumentConverter:
         且动词距"对" > 2 字 → 分离结构，不视为例外。
         """
         if word == "应":
-            exceptions = EXCEPTION_WORDS_YING
+            exceptions = self.exception_words_ying
         elif word == "须":
-            exceptions = EXCEPTION_WORDS_XU
+            exceptions = self.exception_words_xu
         else:
             return False
         
@@ -2046,7 +2149,9 @@ class DocumentConverter:
         返回 True 表示是分离结构（类型B），"应"不应受"应对"例外保护。
         """
         after_dui = full_text[dui_pos:dui_pos + 25]
-        for m in _YING_DUI_VERBS.finditer(after_dui):
+        if self.ying_dui_verbs_regex is None:
+            return False
+        for m in self.ying_dui_verbs_regex.finditer(after_dui):
             verb_dist = m.start()  # 动词距"对"的字数
             if verb_dist > 2:
                 return True
@@ -2057,7 +2162,7 @@ class DocumentConverter:
         start = max(0, match_start - 20)
         end = min(len(full_text), match_end + 20)
         substr = full_text[start:end]
-        for exc in MULTI_EXCEPTIONS:
+        for exc in self.multi_exceptions:
             if exc in substr:
                 pos = substr.find(exc)
                 while pos != -1:
@@ -2072,18 +2177,22 @@ class DocumentConverter:
         """替换多字祈使词"""
         if not run_text:
             return run_text
+        if self.multi_imperative_regex is None:
+            return run_text
         def repl(match):
             word = match.group(0)
             abs_start = run_start_offset + match.start()
             abs_end = run_start_offset + match.end()
             if self.is_multi_exception(full_text, abs_start, abs_end, word):
                 return word
-            return MULTI_IMPERATIVE_TO_STATEMENT.get(word, word)
-        return MULTI_IMPERATIVE_REGEX.sub(repl, run_text)
+            return self.multi_imperative_map.get(word, word)
+        return self.multi_imperative_regex.sub(repl, run_text)
     
     def replace_single_imperative(self, run_text, full_text, run_start_offset):
         """替换单字祈使词"""
         if not run_text:
+            return run_text
+        if self.single_imperative_regex is None:
             return run_text
         def repl(match):
             word = match.group(0)
@@ -2091,8 +2200,8 @@ class DocumentConverter:
             abs_end = run_start_offset + match.end()
             if self.is_part_of_exception(full_text, abs_start, abs_end, word):
                 return word
-            return SINGLE_REPLACE.get(word, word)
-        return SINGLE_IMPERATIVE_REGEX.sub(repl, run_text)
+            return self.single_replace_map.get(word, word)
+        return self.single_imperative_regex.sub(repl, run_text)
     
     _ZW_CHARS_RE = re.compile(r'[\u200b\u200c\u200d\ufeff]')
 
@@ -2146,38 +2255,40 @@ class DocumentConverter:
             if repl_text and repl_text != orig:
                 replacements.append((fs, fe, repl_text))
 
-        # 1. REPLACE_REGEX: "投标人" -> "本投标人" 等固定替换
-        if REPLACE_REGEX:
-            for m in REPLACE_REGEX.finditer(clean_text):
-                _add_match(m.start(), m.end(), REPLACE_MAP.get(m.group(0), ''))
+        # 1. replace_regex: "投标人" -> "本投标人" 等固定替换
+        if self.replace_regex:
+            for m in self.replace_regex.finditer(clean_text):
+                _add_match(m.start(), m.end(), self.replace_map.get(m.group(0), ''))
 
-        # 2. MULTI_IMPERATIVE_REGEX: 多字祈使词
-        for m in MULTI_IMPERATIVE_REGEX.finditer(clean_text):
-            word = m.group(0)
-            cs, ce = m.start(), m.end()
-            if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
-                continue
-            fs = clean_to_full[cs]
-            fe = clean_to_full[ce - 1] + 1
-            if self.is_multi_exception(full_text, fs, fe, word):
-                continue
-            repl = MULTI_IMPERATIVE_TO_STATEMENT.get(word)
-            if repl:
-                replacements.append((fs, fe, repl))
+        # 2. multi_imperative_regex: 多字祈使词
+        if self.multi_imperative_regex:
+            for m in self.multi_imperative_regex.finditer(clean_text):
+                word = m.group(0)
+                cs, ce = m.start(), m.end()
+                if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
+                    continue
+                fs = clean_to_full[cs]
+                fe = clean_to_full[ce - 1] + 1
+                if self.is_multi_exception(full_text, fs, fe, word):
+                    continue
+                repl = self.multi_imperative_map.get(word)
+                if repl:
+                    replacements.append((fs, fe, repl))
 
-        # 3. SINGLE_IMPERATIVE_REGEX: 单字祈使词
-        for m in SINGLE_IMPERATIVE_REGEX.finditer(clean_text):
-            word = m.group(0)
-            cs, ce = m.start(), m.end()
-            if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
-                continue
-            fs = clean_to_full[cs]
-            fe = clean_to_full[ce - 1] + 1
-            if self.is_part_of_exception(full_text, fs, fe, word):
-                continue
-            repl = SINGLE_REPLACE.get(word)
-            if repl:
-                replacements.append((fs, fe, repl))
+        # 3. single_imperative_regex: 单字祈使词
+        if self.single_imperative_regex:
+            for m in self.single_imperative_regex.finditer(clean_text):
+                word = m.group(0)
+                cs, ce = m.start(), m.end()
+                if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
+                    continue
+                fs = clean_to_full[cs]
+                fe = clean_to_full[ce - 1] + 1
+                if self.is_part_of_exception(full_text, fs, fe, word):
+                    continue
+                repl = self.single_replace_map.get(word)
+                if repl:
+                    replacements.append((fs, fe, repl))
 
         if not replacements:
             return False

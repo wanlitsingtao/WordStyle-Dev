@@ -1480,6 +1480,28 @@ def get_config(key: str) -> Optional[str]:
     _config_cache[key] = (_value, _now + CONFIG_CACHE_TTL_SECONDS)
     return _value
 
+def get_tone_rules(user_id: str) -> Dict:
+    """读取用户语气规则（无配置时返回默认规则集）。
+
+    语气规则存储在 User.style_mappings._tone_rules（JSONB 嵌套子节点）。
+    三个数据源模式（local/supabase/api）均通过 load_user_data 统一返回 style_mappings，
+    因此无需数据库迁移。
+    """
+    from tone_rules_manager import ToneRulesManager
+    return ToneRulesManager.load(user_id)
+
+
+def save_tone_rules(user_id: str, rules: Dict) -> bool:
+    """保存用户语气规则到 style_mappings._tone_rules。
+
+    Returns:
+        bool: 保存是否成功。
+    """
+    from tone_rules_manager import ToneRulesManager
+    ok, _msg = ToneRulesManager.save(user_id, rules)
+    return ok
+
+
 def update_config(key: str, value: str, description: str = None) -> Dict:
     """
     更新配置项

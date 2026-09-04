@@ -99,3 +99,47 @@ def count_pages(docx_file):
         return estimated_pages
     except:
         return 0  # 无法计算时返回0
+
+
+def detect_missing_heading_styles(source_files, user_id):
+    """检测源文档是否缺少标题样式（供转换页引导提示 P1-1）。
+
+    Args:
+        source_files: 已上传的源文件对象列表。
+        user_id: 当前用户ID（用于生成临时文件路径）。
+
+    Returns:
+        Dict[str, bool]：{文件名: 是否缺少标题样式}。无法分析的文件标记为 False。
+    """
+    from title_preprocessor import TitlePreprocessor
+
+    result = {}
+    for sf in source_files:
+        temp_source = f"temp_source_{user_id}_{sf.name}"
+        try:
+            with open(temp_source, 'wb') as f:
+                f.write(sf.getbuffer())
+            result[sf.name] = not TitlePreprocessor.has_heading_styles(temp_source)
+        except Exception as e:
+            logger.warning(f"检测标题样式失败 {sf.name}: {e}")
+            result[sf.name] = False
+    return result
+
+
+def count_template_styles(template_file):
+    """统计模板文档的总样式数（供转换页引导提示 P1-2）。
+
+    Args:
+        template_file: 模板文档本地路径。
+
+    Returns:
+        int: 样式总数；分析失败返回 0。
+    """
+    from style_cleaner import StyleCleaner
+
+    try:
+        analysis = StyleCleaner.analyze_styles(template_file)
+        return analysis.get("total", 0)
+    except Exception as e:
+        logger.warning(f"统计模板样式失败: {e}")
+        return 0

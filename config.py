@@ -228,6 +228,10 @@ PAGE_ICON = "[FILE]"
 LAYOUT = "wide"  # wide 或 centered
 SIDEBAR_STATE = "expanded"  # expanded 或 collapsed
 
+# ==================== 版本与阈值配置 ====================
+APP_VERSION = "2.1.0"  # UI 重构版
+TEMPLATE_STYLE_THRESHOLD = 50  # 模板样式数超过此值时，转换页提示引导去工具箱精简
+
 # ==================== 评论系统配置 ====================
 COMMENTS_PER_PAGE = 20  # 每页显示的评论数
 MAX_COMMENT_LENGTH = 500  # 评论最大长度
