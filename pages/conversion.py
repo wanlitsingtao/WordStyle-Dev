@@ -301,7 +301,8 @@ def render_conversion_page():
             all_styles = set()
             for styles in file_styles_map.values():
                 all_styles.update(styles)
-            app_state.set_source_styles(sorted(list(all_styles)))
+            all_styles = sorted(list(all_styles))
+            app_state.set_source_styles(all_styles)
         else:
             file_styles_map = app_state.get_file_styles_map()
             file_paragraph_counts = st.session_state.get('file_paragraph_counts', {})
