@@ -4,8 +4,8 @@
 无 Streamlit 依赖，可独立测试。
 
 职责：
-1. 检测以正文格式出现的编号标题（1. / 1.1 / 1.1.1 等）
-2. 按编号层级推断大纲级别（1.→H1, 1.1→H2, 1.1.1→H3）
+1. 检测以正文格式出现的编号标题（数字编号 + 制表符 + 单列标题，如 "1.1\t线路"）
+2. 按编号层级推断大纲级别（1→H1, 1.1→H2, 1.1.1→H3）
 3. 将选中段落应用对应 Heading N 样式（并设置大纲级别）
 4. 判断文档是否已使用标题样式（供转换页引导提示）
 """
@@ -16,9 +16,14 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-# 编号标题检测：1. / 1.1 / 1.1.1 / 1、 / 1） / (1) 等
-# 捕获组 1 = 纯数字编号（用于推断层级），组 2 = 标题正文
-HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)\s*[.、）)]?\s*(.*)$')
+# 编号标题检测：数字编号 + 制表符 + 单列标题文本（如 "1.1\t线路"）。
+# 排除列表项（"1、"、"1）"、"2)"）、多列表格行（"1\t小于 300\t1.2\t65"）等。
+# 捕获组 1 = 纯数字编号（用于推断层级），组 2 = 标题正文。
+HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)\t([^\t]*)$')
+
+# 章节标题检测："第一章" / "第1章" / "第一章 概述" 等，默认大纲级别 1。
+# 捕获组 1 = 章节编号（如 "第一章"），组 2 = 标题正文。
+CHAPTER_PATTERN = re.compile(r'^\s*(第[一二三四五六七八九十百\d]+章)\s*(.*)$')
 
 
 class TitlePreprocessor:
@@ -55,28 +60,112 @@ class TitlePreprocessor:
                 }
         """
         doc = Document(docx_file)
-        headings = []
+        candidates = []
         for idx, para in enumerate(doc.paragraphs):
-            text = para.text.strip()
-            if not text:
+            # 用原始文本匹配（不 strip），以便区分"单列标题"与"多列表格行/列表项"。
+            raw_text = para.text
+            if not raw_text.strip():
                 continue
-            m = HEADING_PATTERN.match(text)
+            m = HEADING_PATTERN.match(raw_text)
             if not m:
                 continue
             number_part = m.group(1)
-            # 排除纯数字段落（如单纯的 "1" 后面无内容，可能是列表序号残留）
             content = m.group(2).strip()
+            # 排除纯数字段落（如单纯的 "1" 后面无内容）
             if not content:
                 continue
-            # 排除过长的段落（标题通常较短，正文段落可能以数字开头）
+            # 排除以句号/分号结尾的正文条款（标题通常不以这些标点结尾）
+            if content.endswith('。') or content.endswith('；'):
+                continue
+            # 排除过长的段落（标题通常较短）
+            text = raw_text.strip()
+            if len(text) > 60:
+                continue
+            candidates.append({
+                "index": idx,
+                "text": text,
+                "number": number_part,
+                "content": content,
+                "detected_level": TitlePreprocessor.infer_level(number_part),
+            })
+
+        # 先过滤掉内容以数字/符号开头的段落（多为数值、表格行，如 "1294.53～"、"100℃×…"、">10P 250"）。
+        filtered = []
+        for c in candidates:
+            if c["content"][0] in '0123456789±><≥≤~～＋－':
+                continue
+            filtered.append(c)
+
+        # 单级编号（无 "."）列表：按文档顺序记录其在 filtered 中的位置。
+        single_positions = [k for k, c in enumerate(filtered) if '.' not in c["number"]]
+
+        def _has_child(pos):
+            """单级编号 N 到下一个单级编号之间，是否存在 N.x 子级。"""
+            num = filtered[pos]["number"]
+            nxt = None
+            for sp in single_positions:
+                if sp > pos:
+                    nxt = sp
+                    break
+            end = nxt if nxt is not None else len(filtered)
+            return any(
+                '.' in filtered[j]["number"] and filtered[j]["number"].startswith(num + '.')
+                for j in range(pos + 1, end)
+            )
+
+        # 连续性判断：把连续递增的单级编号归为一段（如 3、4、5 或 1、2、3、4）。
+        # 段内只要有一个编号存在子级，整段都视为标题（用户规则：3 无子级但 4 有 4.1，则 3、4 都是）。
+        single_runs = []  # 每项为位置列表
+        for sp in single_positions:
+            if single_runs and int(filtered[single_runs[-1][-1]]["number"]) + 1 == int(filtered[sp]["number"]):
+                single_runs[-1].append(sp)
+            else:
+                single_runs.append([sp])
+
+        heading_positions = set()
+        for run in single_runs:
+            if any(_has_child(p) for p in run):
+                heading_positions.update(run)
+
+        headings = []
+        for k, c in enumerate(filtered):
+            # 多级编号（如 1.1 / 1.1.1）直接视为标题；单级编号按连续性判断。
+            if '.' in c["number"] or k in heading_positions:
+                headings.append({
+                    "index": c["index"],
+                    "text": c["text"],
+                    "number": c["number"],
+                    "detected_level": c["detected_level"],
+                })
+
+        # 章节标题（"第一章" / "第1章"）检测：默认大纲级别 1。
+        for idx, para in enumerate(doc.paragraphs):
+            raw_text = para.text
+            if not raw_text.strip():
+                continue
+            m = CHAPTER_PATTERN.match(raw_text)
+            if not m:
+                continue
+            content = m.group(2).strip()
+            # 排除章节号引用（如 "第二章 4.10.3 节 ..."）及句末标点结尾的正文
+            if content and (
+                content[0].isdigit()
+                or content.endswith('。')
+                or content.endswith('；')
+            ):
+                continue
+            text = raw_text.strip()
             if len(text) > 60:
                 continue
             headings.append({
                 "index": idx,
                 "text": text,
-                "number": number_part,
-                "detected_level": TitlePreprocessor.infer_level(number_part),
+                "number": m.group(1),
+                "detected_level": 1,
             })
+
+        # 按段落索引排序，保持文档顺序
+        headings.sort(key=lambda h: h["index"])
         return headings
 
     @staticmethod
@@ -118,7 +207,7 @@ class TitlePreprocessor:
         TitlePreprocessor._set_outline_level(paragraph, level)
 
     @staticmethod
-    def apply_headings(docx_file, output_file, selections: List[Dict]) -> None:
+    def apply_headings(docx_file, output_file, selections: List[Dict], progress_callback=None) -> None:
         """将选中段落应用对应 Heading N 样式，保存为新文档。
 
         Args:
@@ -127,14 +216,23 @@ class TitlePreprocessor:
             selections: List[Dict]，每个元素结构：
                 {"index": int, "target_level": int}
                 target_level 为 1-9；不在 selections 中的段落保持不变。
+            progress_callback: 可选，每处理一个选中段落后调用
+                progress_callback(done: int, total: int)。
         """
         doc = Document(docx_file)
         # 按 index 建立查找表
         sel_map = {s["index"]: s["target_level"] for s in selections if s.get("target_level", 0) >= 1}
+        total = len(sel_map)
+        done = 0
         for idx, para in enumerate(doc.paragraphs):
             if idx in sel_map:
                 TitlePreprocessor._apply_heading_style(doc, para, sel_map[idx])
+                done += 1
+                if progress_callback:
+                    progress_callback(done, total)
         doc.save(output_file)
+        if progress_callback:
+            progress_callback(total, total)
 
     @staticmethod
     def has_heading_styles(docx_file) -> bool:

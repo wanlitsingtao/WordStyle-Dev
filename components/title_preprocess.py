@@ -35,7 +35,7 @@ def _detect(user_id, uploaded_file):
 def render_title_preprocess():
     """渲染标题预处理交互区（@st.fragment 局部刷新）。"""
     st.markdown(
-        "提取以正文格式出现的编号标题（1. / 1.1 / 1.1.1），"
+        "提取以正文格式出现的编号标题（数字编号 + 制表符 + 标题文本，如 `1.1\t线路`），"
         "赋予对应大纲级别（Heading 1-9），生成可被样式映射识别的新文档。"
     )
 
@@ -59,7 +59,7 @@ def render_title_preprocess():
         return
 
     if not headings:
-        st.warning("未检测到编号标题（1. / 1.1 / 1.1.1 格式）。")
+        st.warning("未检测到编号标题（数字编号 + 制表符 + 标题文本 格式）。")
         return
 
     st.markdown(f"**检测到 {len(headings)} 个疑似标题段落：**")
@@ -77,7 +77,70 @@ def render_title_preprocess():
     selected = st.session_state.title_preprocess_selected
     levels = st.session_state.title_preprocess_levels
 
-    # 顶部批量操作
+    # 处理操作区（重新检测 / 处理并下载 + 结果展示），放在"全选/反选"之上
+    col_re, col_go = st.columns([1, 2])
+    with col_re:
+        re_detect = st.button("🔄 重新检测", key="tp_redetect", use_container_width=True)
+    with col_go:
+        do_process = st.button("🚀 处理并下载", key="tp_process", type="primary", use_container_width=True)
+
+    if re_detect:
+        st.session_state.title_preprocess_detect_key = ''
+        st.rerun()
+
+    if do_process:
+        selections = []
+        for h in headings:
+            idx = h["index"]
+            if selected.get(idx, True):
+                target_level = _level_to_int(levels.get(idx, f"H{h['detected_level']}"))
+                if target_level >= 1:
+                    selections.append({"index": idx, "target_level": target_level})
+
+        if not selections:
+            st.error("❌ 请至少选择一个要转换的标题段落。")
+        else:
+            out_path = f"title_preprocessed_{user_id}.docx"
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            def _on_progress(done, total):
+                progress_bar.progress(done / total if total else 1.0)
+                status_text.text(f"⏳ 正在处理... {done}/{total}")
+
+            try:
+                TitlePreprocessor.apply_headings(
+                    temp_path, out_path, selections, progress_callback=_on_progress
+                )
+            except Exception as e:
+                st.error(f"❌ 处理失败：{e}")
+            else:
+                progress_bar.progress(1.0)
+                status_text.text("✅ 处理完成")
+                st.session_state.title_preprocess_result = {
+                    "path": out_path,
+                    "name": f"标题预处理_{uploaded.name}",
+                    "count": len(selections),
+                }
+
+    # 显示处理结果
+    result = st.session_state.get('title_preprocess_result')
+    if result and os.path.exists(result["path"]):
+        st.success(f"✅ 处理完成！已为 {result['count']} 个段落设置标题级别。")
+        with open(result["path"], 'rb') as f:
+            st.download_button(
+                label=f"⬇️ 下载处理后的文档（{result['name']}）",
+                data=f.read(),
+                file_name=result["name"],
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key="title_preprocess_download",
+            )
+        st.info("💡 建议将处理后的文档作为源文档上传到「📄 文档转换」页。")
+
+    st.markdown("---")
+
+    # 批量操作（全选 / 反选）
     col_sel, col_inv, col_only = st.columns(3)
     with col_sel:
         if st.button("全选", key="tp_select_all", use_container_width=True):
@@ -116,56 +179,3 @@ def render_title_preprocess():
                 key=f"tp_level_{idx}",
                 label_visibility="collapsed",
             )
-
-    st.markdown("---")
-
-    col_re, col_go = st.columns([1, 2])
-    with col_re:
-        re_detect = st.button("🔄 重新检测", key="tp_redetect", use_container_width=True)
-    with col_go:
-        do_process = st.button("🚀 处理并下载", key="tp_process", type="primary", use_container_width=True)
-
-    if re_detect:
-        st.session_state.title_preprocess_detect_key = ''
-        st.rerun()
-
-    if do_process:
-        selections = []
-        for h in headings:
-            idx = h["index"]
-            if selected.get(idx, True):
-                target_level = _level_to_int(levels.get(idx, f"H{h['detected_level']}"))
-                if target_level >= 1:
-                    selections.append({"index": idx, "target_level": target_level})
-
-        if not selections:
-            st.error("❌ 请至少选择一个要转换的标题段落。")
-            return
-
-        out_path = f"title_preprocessed_{user_id}.docx"
-        try:
-            TitlePreprocessor.apply_headings(temp_path, out_path, selections)
-        except Exception as e:
-            st.error(f"❌ 处理失败：{e}")
-            return
-
-        st.session_state.title_preprocess_result = {
-            "path": out_path,
-            "name": f"标题预处理_{uploaded.name}",
-            "count": len(selections),
-        }
-
-    # 显示处理结果
-    result = st.session_state.get('title_preprocess_result')
-    if result and os.path.exists(result["path"]):
-        st.success(f"✅ 处理完成！已为 {result['count']} 个段落设置标题级别。")
-        with open(result["path"], 'rb') as f:
-            st.download_button(
-                label=f"⬇️ 下载处理后的文档（{result['name']}）",
-                data=f.read(),
-                file_name=result["name"],
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                key="title_preprocess_download",
-            )
-        st.info("💡 建议将处理后的文档作为源文档上传到「📄 文档转换」页。")
