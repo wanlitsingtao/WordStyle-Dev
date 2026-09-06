@@ -5,6 +5,7 @@
 """
 import logging
 import os
+import threading
 
 import streamlit as st
 
@@ -14,6 +15,89 @@ logger = logging.getLogger('WordStyle')
 
 # 目标级别选项：H1-H9 + "不转换"
 LEVEL_OPTIONS = [f"H{i}" for i in range(1, 10)] + ["不转换"]
+
+
+class _TitleTask:
+    """标题处理后台任务状态（线程安全，带代次防止旧线程覆盖新任务）。"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._gen = 0
+        self.running = False
+        self.done = 0
+        self.total = 0
+        self.finished = False
+        self.error = None
+        self.result = None
+
+    def reset(self):
+        with self._lock:
+            self._gen += 1
+            self.running = False
+            self.done = 0
+            self.total = 0
+            self.finished = False
+            self.error = None
+            self.result = None
+
+    def start(self, total):
+        with self._lock:
+            self._gen += 1
+            gen = self._gen
+            self.running = True
+            self.done = 0
+            self.total = total
+            self.finished = False
+            self.error = None
+            self.result = None
+            return gen
+
+    def update(self, gen, done, total):
+        with self._lock:
+            if gen != self._gen:
+                return
+            self.done = done
+            self.total = total
+
+    def finish(self, gen, error=None, result=None):
+        with self._lock:
+            if gen != self._gen:
+                return
+            self.running = False
+            self.finished = True
+            self.error = error
+            self.result = result
+
+    def snapshot(self):
+        with self._lock:
+            return self.running, self.done, self.total, self.finished, self.error, self.result
+
+
+_title_task = _TitleTask()
+
+
+@st.fragment(run_every="0.5s")
+def _render_task_progress():
+    """轮询后台任务状态并渲染进度条 / 处理结果。"""
+    running, done, total, finished, error, result = _title_task.snapshot()
+    if running:
+        st.progress(done / total if total else 1.0)
+        st.caption(f"⏳ 正在处理… {done}/{total}")
+    if finished:
+        if error:
+            st.error(f"❌ 处理失败：{error}")
+        elif result and os.path.exists(result["path"]):
+            st.success(f"✅ 处理完成！已为 {result['count']} 个段落设置标题级别。")
+            with open(result["path"], 'rb') as f:
+                st.download_button(
+                    label=f"⬇️ 下载处理后的文档（{result['name']}）",
+                    data=f.read(),
+                    file_name=result["name"],
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key="title_preprocess_download",
+                )
+            st.info("💡 建议将处理后的文档作为源文档上传到「📄 文档转换」页。")
 
 
 def _level_to_int(level_label):
@@ -73,6 +157,7 @@ def render_title_preprocess():
         st.session_state.title_preprocess_levels = {
             h["index"]: f"H{h['detected_level']}" for h in headings
         }
+        _title_task.reset()
 
     selected = st.session_state.title_preprocess_selected
     levels = st.session_state.title_preprocess_levels
@@ -86,6 +171,7 @@ def render_title_preprocess():
 
     if re_detect:
         st.session_state.title_preprocess_detect_key = ''
+        _title_task.reset()
         st.rerun()
 
     if do_process:
@@ -99,44 +185,32 @@ def render_title_preprocess():
 
         if not selections:
             st.error("❌ 请至少选择一个要转换的标题段落。")
+        elif _title_task.running:
+            st.info("⏳ 正在处理中，请稍候…")
         else:
             out_path = f"title_preprocessed_{user_id}.docx"
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            gen = _title_task.start(len(selections))
 
-            def _on_progress(done, total):
-                progress_bar.progress(done / total if total else 1.0)
-                status_text.text(f"⏳ 正在处理... {done}/{total}")
+            def _work():
+                try:
+                    def _on_progress(done, total):
+                        _title_task.update(gen, done, total)
 
-            try:
-                TitlePreprocessor.apply_headings(
-                    temp_path, out_path, selections, progress_callback=_on_progress
-                )
-            except Exception as e:
-                st.error(f"❌ 处理失败：{e}")
-            else:
-                progress_bar.progress(1.0)
-                status_text.text("✅ 处理完成")
-                st.session_state.title_preprocess_result = {
-                    "path": out_path,
-                    "name": f"标题预处理_{uploaded.name}",
-                    "count": len(selections),
-                }
+                    TitlePreprocessor.apply_headings(
+                        temp_path, out_path, selections, progress_callback=_on_progress
+                    )
+                    _title_task.finish(gen, result={
+                        "path": out_path,
+                        "name": f"标题预处理_{uploaded.name}",
+                        "count": len(selections),
+                    })
+                except Exception as e:
+                    _title_task.finish(gen, error=str(e))
 
-    # 显示处理结果
-    result = st.session_state.get('title_preprocess_result')
-    if result and os.path.exists(result["path"]):
-        st.success(f"✅ 处理完成！已为 {result['count']} 个段落设置标题级别。")
-        with open(result["path"], 'rb') as f:
-            st.download_button(
-                label=f"⬇️ 下载处理后的文档（{result['name']}）",
-                data=f.read(),
-                file_name=result["name"],
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                key="title_preprocess_download",
-            )
-        st.info("💡 建议将处理后的文档作为源文档上传到「📄 文档转换」页。")
+            threading.Thread(target=_work, daemon=True).start()
+
+    # 后台任务进度 / 结果展示（每 0.5s 轮询更新，不阻塞主界面）
+    _render_task_progress()
 
     st.markdown("---")
 

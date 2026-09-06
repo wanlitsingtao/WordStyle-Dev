@@ -25,6 +25,14 @@ HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)\t([^\t]*)$')
 # 捕获组 1 = 章节编号（如 "第一章"），组 2 = 标题正文。
 CHAPTER_PATTERN = re.compile(r'^\s*(第[一二三四五六七八九十百\d]+章)\s*(.*)$')
 
+# 已有标题样式名 -> 大纲级别
+HEADING_STYLE_LEVELS = {
+    'heading 1': 1, 'heading 2': 2, 'heading 3': 3, 'heading 4': 4, 'heading 5': 5,
+    'heading 6': 6, 'heading 7': 7, 'heading 8': 8, 'heading 9': 9,
+    '标题 1': 1, '标题 2': 2, '标题 3': 3, '标题 4': 4, '标题 5': 5,
+    '标题 6': 6, '标题 7': 7, '标题 8': 8, '标题 9': 9,
+}
+
 
 class TitlePreprocessor:
     """源文档标题预处理引擎（无状态工具类）"""
@@ -164,9 +172,52 @@ class TitlePreprocessor:
                 "detected_level": 1,
             })
 
+        # 已有标题样式 / 大纲级别的段落：全文识别，统一处理成大纲级别标题。
+        # 已出现在 headings 中的段落（编号/章节标题）跳过，避免重复。
+        seen_idx = {h["index"] for h in headings}
+        for idx, para in enumerate(doc.paragraphs):
+            if idx in seen_idx:
+                continue
+            level = TitlePreprocessor._existing_heading_level(para)
+            if not level:
+                continue
+            text = para.text.strip()
+            if not text or len(text) > 60:
+                continue
+            headings.append({
+                "index": idx,
+                "text": text,
+                "number": "",
+                "detected_level": level,
+            })
+
         # 按段落索引排序，保持文档顺序
         headings.sort(key=lambda h: h["index"])
         return headings
+
+    @staticmethod
+    def _existing_heading_level(paragraph) -> Optional[int]:
+        """返回段落已有的大纲级别（1-9）；非标题段落返回 None。
+
+        优先按样式名（Heading N / 标题 N），其次按 w:outlineLvl。
+        """
+        if paragraph.style is not None and paragraph.style.name:
+            level = HEADING_STYLE_LEVELS.get(paragraph.style.name.lower())
+            if level:
+                return level
+        pPr = paragraph._p.find(qn('w:pPr'))
+        if pPr is not None:
+            outline = pPr.find(qn('w:outlineLvl'))
+            if outline is not None:
+                val = outline.get(qn('w:val'))
+                if val is not None:
+                    try:
+                        level = int(val) + 1
+                        if 1 <= level <= 9:
+                            return level
+                    except ValueError:
+                        pass
+        return None
 
     @staticmethod
     def _set_outline_level(paragraph, level: int) -> None:
