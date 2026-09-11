@@ -71,13 +71,21 @@ def render_top_nav(active_page: str = "conversion"):
     return None
 
 
-@st.cache_resource
+@st.cache_data(show_spinner=False)
+def _read_ds_image_bytes(mtime: float, path_str: str):
+    """读取赞赏码图片字节（以文件修改时间为缓存键，换图后自动失效）。"""
+    return Path(path_str).read_bytes()
+
+
 def _get_ds_image_bytes():
-    """读取侧边栏宣传图字节（进程级缓存，仅读取一次）"""
+    """读取侧边栏赞赏码字节。
+
+    缓存键包含文件修改时间，因此替换 resource/ds.jpg 后无需重启进程即可生效。
+    """
     _ds_image_path = Path("resource/ds.jpg")
-    if _ds_image_path.exists():
-        return _ds_image_path.read_bytes()
-    return None
+    if not _ds_image_path.exists():
+        return None
+    return _read_ds_image_bytes(_ds_image_path.stat().st_mtime, str(_ds_image_path))
 
 
 def _render_login_dialog(device_fingerprint):
@@ -498,18 +506,31 @@ def render_sidebar(active_page: str = "conversion"):
 
         st.markdown("---")
 
-        # 提示文字
-        st.markdown('<div style="text-align: center; margin-bottom: 1rem;">', unsafe_allow_html=True)
-        st.markdown('**更好的体验，需要你的支持！**')
-        st.markdown('</div>', unsafe_allow_html=True)
+        # 提示文字（居中，位于赞赏码上方）
+        # 注意：必须写在同一段 markdown 里，拆成多个 st.markdown 时
+        # <div> 会在各自的渲染块内闭合，无法包裹文字，居中会失效。
+        st.markdown(
+            '<p style="text-align:center;margin:0 0 0.7rem 0;'
+            'font-size:var(--ws-font-body, 1rem);font-weight:650;'
+            'color:#262730;line-height:1.4;">更好的体验，需要你的支持！</p>',
+            unsafe_allow_html=True,
+        )
 
-        # 宣传图
+        # 宣传图 / 赞赏码
         try:
             _ds_image_bytes = _get_ds_image_bytes()
             if _ds_image_bytes:
                 st.image(_ds_image_bytes, use_container_width=True)
         except Exception as e:
             logger.warning(f"加载ds.jpg失败: {e}")
+
+        # 赞赏文案（居中，位于赞赏码下方）
+        st.markdown(
+            '<p style="text-align:center;margin:0.7rem 0 0 0;'
+            'font-size:var(--ws-font-body, 1rem);font-weight:650;'
+            'color:#262730;line-height:1.4;">开发不易，分享有心，赞赏有你！</p>',
+            unsafe_allow_html=True,
+        )
 
         st.markdown("---")
 
