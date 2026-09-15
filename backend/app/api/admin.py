@@ -129,10 +129,13 @@ def get_users_list(
         "users": [
             {
                 'user_id': u.id,
+                'username': u.username or '',  # [NEW] 管理后台用户列表展示用户名（未绑定时为空字符串）
                 'device_fingerprint': u.device_fingerprint,
                 'balance': float(u.balance or 0),
                 'paragraphs_remaining': int(u.paragraphs_remaining or 0),
-                'paragraphs_used': int(u.total_paragraphs_used or 0),
+                # [FIX 2026-09-15] 统一键名为 total_paragraphs_used（与数据库模型、本文件其他端点一致）；
+                # 原键名 paragraphs_used 与数据库字段名不符，导致管理后台「已用段落」列读取不到值
+                'total_paragraphs_used': int(u.total_paragraphs_used or 0),
                 'total_converted': int(u.total_converted or 0),
                 'is_active': bool(u.is_active),
                 'created_at': u.created_at.isoformat() if u.created_at else '',

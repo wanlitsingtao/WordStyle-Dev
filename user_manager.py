@@ -372,6 +372,45 @@ def load_style_mappings(user_id=None):
     return user_data.get('style_mappings', {})
 
 
+# [NEW] 本地（JSON）模式下：解析 user_id → 用户名，供管理后台用户列表展示用户名
+def _load_local_usernames_by_user_id():
+    """
+    解析本地模式下每个 user_id 绑定的用户名。
+
+    数据来源：
+      - user_mapping.json  : {device_fingerprint: user_id}
+      - data/accounts.json : {"by_device": {device_fingerprint: username_lower},
+                              "accounts": {username_lower: {"username": 原始用户名, ...}}}
+
+    :return: {user_id: 用户名} 字典；未绑定账号或文件缺失时返回空字典
+    """
+    result = {}
+    base_dir = Path(__file__).parent
+    mapping_file = base_dir / "user_mapping.json"
+    accounts_file = base_dir / "data" / "accounts.json"
+
+    try:
+        if not mapping_file.exists() or not accounts_file.exists():
+            return result
+
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            device_to_user = json.load(f)
+        with open(accounts_file, 'r', encoding='utf-8') as f:
+            accounts = json.load(f)
+
+        by_device = accounts.get('by_device', {})
+        account_map = accounts.get('accounts', {})
+
+        for device_fp, user_id in device_to_user.items():
+            username_lower = by_device.get(device_fp)
+            if username_lower and username_lower in account_map:
+                result[user_id] = account_map[username_lower].get('username', '')
+    except Exception as e:
+        print(f"[WARN] 解析本地用户名失败: {e}")
+
+    return result
+
+
 def load_all_users_data():
     """
     加载所有用户数据（管理后台使用）
@@ -384,13 +423,17 @@ def load_all_users_data():
         with open(USER_DATA_FILE, 'r', encoding='utf-8') as f:
             all_data = json.load(f)
             
+            usernames = _load_local_usernames_by_user_id()  # [NEW] 本地模式：已绑定账号的 user_id → 用户名
             users = []
             for user_id, user_data in all_data.items():
                 users.append({
                     'user_id': user_id,
+                    'username': usernames.get(user_id, ''),  # [NEW] 未绑定账号时为空字符串
                     'balance': user_data.get('balance', 0),
                     'paragraphs_remaining': user_data.get('paragraphs_remaining', 0),
-                    'paragraphs_used': user_data.get('paragraphs_used', 0),
+                    # [FIX 2026-09-15] 本地 JSON 实际存储的键名是 total_paragraphs_used（见 data/user_data.json），
+                    # 原先误读 paragraphs_used 导致管理后台「已用段落」列恒为 0；统一为标准键名并保留旧键兜底
+                    'total_paragraphs_used': user_data.get('total_paragraphs_used', user_data.get('paragraphs_used', 0)),
                     'total_converted': user_data.get('total_converted', 0),
                     'is_active': user_data.get('is_active', True),
                     'created_at': user_data.get('created_at', ''),

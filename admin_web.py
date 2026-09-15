@@ -6,7 +6,7 @@ WordStyle Pro - Web管理后台
 import streamlit as st
 
 st.set_page_config(
-    page_title="WordStyle Pro - 管理后台",
+    page_title="管理后台",
     page_icon="🔧",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -102,6 +102,111 @@ def format_datetime(dt_str):
 def format_currency(amount):
     """格式化金额"""
     return f"¥{amount:,.2f}" if amount else "¥0.00"
+
+
+# [FIX 2026-09-15] 「已用段落」字段名兼容取值
+# 背景：三种数据源返回的键名曾不一致，导致「已用段落」列在部分模式下恒显示 0：
+#   - Supabase 模式 _load_all_users() → total_paragraphs_used（与数据库模型一致）
+#   - 本地 JSON 模式 user_manager     → 曾误读 paragraphs_used（本地文件里其实是 total_paragraphs_used）
+#   - API 模式 /api/admin/users       → 曾返回 paragraphs_used
+# 现已在数据源头统一为 total_paragraphs_used；此处再做一次兜底读取，
+# 避免将来新增数据源或漏改时该列「静默显示 0」（本 Bug 的隐蔽之处）。
+USED_PARAGRAPHS_KEY = 'total_paragraphs_used'        # 标准键名（与数据库模型一致）
+USED_PARAGRAPHS_LEGACY_KEY = 'paragraphs_used'       # 历史遗留键名（仅作兼容兜底）
+
+
+def get_used_paragraphs(user):
+    """
+    读取用户「已用段落」累计值。
+
+    优先取标准键 total_paragraphs_used，取不到时兜底历史遗留键 paragraphs_used；
+    两者都没有（或值非法）时返回 0。
+
+    :param user: 用户数据字典
+    :return: 已用段落数（int）
+    """
+    if not isinstance(user, dict):
+        return 0
+    for key in (USED_PARAGRAPHS_KEY, USED_PARAGRAPHS_LEGACY_KEY):
+        if user.get(key) is not None:
+            try:
+                return int(user[key])
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def filter_sort_paginate_users(all_users, keyword, sort_by, page, page_size):
+    """
+    用户列表的纯逻辑处理：搜索过滤 → 排序 → 分页。
+
+    （抽离为独立函数，便于自动化测试；不含任何 Streamlit 依赖）
+
+    :param all_users: 原始用户字典列表
+    :param keyword: 搜索关键词（大小写不敏感，函数内部自行归一化；空串表示不过滤）
+    :param sort_by: 排序方式，取值：总转换次数 / 注册时间 / 剩余段落 / 余额
+    :param page: 目标页码（从 1 开始，越界会被自动纠正）
+    :param page_size: 每页条数
+    :return: (page_users, total, total_pages, current_page, start_idx, end_idx)
+    """
+    def _to_number(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # 搜索过滤（匹配用户ID / 用户名，大小写不敏感）
+    keyword = (keyword or '').strip().lower()
+    if keyword:
+        users = [
+            u for u in all_users
+            if keyword in str(u.get('user_id') or '').lower()
+            or keyword in str(u.get('username') or '').lower()
+        ]
+    else:
+        users = list(all_users)
+
+    # 排序：默认按总转换次数降序；附带稳定次级排序键，保证分页时顺序稳定
+    if sort_by == "总转换次数":
+        users.sort(
+            key=lambda x: (
+                _to_number(x.get('total_converted')),
+                str(x.get('created_at') or ''),
+                str(x.get('user_id') or ''),
+            ),
+            reverse=True
+        )
+    elif sort_by == "注册时间":
+        users.sort(
+            key=lambda x: (str(x.get('created_at') or ''), str(x.get('user_id') or '')),
+            reverse=True
+        )
+    elif sort_by == "剩余段落":
+        users.sort(
+            key=lambda x: (_to_number(x.get('paragraphs_remaining')), str(x.get('user_id') or '')),
+            reverse=True
+        )
+    elif sort_by == "余额":
+        users.sort(
+            key=lambda x: (_to_number(x.get('balance')), str(x.get('user_id') or '')),
+            reverse=True
+        )
+
+    # 分页计算与页码边界保护
+    total = len(users)
+    page_size = max(1, int(page_size))
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    if page < 1:
+        page = 1
+    if page > total_pages:
+        page = total_pages
+
+    start_idx = (page - 1) * page_size
+    end_idx = min(start_idx + page_size, total)
+
+    return users[start_idx:end_idx], total, total_pages, page, start_idx, end_idx
+
 
 # ==================== 数据看板 ====================
 
@@ -226,26 +331,39 @@ def show_dashboard():
 # ==================== 用户管理 ====================
 
 def show_user_management():
-    """显示用户管理"""
+    """显示用户管理（支持搜索 / 排序 / 分页）"""
     st.title("👥 用户管理")
     st.markdown("---")
-    
+
+    # [NEW] 分页状态：user_page 仅由本函数维护，不作为任何 widget 的 key，
+    # 避免 Streamlit 组件状态回写导致翻页失效或反复 rerun。
+    if 'user_page' not in st.session_state:
+        st.session_state.user_page = 1
+    if 'user_list_signature' not in st.session_state:
+        st.session_state.user_list_signature = None
+
     try:
         # 显示当前数据源信息（调试用）
         st.info(f"📊 当前数据源: {get_data_source()}")
-        
+
         # 搜索和筛选
         col1, col2, col3 = st.columns([2, 1, 1])
-        
+
         with col1:
-            search_keyword = st.text_input("🔍 搜索用户", placeholder="输入用户ID或昵称")
-        
+            search_keyword = st.text_input("🔍 搜索用户", placeholder="输入用户ID或用户名")
+
         with col2:
-            sort_by = st.selectbox("排序方式", ["注册时间", "剩余段落", "余额"])
-        
+            # [NEW] 默认按“总转换次数”降序
+            sort_by = st.selectbox(
+                "排序方式",
+                ["总转换次数", "注册时间", "剩余段落", "余额"],
+                index=0
+            )
+
         with col3:
-            show_count = st.selectbox("显示数量", [20, 50, 100], index=0)
-        
+            # [NEW] 每页显示条数（配合分页使用）
+            page_size = st.selectbox("每页显示", [10, 20, 50, 100], index=1)
+
         # 加载所有用户数据
         with st.spinner("正在从数据库加载用户数据..."):
             try:
@@ -256,45 +374,74 @@ def show_user_management():
                 import traceback
                 st.code(traceback.format_exc())
                 all_users = []
-        
-        # 搜索过滤
-        if search_keyword:
-            filtered_users = [
-                u for u in all_users
-                if search_keyword.lower() in str(u.get('user_id', '')).lower()
-            ]
-        else:
-            filtered_users = all_users
-        
-        # 排序
-        if sort_by == "注册时间":
-            filtered_users.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-        elif sort_by == "剩余段落":
-            filtered_users.sort(key=lambda x: x.get('paragraphs_remaining', 0), reverse=True)
-        elif sort_by == "余额":
-            filtered_users.sort(key=lambda x: x.get('balance', 0.0), reverse=True)
-        
-        # 分页
-        total = len(filtered_users)
-        users = filtered_users[:show_count]
-        
-        st.info(f"共找到 {total} 个用户，显示前 {len(users)} 个")
-        
+
+        # [NEW] 搜索过滤 + 排序 + 分页（纯逻辑见 filter_sort_paginate_users，便于自动化测试）
+        keyword = (search_keyword or '').strip().lower()
+        page_size = int(page_size)
+
+        # 搜索 / 排序 / 每页条数变化时，自动回到第 1 页
+        signature = (keyword, sort_by, page_size)
+        if st.session_state.user_list_signature != signature:
+            st.session_state.user_list_signature = signature
+            st.session_state.user_page = 1
+
+        users, total, total_pages, current_page, start_idx, end_idx = filter_sort_paginate_users(
+            all_users, keyword, sort_by, st.session_state.user_page, page_size
+        )
+        # 页码越界时回写纠正后的页码，保证状态与展示一致
+        st.session_state.user_page = current_page
+
+        st.info(f"共找到 {total} 个用户，第 {current_page}/{total_pages} 页，本页显示第 {start_idx + 1}-{end_idx} 条")
+
         if users:
             # 显示用户列表
             user_data = []
             for user in users:
+                # [NEW] 用户名：已绑定账号的用户显示用户名，未绑定显示“未绑定”
+                username = str(user.get('username') or '').strip()
                 user_data.append({
                     "用户ID": user.get('user_id', '-'),
                     "剩余段落": user.get('paragraphs_remaining', 0),
-                    "已用段落": user.get('paragraphs_used', 0),
+                    "已用段落": get_used_paragraphs(user),
                     "总转换数": user.get('total_converted', 0),
                     "余额": user.get('balance', 0.0),
                     "状态": "✅ 活跃" if user.get('is_active', True) else "❌ 禁用",
-                    "注册时间": format_datetime(user.get('created_at', ''))
+                    "注册时间": format_datetime(user.get('created_at', '')),
+                    "用户名": username if username else "未绑定"
                 })
-            
+
             st.dataframe(user_data, use_container_width=True, hide_index=True)
+
+            # ==================== [NEW] 分页控件：上一页 / 下一页 ====================
+            col_prev, col_pageinfo, col_next = st.columns([1, 2, 1])
+
+            with col_prev:
+                if st.button(
+                    "⬅️ 上一页",
+                    key="user_prev_page",
+                    use_container_width=True,
+                    disabled=(current_page <= 1)
+                ):
+                    st.session_state.user_page = current_page - 1
+                    st.rerun()
+
+            with col_pageinfo:
+                st.markdown(
+                    f"<div style='text-align:center; padding-top:0.5rem;'>"
+                    f"第 <b>{current_page}</b> / {total_pages} 页&nbsp;&nbsp;（共 {total} 个用户）"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+            with col_next:
+                if st.button(
+                    "下一页 ➡️",
+                    key="user_next_page",
+                    use_container_width=True,
+                    disabled=(current_page >= total_pages)
+                ):
+                    st.session_state.user_page = current_page + 1
+                    st.rerun()
             
             # 用户操作
             st.markdown("### 🔧 用户操作")

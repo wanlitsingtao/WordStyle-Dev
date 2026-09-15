@@ -256,6 +256,7 @@ elif DATA_SOURCE == "supabase":
                     conversion_history = raw_conv_history if isinstance(raw_conv_history, list) else []
                     result.append({
                         'user_id': u.id,
+                        'username': (getattr(u, 'username', None) or ''),  # [NEW] 管理后台用户列表展示用户名
                         'balance': float(u.balance or 0),
                         'paragraphs_remaining': int(u.paragraphs_remaining or 0),
                         'total_paragraphs_used': int(u.total_paragraphs_used or 0),

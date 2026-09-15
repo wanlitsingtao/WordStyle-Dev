@@ -308,7 +308,9 @@ def register_or_login_user(user_id, user_data):
                 user_data.get('balance', 0.0),
                 user_data.get('paragraphs_remaining', 0),
                 user_data.get('total_converted', 0),
-                user_data.get('paragraphs_used', 0),
+                # [FIX 2026-09-15] 原误读 paragraphs_used（该键不存在）会把累计已用段落数写成 0；
+                # 统一为标准键名 total_paragraphs_used，并保留旧键兜底
+                user_data.get('total_paragraphs_used', user_data.get('paragraphs_used', 0)),
                 user_id
             ))
         else:
@@ -324,7 +326,8 @@ def register_or_login_user(user_id, user_data):
                 user_data.get('balance', 0.0),
                 user_data.get('paragraphs_remaining', 0),
                 user_data.get('total_converted', 0),
-                user_data.get('paragraphs_used', 0)
+                # [FIX 2026-09-15] 同 UPDATE 分支：统一为标准键名，避免累计已用段落数被写成 0
+                user_data.get('total_paragraphs_used', user_data.get('paragraphs_used', 0))
             ))
         
         conn.commit()

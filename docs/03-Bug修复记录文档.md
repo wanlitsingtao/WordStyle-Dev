@@ -3418,3 +3418,162 @@ Streamlit ≥1.36 把项目根目录下的 `pages/` 文件夹视为保留的多�
 **优化人员**: AI Assistant  
 **审核状态**: ✅ 已验证  
 **部署状态**: ✅ 已部署
+
+---
+
+## 2026-09-14 管理后台用户管理：分页 / 默认排序 / 用户名展示
+
+### 问题
+
+管理后台「👥 用户管理」页面的用户列表存在三项功能缺失：
+
+1. **没有分页**：`show_user_management()` 里用 `users = filtered_users[:show_count]` 截断，只能看前 N 条（20/50/100），无法浏览后面的用户，用户量增长后无法查看。
+2. **默认排序不符合业务预期**：排序下拉框只有「注册时间 / 剩余段落 / 余额」，默认按注册时间降序，运营最关心的「总转换次数」既不能作为默认排序，也没有出现在选项中。
+3. **看不到用户名**：账号绑定系统（`account_manager.py`）已把用户名存到 `users.username`，但管理后台列表里没有展示，无法判断某个用户是否绑定过账号、绑定的是哪个用户名。
+
+### 根本原因
+
+1. 前端只做了「截断显示」，没有页码状态、没有上一页/下一页控件。
+2. 排序选项与业务主诉求（按转换次数看活跃度）不匹配。
+3. 数据访问层三种模式的用户列表数据都没有把 `username` 带出来：
+   - Supabase 直连模式：`data_manager.py` 的 `_load_all_users()` 未取 `User.username`；
+   - API 模式：后端 `GET /api/admin/users` 的响应体里没有 `username` 字段；
+   - 本地 JSON 模式：`user_manager.load_all_users_data()` 只读 `data/user_data.json`，而用户名存在 `data/accounts.json`（经 `user_mapping.json` 关联到 user_id），两者没有关联。
+
+### 修复（dev 改后，pub 由用户自行同步）
+
+**1. 界面层 `admin_web.py` → `show_user_management()`**
+
+- 新增分页状态：`st.session_state.user_page`（只由本函数维护，**不作为任何 widget 的 key**，避免 Streamlit 组件状态回写导致翻页失效/反复 rerun）。
+- 新增分页控件：`⬅️ 上一页` / `下一页 ➡️` 按钮 + 「第 X / Y 页（共 N 个用户）」页码指示；到边界自动禁用按钮。
+- 搜索 / 排序 / 每页条数变化时，通过 `signature` 比较自动回到第 1 页。
+- 「显示数量」改为「每页显示」（10 / 20 / 50 / 100，默认 20）。
+- 排序下拉框新增「总转换次数」并置为默认（index=0）；各排序分支附带 `user_id`/`created_at` 作为稳定次级排序键，**保证翻页时顺序稳定不跳动**。
+- 表格末尾新增「用户名」列：已绑定账号显示用户名，未绑定显示「未绑定」。
+- 搜索框占位文案与实际逻辑对齐为「输入用户ID或用户名」，搜索同时匹配 `user_id` 与 `username`（大小写不敏感）。
+- **逻辑分层**：把「搜索过滤 → 排序 → 分页」抽成模块级纯函数 `filter_sort_paginate_users(all_users, keyword, sort_by, page, page_size)`，返回 `(本页数据, 总数, 总页数, 纠正后的页码, 起始下标, 结束下标)`；不含任何 Streamlit 依赖，因此可以被自动化测试直接覆盖（原则 1 分层模块化 + 原则 10 自动化测试）。页码越界纠正在纯函数内完成，并把纠正后的页码回写到 `session_state`，保证状态与展示一致。
+- 分页与流式渲染注意点：`st.rerun()` 抛出的 `RerunException` 继承自 `BaseException`（Streamlit 官方刻意如此，避免被业务 `except Exception` 吞掉），所以翻页按钮放在页面的 `try/except Exception` 内部仍能正常触发重跑。
+
+**2. 数据层三种模式补齐 `username`**
+
+| 文件 | 位置 | 改动 |
+|------|------|------|
+| `data_manager.py` | Supabase 模式 `_load_all_users()` | 返回项新增 `'username': (getattr(u, 'username', None) or '')` |
+| `backend/app/api/admin.py` | `GET /users` | 响应项新增 `'username': u.username or ''` |
+| `user_manager.py` | 本地 JSON 模式 | 新增 `_load_local_usernames_by_user_id()`，由 `user_mapping.json`（设备→user_id）+ `data/accounts.json`（设备→用户名）解析出 `user_id → 用户名`；`load_all_users_data()` 增加 `username` 字段 |
+
+**3. 文档同步**
+
+- `docs/01-业务需求文档.md` 2.3.1 用户管理：补充「用户名展示」「默认按总转换次数降序」「支持按注册时间/剩余段落/余额排序」「分页浏览」。
+- 本记录。
+
+### 验证
+
+- `python -m py_compile` 通过：`admin_web.py`、`data_manager.py`、`user_manager.py`、`backend/app/api/admin.py`。
+- 逐行比对确认：`admin_web.py` 中「用户操作」及其之后的代码与原文件**逐字节一致**，改动只落在用户列表区域与新增的辅助函数；文件其余部分与修改前完全一致（`head_identical=True`、`tail_identical=True`）。
+- **离线逻辑单元测试** `temp/test_admin_user_paging.py`（19 个用例，纯假数据、不连任何数据库）：
+  默认按总转换次数降序、并列时按注册时间稳定次级排序、分页切片、跨页不重不漏、页码越界自动纠正（0/负数→第 1 页，超末页→末页）、空数据边界、每页 1 条的极端场景、按 user_id / 用户名（含大小写）搜索、无匹配、其余排序方式、字段缺失或为 None 不崩溃，以及界面契约断言（默认排序项、用户名列表头、上一页/下一页按钮、三种数据源都输出 username）。
+- **集成冒烟测试** `temp/test_admin_user_management_smoke.py`（9 个用例）：用最小 Streamlit 桩真实执行 `show_user_management()`，验证
+  ①「用户名」确为最后一列且未绑定显示「未绑定」；②默认每页 20 条且为总转换次数降序；③点「下一页」真的翻到第 2 页（`rerun` 生效、两页数据不重叠、末页「下一页」禁用）；④点「上一页」回到第 1 页；⑤搜索用户名能过滤；⑥搜索条件变化自动回第 1 页；⑦每页条数选项生效；⑧其它排序生效；⑨空用户列表不报错。
+  该脚本会先切到系统临时目录再导入模块，使数据源回退为 `local`，**从根上避免误连生产 Supabase**。
+- 两个脚本合计 28 个用例，全部通过（`OK`）。
+
+### 影响范围与回滚
+
+- 仅影响管理后台「用户管理」页面与三处用户列表数据读取，不影响转换页、任务管理、反馈管理等其它功能。
+- 回滚方式：`git checkout -- admin_web.py data_manager.py user_manager.py backend/app/api/admin.py`。
+
+### 遗留待确认项
+
+- ~~`admin_web.py` 中「已用段落」列读取的是 `user['paragraphs_used']`，而 Supabase 模式 `_load_all_users()` 返回的键名是 `total_paragraphs_used`（API 模式返回的是 `paragraphs_used`），因此 **Supabase 模式下该列恒显示 0**。~~ 该问题已于 **2026-09-15** 修复，详见下一节。
+
+---
+
+## 2026-09-15 管理后台用户列表「已用段落」列恒显示 0（用户累计已用段落数字段名不一致）
+
+**修复时间**: 2026-09-15
+**修复人员**: AI Assistant
+**涉及文件**: `admin_web.py`、`user_manager.py`、`task_manager.py`、`backend/app/api/admin.py`
+**审核状态**: 待用户验证
+**部署状态**: 未提交（`bid-buddy-dev` 本地改动，pub 由用户自行同步）
+
+### 问题
+
+管理后台「用户管理」页面的**「已用段落」列在 Supabase 模式和本地（JSON）模式下恒显示 0**，只有 API 模式显示正常。用户累计已用段落数是运营核心指标，该列恒为 0 会直接误导运营判断。
+
+该问题在上一节（2026-09-14 分页改造）排查时已被发现，当时作为「遗留待确认项」记录、未擅自修改；本次经用户确认后修复。
+
+### 根本原因
+
+**三种数据源返回同一语义数据的键名不一致**，而展示层只认其中一种：
+
+| 数据源 | 产出实现 | 「已用段落」实际键名 | 展示层读取 | 结果 |
+|---|---|---|---|---|
+| Supabase | `data_manager.py` → `_load_all_users()` | `total_paragraphs_used` | `paragraphs_used` | ❌ 取不到 → 恒显示 0 |
+| 本地 JSON | `user_manager.py` → `load_all_users_data()` | 误读 `user_data['paragraphs_used']`，而 `data/user_data.json` 里实际存的是 `total_paragraphs_used` | `paragraphs_used` | ❌ 恒为 0（**源头就取错了**） |
+| 后端 API | `backend/app/api/admin.py` → `GET /users` | `paragraphs_used`（键名非标准，但值正确） | `paragraphs_used` | ✅ 正常（因此只在 API 模式下看不出问题） |
+
+**同一文件内还不一致**：`backend/app/api/admin.py` 的 `GET /users` 返回 `paragraphs_used`，而同一文件的 `GET /users/{user_id}`（`get_user_by_id`）返回的是 `total_paragraphs_used` —— 两条接口对同一字段用了两个名字。
+
+**更严重的一处（数据损坏风险）**：`task_manager.py` 的 `register_or_login_user()` 在 UPDATE 与 INSERT 两条 SQL 中，都用 `user_data.get('paragraphs_used', 0)` 写入数据库的 `total_paragraphs_used` 字段。该键在调用方的 `user_data` 中并不存在（`data_manager._get_or_create_user_by_device()`、`views/conversion.py`、`app.py` 用的都是 `total_paragraphs_used`），因此**每次登录都会把本地 SQLite `users.total_paragraphs_used` 写成 0**。这比显示问题更严重：是静默的数据破坏。
+
+**历史背景**：`03-Bug修复文档.md` 中的 Bug #006（2026-04）曾做过一次「统一所有位置的字段名为 `total_paragraphs_used`」的修复，但上述几处属漏改，且因为「取值失败时静默返回 0 而不报错」，一直没有暴露。
+
+### 修复
+
+**策略：数据源头统一为标准键名 `total_paragraphs_used`（与数据库模型 `users.total_paragraphs_used` 一致）；展示层再加一层兼容兜底，避免将来漏改或新增数据源时再次“静默显示 0”。**
+
+| 文件 | 位置 | 改动 |
+|---|---|---|
+| `admin_web.py` | 新增模块级纯函数 `get_used_paragraphs(user)` | 优先读 `total_paragraphs_used`，取不到时兜底 `paragraphs_used`；值为 `None` / 非法 / 字段缺失均返回 0，不抛异常。同时定义常量 `USED_PARAGRAPHS_KEY` 与 `USED_PARAGRAPHS_LEGACY_KEY` |
+| `admin_web.py` | 用户列表「已用段落」列 | 由 `user.get('paragraphs_used', 0)` 改为 `get_used_paragraphs(user)` |
+| `user_manager.py` | `load_all_users_data()` | 改读 `total_paragraphs_used`（保留旧键兜底），**输出键名统一为标准键** |
+| `backend/app/api/admin.py` | `GET /users` | 返回键名由 `paragraphs_used` 改为 `total_paragraphs_used`，与本文件 `get_user_by_id` 保持一致 |
+| `task_manager.py` | `register_or_login_user()` 的 UPDATE / INSERT 分支 | 改读 `total_paragraphs_used`（保留旧键兜底），修复「累计值被写成 0」 |
+
+> 说明：`data_manager.py` 的 Supabase 模式 `_load_all_users()` 本就输出标准键名，无需改动。
+
+### 验证
+
+- `python -m py_compile` 通过 4 个改动文件。
+- **与改动前备份逐行比对**（`temp/_backup_20260915/`）：4 个文件的差异**只落在上表所列的位置**，其余内容逐字节一致，无副带改动。
+- **全工程残留扫描**：除上述有意保留的兜底读取与注释外，`.py` 源码中已无 `paragraphs_used` 被当作字典键使用。
+- 自动化测试（共 4 个脚本、**50 个用例全部通过**）：
+  1. `temp/test_admin_used_paragraphs.py`（19 例，本次新增，项目 venv 可跑）
+     - `get_used_paragraphs()` 边界：标准键 / 遗留键 / 两者并存（标准键优先）/ 均缺失 / 标准键为 `None` 时继续兜底 / 字符串数字 / 非法值 / 非字典入参 / **真实 0 必须保持 0**；
+     - 本地 JSON 模式真实执行 `load_all_users_data()`（临时 JSON 文件，不碰生产数据）：键名为标准键且数值正确；极老数据文件只有 `paragraphs_used` 时仍可读出；
+     - API 模式：对 `backend/app/api/admin.py` 做 **AST 静态校验**，断言 `get_users_list` 与 `get_user_by_id` 的返回字典键含 `total_paragraphs_used`、不含 `paragraphs_used`；
+     - 契约守卫：源码中禁止再出现 legacy 键作字典键；展示层必须经由 `get_used_paragraphs()`；
+     - 端到端：真实执行 `show_user_management()`，校验标准键 / 遗留键 / 缺失键三种数据形态下「已用段落」列取值，并确认列顺序未受影响。
+  2. `temp/test_backend_users_api_exec.py`（2 例，本次新增）—— **真实执行**后端 `GET /users` 处理函数（桩 db），校验返回键名、数值与分页参数；因项目前端 venv 未安装 `fastapi`，用隔离环境运行。
+  3. `temp/test_admin_user_paging.py`（19 例，回归）—— 分页 / 排序 / 用户名 / 搜索，全部通过。
+  4. `temp/test_admin_user_management_smoke.py`（10 例，回归）—— 集成冒烟，全部通过。
+
+### 过程备注（测试基础设施）
+
+本次排查过程中，测试脚本曾尝试 `from app.api.admin import ...` 导入后端包，但 `sys.path` 中项目根目录排在
+`backend/` 之前，而项目根存在 `app.py`（Streamlit 前端入口）→ `import app` 命中了 `app.py`，
+导致前端页面被当作模块执行，其用户初始化逻辑往 `data/user_data.json` 写入了一个测试用户并生成了 `user_mapping.json`。
+
+**已处理**：`git checkout -- data/user_data.json` 回滚（该次变更为 0 删除、纯新增，回滚无损），删除 `user_mapping.json`。
+`git status` 已确认工程数据文件恢复原状。
+
+**已加固**（防止再犯）：
+
+1. 导入后端包时先把 `PROJECT_ROOT` 从 `sys.path` 摘掉，只保留 `BACKEND_ROOT`。
+2. 新增公共防呆守卫 `temp/_test_guard.py`：对 `data/user_data.json`、`data/comments_data.json`、`data/accounts.json`、
+   `user_mapping.json`、`conversion_tasks.db`、`wordstyle.db` 做 sha256 快照，各测试脚本在 `tearDownModule()` 中校验，
+   **一旦被改动 / 新增 / 删除就让测试直接失败**（因为 `config.py` 的数据路径是基于 `__file__` 的绝对路径，
+   `os.chdir()` 无法阻止写入，必须用守卫兜底）。
+3. `temp/_guard_self_test.py` 作为守卫的阳性对照，验证它确实能拦住「内容被修改」「文件被新增」「文件被删除」三种场景。
+
+### 影响范围与回滚
+
+- 影响面：管理后台「用户管理」列表的「已用段落」列；本地模式（SQLite）用户登录时的累计已用段落数写入。不改变任何接口的 URL、参数与其它字段。
+- 兼容性：展示层与 `task_manager.py` 均保留对旧键的兜底读取，因此**新旧数据、新旧接口混用期间不会报错、不会显示 0**。
+- 回滚方式：`git checkout -- admin_web.py user_manager.py task_manager.py backend/app/api/admin.py`。
+
+### 配套约定（已写入 `01-业务需求文档.md` 2.3.1）
+
+三种数据源向管理后台返回用户数据时，**必须统一使用 `total_paragraphs_used`**，不得再使用历史遗留简写 `paragraphs_used`。
+
