@@ -1311,7 +1311,7 @@ def main():
     
     # 侧边栏导航
     with st.sidebar:
-        st.header("🔧 WordStyle Pro 管理后台")
+        st.header("🔧 管理后台")
         st.markdown("---")
         
         page = st.radio(

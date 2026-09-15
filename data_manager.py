@@ -1246,8 +1246,10 @@ def get_file_list(page: int = 1, page_size: int = 50) -> Dict:
         except Exception as e:
             logger.error(f"[ERROR] API获取文件列表失败: {e}")
             return {'files': [], 'pagination': {'total_count': 0}}
-    elif DATA_SOURCE == "local":
-        # Local模式使用file_manager
+    elif DATA_SOURCE in ("local", "supabase"):
+        # [FIX 2026-09-15] local 与 supabase 的文件都存在本进程本地磁盘：
+        # 两者只区别用户/任务数据的来源（SQLite+JSON 还是 PostgreSQL），与文件存储无关，
+        # 且工程内无可用的 Supabase Storage 文件实现，故共用 file_manager。
         from file_manager import get_file_manager
         fm = get_file_manager()
         return fm.get_file_list(page=page, page_size=page_size)
@@ -1274,8 +1276,10 @@ def delete_files(file_ids: List[str]) -> Dict[str, int]:
         except Exception as e:
             logger.error(f"[ERROR] API删除文件失败: {e}")
             return {'success': 0, 'failed': len(file_ids), 'errors': [str(e)]}
-    elif DATA_SOURCE == "local":
-        # Local模式使用file_manager
+    elif DATA_SOURCE in ("local", "supabase"):
+        # [FIX 2026-09-15] local 与 supabase 的文件都存在本进程本地磁盘：
+        # 两者只区别用户/任务数据的来源（SQLite+JSON 还是 PostgreSQL），与文件存储无关，
+        # 且工程内无可用的 Supabase Storage 文件实现，故共用 file_manager。
         from file_manager import get_file_manager
         fm = get_file_manager()
         return fm.delete_files(file_ids)
@@ -1299,8 +1303,10 @@ def get_storage_stats() -> Dict:
         except Exception as e:
             logger.error(f"[ERROR] API获取存储统计失败: {e}")
             return {}
-    elif DATA_SOURCE == "local":
-        # Local模式使用file_manager
+    elif DATA_SOURCE in ("local", "supabase"):
+        # [FIX 2026-09-15] local 与 supabase 的文件都存在本进程本地磁盘：
+        # 两者只区别用户/任务数据的来源（SQLite+JSON 还是 PostgreSQL），与文件存储无关，
+        # 且工程内无可用的 Supabase Storage 文件实现，故共用 file_manager。
         from file_manager import get_file_manager
         fm = get_file_manager()
         return fm.get_storage_stats()

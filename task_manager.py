@@ -12,7 +12,12 @@ from pathlib import Path
 
 # 数据库文件路径
 DB_PATH = "conversion_tasks.db"
-RESULTS_DIR = "conversion_results"
+# [FIX 2026-09-15] 结果目录改为引用 config.RESULTS_DIR（= temp/conversion_results），
+# 不再用相对 cwd 的 "conversion_results"，避免与 FileManager / views/conversion.py 口径不一致。
+try:
+    from config import RESULTS_DIR
+except Exception:  # pragma: no cover - 兜底，保证脱离工程上下文时仍可用
+    RESULTS_DIR = Path(__file__).parent / "temp" / "conversion_results"
 
 def init_database():
     """初始化数据库"""

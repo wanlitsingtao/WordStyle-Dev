@@ -197,7 +197,7 @@ def render_conversion_page():
         count_template_styles,
         count_paragraphs,
     )
-    from config import TEMPLATE_STYLE_THRESHOLD, TEMP_DIR
+    from config import TEMPLATE_STYLE_THRESHOLD, TEMP_DIR, RESULTS_DIR
 
     from components.sidebar import render_sidebar
     render_sidebar("conversion")
@@ -550,7 +550,10 @@ def render_conversion_page():
                 for idx, source_file_obj in enumerate(current_source_files):
                     base_name = os.path.splitext(source_file_obj.name)[0]
                     output_filename = f"result_{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-                    output_file = os.path.join("conversion_results", output_filename)
+                    # [FIX 2026-09-15] 原来写的是相对路径 os.path.join("conversion_results", ...)，
+                    # 落点取决于进程 cwd（项目根），与 FileManager 扫描的 temp/conversion_results 不一致。
+                    # 现统一用 config.RESULTS_DIR（= temp/conversion_results）。
+                    output_file = str(RESULTS_DIR / output_filename)
                     temp_source = str(TEMP_DIR / f"temp_source_{user_id}_{source_file_obj.name}")
 
                     if not os.path.exists(temp_source):

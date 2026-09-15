@@ -3577,3 +3577,302 @@ Streamlit ≥1.36 把项目根目录下的 `pages/` 文件夹视为保留的多�
 
 三种数据源向管理后台返回用户数据时，**必须统一使用 `total_paragraphs_used`**，不得再使用历史遗留简写 `paragraphs_used`。
 
+---
+
+## 2026-09-15 管理后台「文件管理」在 supabase 模式下直接报错 + 转换结果目录三处口径不一致
+
+**修复时间**: 2026-09-15
+**修复人员**: AI Assistant
+**涉及文件**: `data_manager.py`、`config.py`、`file_manager.py`、`task_manager.py`、`views/conversion.py`
+**审核状态**: 待用户验证
+**部署状态**: 未提交（`bid-buddy-dev` 本地改动，pub 由用户自行同步）
+
+### 问题 1（用户上报）
+
+管理后台「文件管理」页在 **supabase 数据源模式**下直接报错：
+
+```
+❌ 加载文件列表失败: 未知的数据源模式: supabase
+ValueError: 未知的数据源模式: supabase
+  File "admin_web.py", line 1134, in show_file_management
+    stats = get_storage_stats()
+  File "data_manager.py", line 1308, in get_storage_stats
+    raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
+```
+
+### 根本原因 1
+
+文件管理的三个函数只实现了 `api` / `local` 两个分支，**漏了 `supabase`**：
+
+| 函数 | 位置 | 覆盖模式 |
+|---|---|---|
+| `get_file_list()` | `data_manager.py:1229` | api / local ❌ 缺 supabase |
+| `delete_files()` | `data_manager.py:1260` | api / local ❌ 缺 supabase |
+| `get_storage_stats()` | `data_manager.py:1290` | api / local ❌ 缺 supabase |
+
+其余按 `DATA_SOURCE` 分发的函数（`get_or_create_user_by_device`、`get_all_configs`、`_get_config_impl`、`update_config`、`batch_update_configs`、`init_default_configs`）都已覆盖三种模式。用 AST 扫描全工程确认：**只有这三个函数存在该缺口**，属文件管理这一块的漏改，不是全局问题（扫描脚本 `temp/_scan_datasource_modes.py`，结果见 `temp/_out/scan_datasource_modes.txt`）。
+
+**为什么 supabase 模式下文件仍在本地磁盘**：三种数据源模式只区别「用户/任务数据」的来源（SQLite+JSON / PostgreSQL / 后端 API），与文件存储无关；工程内也没有启用 Supabase Storage —— `backend/app/utils/supabase_storage.py` 无任何调用方（仅其自身 `__main__` 测试引用），数据库模型里也没有文件表，文件管理一直是纯本地磁盘功能。
+
+### 修复 1
+
+`data_manager.py` 三处 `elif DATA_SOURCE == "local":` → `elif DATA_SOURCE in ("local", "supabase"):`，与 `local` **共用同一份 FileManager 实现**（不复制分支，避免后续再分叉）。
+
+### 问题 2（排查中发现的连带问题，处置方式已请用户确认）
+
+**转换结果目录在工程里有三套互相不一致的口径**：
+
+| 位置 | 原写法 | 实际落点 |
+|---|---|---|
+| `config.py` | `RESULTS_DIR = BASE_DIR / "conversion_results"` | 项目根 `conversion_results/` |
+| `views/conversion.py:553` | `os.path.join("conversion_results", ...)`（相对 **cwd**） | 取决于进程 cwd（`streamlit run app.py` 时为项目根） |
+| `task_manager.py:15` | `RESULTS_DIR = "conversion_results"`（相对 **cwd**） | 同上 |
+| `file_manager.py` | `base_dir`（= `temp/`）`/ "conversion_results"` | **`temp/conversion_results/`** |
+
+后果是两条「看着做了、其实没生效」的假功能：
+
+1. 管理后台「文件管理」的 **「转换结果文件」恒为 0** —— 它扫 `temp/conversion_results`，而文件写在项目根；
+2. 需求文档 3.4.2 规定的 **「结果保留 7 天自动清理」从未真正生效** —— `app.py` 启动时确实调用了 `cleanup_on_startup()`，但它扫的是空目录，等于空转。
+
+**引入时间已定位**：2026-09-08 提交 `f0cb611`（"dev改进侧边栏"）。该提交新增了 `config.TEMP_DIR` 并把 `FileManager` 的 `base_dir` 由 `"."` 改为它（目的是让它能扫到 `temp/` 下的临时文件），但 `results_dir` 仍按 `base_dir / results_dir` 派生，于是结果目录被连带拽进 `temp/` 下，而写入端仍在写项目根，两边从此分叉。
+
+**用户决策**：结果目录统一为 `temp/conversion_results`，**不要让转换结果散落在项目根**。
+
+### 修复 2
+
+以 `config.RESULTS_DIR` 作为唯一准绳，让写入端向它对齐：
+
+| 文件 | 改动 |
+|---|---|
+| `config.py` | `RESULTS_DIR` 改为 `TEMP_DIR / "conversion_results"`，并写明口径来源与历史背景 |
+| `views/conversion.py` | 结果路径由 `os.path.join("conversion_results", name)` 改为 `str(RESULTS_DIR / name)`；`from config import ...` 增加 `RESULTS_DIR` |
+| `task_manager.py` | 结果目录改为 `from config import RESULTS_DIR`（脱离工程上下文时回退到 `<本文件目录>/temp/conversion_results`） |
+| `file_manager.py` | `results_dir` 默认值改为 `config.RESULTS_DIR`（不再由 `base_dir` 派生）；`base_dir` 默认值仍为 `config.TEMP_DIR`（临时文件确实写在 `temp/`，保持不变）；显式传入相对 `results_dir` 时仍相对 `base_dir` 解析（向后兼容）；`mkdir` 补 `parents=True` |
+
+**历史数据归位**：`dev/conversion_results/` 下原有的 3 个结果文件，已**先备份**到 `temp/_backup_20260915/conversion_results/`，再迁移至 `temp/conversion_results/`（迁移后项目根该目录为空）。
+
+> ⚠️ **注意**：修复 2 让「7 天自动清理」**首次真正生效**。上述 3 个文件生成于 2026-09-07（已超 7 天），下次启动前端 `app.py` 时会被自动清理（符合需求文档 3.4.2）；如需长期保留，请先取用备份。
+
+### 验证
+
+- `python -m py_compile` 通过 5 个改动文件。
+- **与 git HEAD 逐行比对**（`temp/_out/verify_fm_all.txt`）：5 个文件的改动**只落在上表所列位置**，其余行内容逐字节一致；5 个文件均为纯 CRLF、无混合换行；HEAD 版本已字节精确留档到 `temp/_backup_20260915/filemgmt/`。
+- **全工程残留扫描**：除 `config.py` 的定义与注释、`task_manager.py` 的兜底分支外，`.py` 源码中已无把 `conversion_results` 当相对路径使用的代码。
+- 自动化测试：**76 个用例全部通过**。本次新增 `temp/test_file_management_modes.py`（26 例）：
+  1. **A 数据源模式分发**：supabase 下三个函数均路由到 FileManager 且**不再抛「未知的数据源模式」**（直接对应本次报错）；`local` 与 `supabase` 行为**完全等价**；`api` 模式只走后端、不碰本地 FileManager（含 URL 与请求体断言）；未知模式仍明确报错（不允许静默降级成「什么都不做」）。
+  2. **B FileManager 真实行为**（沙箱临时目录，不碰工程目录）：三类文件识别与用户ID 提取、跨页不重不漏、统计口径（含过期计数与 MB 取整）、按 `source_/template_/result_` 前缀删除、未知 ID 报错、**过期清理只删超 7 天的文件**、临时文件清理。
+  3. **C 口径一致性**：`config.RESULTS_DIR == TEMP_DIR/"conversion_results"`；`FileManager()` 默认目录跟随 config；`task_manager.RESULTS_DIR` 跟随 config；`views/conversion.py` 写入口径静态校验；全工程无相对路径残留。
+  4. **D 端到端冒烟**：把数据源切成 `supabase` 后**真实执行 `admin_web.show_file_management()`**，断言页面无 `st.error` / `st.exception`、指标卡与表格正常渲染、表格列结构不变 —— 即用户报错的整条路径已修复。
+  - 回归：`test_admin_used_paragraphs.py`（19）、`test_admin_user_paging.py`（19）、`test_admin_user_management_smoke.py`（10）、`test_backend_users_api_exec.py`（2）全部通过。
+  - 防呆守卫同步扩展：新增 `snapshot_tree()` / `assert_tree_unchanged()`，把 `conversion_results` 与 `temp/conversion_results` 整目录纳入保护；`temp/_guard_self_test.py` 增加目录守卫阳性对照（**删除 / 修改 / 新增**三种场景均能拦住）。
+
+### 影响范围与回滚
+
+- 影响面：管理后台「文件管理」页（supabase 模式由「直接报错」变为「正常工作」）；转换结果文件落点由项目根改为 `temp/conversion_results`；7 天自动清理开始真正生效。
+- 不影响：转换流程本身、用户/任务/配置的数据源逻辑、任何接口 URL 与参数。
+- 回滚方式：`git checkout -- data_manager.py config.py file_manager.py task_manager.py views/conversion.py`；若回滚，需把 `temp/conversion_results/` 下的结果文件移回项目根 `conversion_results/`。
+
+### 配套约定（已写入 `01-业务需求文档.md` 3.4）
+
+1. **转换结果统一存放于 `temp/conversion_results/`**，项目根不再生成结果目录；
+2. 任何写结果文件的代码**必须使用 `config.RESULTS_DIR`**，禁止再按 cwd 拼相对路径 `conversion_results`；
+3. 文件管理在三种数据源模式下口径一致：`local` / `supabase` 使用本进程本地磁盘（FileManager），`api` 委托后端服务。
+
+---
+
+## 2026-09-15（补充）同步盲区：`config.py` 的修复无法到达发布版
+
+**问题级别**: 🟡 中（不报错、无提示，静默导致 dev 与 pub 的目录口径分叉）
+**发现方式**: 用户追问「`config.py` 这个文件是不能直接覆盖同步的是吧？」
+
+### 现象
+
+「文件管理 supabase 报错 + 统一转换结果目录」修复共改 5 个文件。
+用户执行同步脚本后，**4 个文件同步成功，只有 `config.py` 没过去**（时间戳实证）：
+
+| 文件 | dev 修改时间 | pub 修改时间 | 结果 |
+|---|---|---|---|
+| `data_manager.py` | 2026-09-15 10:19:55 | 2026-09-15 10:19:55 | ✅ |
+| `views/conversion.py` | 2026-09-15 10:30:13 | 2026-09-15 10:30:13 | ✅ |
+| `task_manager.py` | 2026-09-15 10:30:29 | 2026-09-15 10:30:29 | ✅ |
+| `file_manager.py` | 2026-09-15 10:30:37 | 2026-09-15 10:30:37 | ✅ |
+| **`config.py`** | **2026-09-15 10:29:46** | **2026-09-08 11:56:52** | ❌ **未同步** |
+
+后果：pub 的 `config.py:12` 仍为 `RESULTS_DIR = BASE_DIR / "conversion_results"`（项目根），
+与 dev 的 `TEMP_DIR / "conversion_results"`、以及需求文档 3.4.2 规定的口径不一致。
+
+### 根因
+
+`sync_bid_buddy_dev_to_bid_buddy.bat` 第 [1/6] 步：
+
+```bat
+robocopy "%SOURCE%" "%TARGET%" *.py /XF config.py /XD .git .venv ... /FP /NP
+```
+
+`/XF config.py` 把 `config.py` 排除在同步之外（注释写明 "environment-specific"）。
+这是**既有设计**（改造前的备份同样如此），本身有合理性；但它**没有任何提示机制**——
+配置被有意排除，却没有"它已经和 dev 不一致了"的告警，于是"改了 config.py"就成了一次静默丢失。
+
+### 影响评估
+
+- 没有演变成线上故障的原因：其余 4 个文件已统一改为读 `config.RESULTS_DIR`，
+  pub 内"写的"和"扫的"仍是同一目录，不会扫到空目录。
+  即 **pub 运行自洽，仅落点（项目根 vs `temp/`）与规范不一致**。
+- 反之，若只改了 `config.py` 而没同步那 4 个伴生文件，就会重新出现
+  "后台计数恒为 0 + 7 天清理空转"的老问题。
+
+### 修复
+
+1. **脚本侧**：给 bat 增加第 `[check]` 步（只比对、绝不复制）——
+   `fc /b` 比对两侧 `config.py`：一致打印 `[OK]`；不一致打印 `[WARN]` +
+   两侧字节数与修改时间 + `fc /L /N` 查看命令 + `copy` 手动同步命令 +
+   "必须与 4 个引用它的文件同批同步"的提醒。
+   同时在第 [1/6] 步注释与脚本头部说明中加交叉引用，避免下次又忘。
+
+   | 项 | 值 |
+   |---|---|
+   | 文件 | `E:\LingMa\WordStyle\sync_bid_buddy_dev_to_bid_buddy.bat` |
+   | 改前 | 4595 字节 / 117 行 CRLF / 纯 ASCII / 无 BOM |
+   | 改后 | 6254 字节 / 151 行 CRLF / 纯 ASCII / 无 BOM |
+   | 新增 | 34 行（`[check]` 步）+ 2 行（头部说明与注释） |
+
+2. **发布侧**：pub 的 `config.py` 由用户手动补传（**AI 不代劳**）。
+   补传后 pub 的结果目录即与 dev、文档统一为 `temp/conversion_results/`。
+
+### 验证
+
+- **干跑双对照**（全部 robocopy 加 `/L`，实测 PUB 281 个文件哈希零改动）：
+  - A 变体（原样）：`[WARN] config.py DIFFERS`，并打印
+    `dev: 12210 bytes 2026/09/15 10:29` / `pub: 11540 bytes 2026/09/08 11:56`
+    —— 与真实差异完全吻合（天然阳性对照）；
+  - B 变体（把检查目标换成两侧相同的 `file_manager.py`）：`[OK]`（阴性对照）；
+  - 两个变体 returncode 均为 0，证明 `[check]` 步**不会**打断同步主流程。
+- **换行/编码硬断言**：改后 `CRLF=151 / 裸LF=0 / 裸CR=0 / 纯 ASCII / 无 BOM`。
+- **锚点唯一性断言**（3 个插入锚点各出现 1 次），避免误插入或二次插入。
+
+### 本次同时修掉的一个工具自身缺陷（教训）
+
+第一版插入脚本用 raw 三引号字符串承载要插入的批处理块，**该字符串跟随脚本文件自身的 LF 换行**，
+插进 bat 后留下 **33 处裸 LF**；而脚本最后却在日志里打印
+"新 bat 已写入…（CRLF + 纯 ASCII，无 BOM）"——**那句成功信息没有任何 `assert` 支撑，
+是自己给自己发的合格证**，恰好掩盖了这次换行污染。
+
+两条硬教训：
+
+1. 向 CRLF 文件插入内容，**必须用 `["行1","行2",...]` + `"\r\n".join(...)` 显式拼装**，
+   绝不能依赖脚本自身的换行；写回后必须 `assert` 裸 LF / 裸 CR 均为 0。
+2. **凡是写进日志/报告的性质结论，都必须有对应断言**；没有断言就不要打印"通过"。
+
+### 影响面与回滚
+
+- 只影响同步脚本（工程外的开发工具）与 pub 的 `config.py`，**不涉及任何运行时逻辑**。
+- 回滚：把 `bid-buddy-dev\temp\_backup_20260915\sync_bid_buddy_dev_to_bid_buddy.bat.20260915b.bak`
+  复制回 `E:\LingMa\WordStyle\sync_bid_buddy_dev_to_bid_buddy.bat`
+  （该文件在项目外、不受 git 保护，改动前已留备份）。
+
+**修复时间**: 2026-09-15
+**修复人员**: AI Assistant
+**涉及文件**: `E:\LingMa\WordStyle\sync_bid_buddy_dev_to_bid_buddy.bat`、
+`docs\05-系统部署详细文档.md`（新增第 13 节）
+**审核状态**: 待用户验证
+**部署状态**: 同步脚本已改（工程外）；pub 的 `config.py` 待用户手动补传
+
+---
+
+## 2026-09-15（补充二）同步策略调整：`config.py` 由「永久排除」改为「自动同步」
+
+**问题级别**: 🟡 中（流程缺陷：排除理由已不成立，且「按文件名一刀切」会持续制造下一个盲区）
+**发现方式**: 用户追问 ——「`config.py` 这个文件有没有个性化的内容，即每次同步覆盖，会导致
+pub 版本的配置被 dev 版本配置覆盖，导致本地或云端运行不正常；如果都是通用的配置，
+我觉可以每次同步覆盖，而不是仅就这一次的修改来判断是否可以同步覆盖。」
+
+### 结论
+
+**`config.py` 没有任何环境专属内容，可以、也应当每次同步覆盖。**
+「environment-specific」是 2026-05 的遗留判断，对现在的文件已无事实依据。
+
+### 审计证据
+
+**（1）根 `config.py` 40 个配置项逐项判定，无一环境专属：**
+
+| 类别 | 项数 | 说明 |
+|---|---|---|
+| 路径类 | 8 | 全部由 `__file__` 派生（`BASE_DIR`/`TEMP_DIR`/`DATA_DIR`/`RESULTS_DIR`/`USER_DATA_FILE`/`COMMENTS_FILE`/`TASKS_DB_FILE`/`LOG_FILE`），每个副本自动解析到自己目录，覆盖不会串味 |
+| 运行时注入 | 7 | `USE_SUPABASE`/`DATABASE_URL`/`BACKEND_URL`/`DATA_SOURCE`/`ADMIN_CONTACT`/`LOG_LEVEL` 走 `st.secrets` → `os.getenv` → 默认值，**文件里没有任何具体值** |
+| 业务常量 | 27 | 价格、免费额度、充值档位、样式映射、应答句、阈值、UI 文案；与环境无关，且**必须**两侧一致（否则计费/额度不一致） |
+
+**（2）真正个性化的东西不在 `config.py` 里，且早已被排除**：
+`.streamlit\secrets.toml`（dev 154 字节 / pub 755 字节，内容确实不同）、`.env`、
+`data\`、`conversion_results\` —— 同步脚本对它们都有排除规则或根本不在复制范围内。
+
+**（3）git 历史佐证**：dev 侧 `config.py` 11 个版本、pub 侧 19 个版本，
+**没有任何一版出现过真实密钥、真实磁盘路径或真实域名**；正则命中的全是文档字符串示例
+（`https://xxx.supabase.co`）与占位符（`your_wechat_id`）。历史上唯一一次真正的环境专属值是
+2026-05 的 `BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")`，
+**该默认值早已删除**（现在是 `os.getenv("BACKEND_URL")` → `None`）。
+
+**（4）数据库/密钥类配置本就不在 `config.py`**：管理员联系方式来自数据库 `configs` 表
+（`admin_web.py` + `data_manager.py:1727` 种子行），数据库连接串来自 `secrets.toml` / 环境变量。
+
+### 根因
+
+`/XF config.py` 是**按文件名匹配整棵树**的，因此同时排除了三个文件：
+`config.py`、`backend\app\config.py`、`backend\app\core\config.py`。
+它的历史来源是 2026-05-11 前后：当时 pub 侧 `config.py` 连续多次单独提交，
+专门修 Streamlit Cloud 的 secrets 读取、pooler 连接串转换、布尔值解析。
+**这些修复后来全部并入 dev，两侧已收敛**，排除条款遂成遗留保险。
+
+而且它挡不住人：pub 2026-09-08 的 `e001a50 同步dev全部改进` 就包含 `config.py`。
+排除只挡住了 robocopy，没挡住手工复制 —— 结果是「有时记得、有时忘」（09-15 就忘了，见上一条）。
+
+### 修复
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 第 [1/6] 步 | `robocopy ... *.py /XF config.py /XD ...` | 去掉 `/XF config.py`，根 `config.py` 随其余根级 `.py` 同步 |
+| 第 [4/6] 步 | `/XF *.pyc *.log *.db *.json .env* config.py` | 去掉 `config.py` |
+| 新增 [0/6] 步 | —— | 同步**前**快照 `pub\config.py` 的大小/时间/是否与 dev 不同 |
+| [check] 步 | 只比对 **+ 告警 & 手工复制指引**，**绝不复制** | 覆盖前后**双向**检查：报告本次是否覆盖了 pub 旧版（含原大小/时间 + `git` 回退命令），再逐一断言三个 `config.py` 两侧一致 |
+| 文件 | 6254 字节 / 151 行 / 纯 CRLF / 无 BOM | 7995 字节 / 200 行 / 纯 CRLF / 无 BOM |
+
+改后规则简化为「**源码即通用，差异走运行时注入**」：
+需要按环境取不同值的配置一律放进 `.streamlit\secrets.toml` 或环境变量，**绝不 fork 源文件**。
+
+### 验证
+
+- **沙箱实跑 3 个场景**（不是干跑，robocopy 真的复制；脚本用 `%~dp0` 定位，拷进沙箱即自带隔离），
+  全部 `RESULT: PASS` 且退出码为 0：
+
+  | 场景 | 前置状态 | 期望且实测输出 |
+  |---|---|---|
+  | A | pub 的 `config.py` 与 dev 不同 | `[INFO] pub\config.py differed before this run and has been OVERWRITTEN` + `previous pub copy: 90 bytes 2026/09/15 13:33` + `roll back if needed: git -C ... checkout -- config.py` |
+  | B | 两侧已相同 | `[INFO] pub\config.py was already identical - nothing was overwritten.` |
+  | C | pub 侧缺失 | `[INFO] pub\config.py did not exist before this run - created by step [1/6].` |
+  | A/B/C | —— | 三个 `config.py` 均 `[OK] identical on both sides`；`[check]` 未改变退出码 |
+
+- **安全红线断言（三个场景逐一校验哈希）**：pub 的 `.streamlit\secrets.toml`、
+  `data\user_data.json`、`conversion_results\result_old.docx` **一字节未变**。
+  这直接证明「自动同步 `config.py` 不会碰到任何个性化内容」。
+- **正向断言**：该同步的确实同步了（`config.py`、`components\sidebar.py` 两侧内容已一致）。
+- **测装的同一性**：候选版本与安装后的正式文件 **sha256 完全相同**
+  （`aaa453a82f92385704ba602bbd01b42da3eefbe21f17076c0dd62f0828b1b870`），
+  即"测的就是装的"。
+- **换行/编码硬断言**：正式文件 `CRLF=200 / 裸LF=0 / 裸CR=0 / 纯 ASCII / 无 BOM`。
+- 沿用上一条的教训：本次生成 bat 一律用 `["行1","行2",...] + "\r\n".join(...)` 显式拼装，
+  写盘后立即断言裸 LF/裸 CR/BOM，并断言关键串在/不在（`/XF config.py` 必须不存在）。
+
+### 影响面与回滚
+
+- 只影响同步脚本（工程外的开发工具），**不涉及任何运行时逻辑**；dev / pub 两面代码均未改动。
+- 回滚：把 `bid-buddy-dev\temp\_backup_20260915\sync_bat_v1_20260915b.bat`
+  （6254 字节，sha256 `5a1bf92ca3615324…`）复制回
+  `E:\LingMa\WordStyle\sync_bid_buddy_dev_to_bid_buddy.bat` 即可。
+  该文件在项目外、不受 git 保护，改动前已留备份。
+
+**修复时间**: 2026-09-15
+**修复人员**: AI Assistant
+**涉及文件**: `E:\LingMa\WordStyle\sync_bid_buddy_dev_to_bid_buddy.bat`、
+`docs\05-系统部署详细文档.md`（第 13 节改写）
+**审核状态**: 待用户验证
+**部署状态**: 同步脚本已改（工程外），换行纯净、sha256 留档；pub 的 `config.py` 仍待用户跑一次同步自动带上
+

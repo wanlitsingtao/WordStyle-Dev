@@ -16,23 +16,31 @@ logger = logging.getLogger(__name__)
 class FileManager:
     """文件管理器 - 处理文件清理和查询"""
     
-    def __init__(self, base_dir: str = None, results_dir: str = "conversion_results"):
+    def __init__(self, base_dir: str = None, results_dir: str = None):
         """
         初始化文件管理器
         
         Args:
-            base_dir: 基础目录（工作目录）
-            results_dir: 转换结果目录
+            base_dir: 基础目录（存放 temp_source_* / temp_template_* 等临时文件），默认取 config.TEMP_DIR
+            results_dir: 转换结果目录，默认取 config.RESULTS_DIR（= temp/conversion_results）；
+                         传入相对路径时相对 base_dir 解析
         """
+        # [FIX 2026-09-15] 结果目录改为直接引用 config.RESULTS_DIR，与写入端
+        # （views/conversion.py、task_manager.py）保持同一准绳，避免"写的和扫的不是同一个目录"。
+        from config import TEMP_DIR, RESULTS_DIR
         if base_dir is None:
-            from config import TEMP_DIR
             base_dir = TEMP_DIR
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir = self.base_dir / results_dir
-        
+
+        if results_dir is None:
+            self.results_dir = Path(RESULTS_DIR)
+        else:
+            _rd = Path(results_dir)
+            self.results_dir = _rd if _rd.is_absolute() else self.base_dir / _rd
+
         # 确保结果目录存在
-        self.results_dir.mkdir(exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
         # 文件保留天数
         self.retention_days = 7

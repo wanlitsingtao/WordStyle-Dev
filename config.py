@@ -9,14 +9,22 @@ from pathlib import Path
 
 # ==================== 基础路径配置 ====================
 BASE_DIR = Path(__file__).parent.absolute()
-RESULTS_DIR = BASE_DIR / "conversion_results"
-DATA_DIR = BASE_DIR / "data"
 TEMP_DIR = BASE_DIR / "temp"
+DATA_DIR = BASE_DIR / "data"
+
+# [FIX 2026-09-15] 转换结果统一收在 temp/conversion_results 下，RESULTS_DIR 是唯一准绳。
+# 背景：此前这里是 BASE_DIR/"conversion_results"（项目根），而 FileManager 的结果目录是
+# TEMP_DIR/"conversion_results"，而 views/conversion.py、task_manager.py 又是按 cwd 拼
+# 相对路径 "conversion_results" 写文件 —— 三处口径不一致，后果是：
+#   1) 管理后台「文件管理」永远扫不到转换结果（该列恒为 0）；
+#   2) 需求文档 3.4.2 规定的"结果保留 7 天自动清理"从未真正生效过。
+# 现在统一为：谁写结果，都用 RESULTS_DIR。
+RESULTS_DIR = TEMP_DIR / "conversion_results"
 
 # 确保目录存在
-RESULTS_DIR.mkdir(exist_ok=True)
-DATA_DIR.mkdir(exist_ok=True)
 TEMP_DIR.mkdir(exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
 
 # ==================== 加载 .env 文件（本地开发用）====================
 try:
