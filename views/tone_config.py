@@ -12,6 +12,11 @@ from ui_theme import render_section_title
 
 logger = logging.getLogger('WordStyle')
 
+# 转换结果展示区高度（px）。
+# st.code 默认高度随内容自适应且不折行，长段落会被挤成一行、需横向滚动，
+# 用户反馈「只有一行，体验非常不好」，故显式给定高度并开启折行。
+RESULT_BOX_HEIGHT = 360
+
 
 def _ensure_rules_loaded():
     """确保会话中存在工作副本规则（首次进入时从用户数据加载）。"""
@@ -48,7 +53,12 @@ def _render_test_section(rules):
 
     if st.session_state.get('tone_test_result'):
         st.markdown("**转换结果：**")
-        st.code(st.session_state.tone_test_result, language=None)
+        st.code(
+            st.session_state.tone_test_result,
+            language=None,
+            wrap_lines=True,            # 长段落按容器宽度折行，不再横向滚动成一行
+            height=RESULT_BOX_HEIGHT,   # 固定展示高度，内容超出时内部滚动
+        )
 
 
 def render_tone_config_page():
@@ -56,6 +66,9 @@ def render_tone_config_page():
     from tone_rules_manager import ToneRulesManager
     from components.sidebar import render_sidebar
     render_sidebar("tone_config")
+
+    # 页面一级标题：与「🧪 转换测试」同级别、同样式（共用 render_section_title）
+    render_section_title("祈使语气配置")
 
     st.markdown(
         "管理文档转换时的祈使语气替换规则。修改后保存到您的账户，"

@@ -14,7 +14,6 @@ import logging
 
 import streamlit as st
 
-from ui_theme import render_section_title
 
 logger = logging.getLogger('WordStyle')
 
@@ -27,7 +26,6 @@ def _render_mapping_editor(rules, category, editor_key, label):
     import pandas as pd
 
     mapping = rules.get(category, {}) or {}
-    st.markdown(f"**{label}（{len(mapping)} 条）**")
 
     if mapping:
         df = pd.DataFrame(
@@ -98,51 +96,68 @@ def render_tone_rules_editor(rules):
         rules = {}
 
     # 1. 多字祈使词替换
-    render_section_title("▸ 多字祈使词替换")
-    rules = _render_mapping_editor(rules, "multi_imperative", "tone_editor_multi", "多字祈使词替换")
-
-    st.markdown("---")
+    with st.expander(
+        f"▸ 多字祈使词替换（{len(rules.get('multi_imperative', {}) or {})} 条）",
+        expanded=False,
+        key="tone_expand_multi",
+    ):
+        rules = _render_mapping_editor(rules, "multi_imperative", "tone_editor_multi", "多字祈使词替换")
 
     # 2. 单字祈使词替换
-    render_section_title("▸ 单字祈使词替换")
-    rules = _render_mapping_editor(rules, "single_imperative", "tone_editor_single", "单字祈使词替换")
-
-    st.markdown("---")
+    with st.expander(
+        f"▸ 单字祈使词替换（{len(rules.get('single_imperative', {}) or {})} 条）",
+        expanded=False,
+        key="tone_expand_single",
+    ):
+        rules = _render_mapping_editor(rules, "single_imperative", "tone_editor_single", "单字祈使词替换")
 
     # 3. 投标人称谓替换
-    render_section_title("▸ 投标人称谓替换")
-    rules = _render_mapping_editor(rules, "bidder_terms", "tone_editor_bidder", "投标人称谓替换")
-
-    st.markdown("---")
+    with st.expander(
+        f"▸ 投标人称谓替换（{len(rules.get('bidder_terms', {}) or {})} 条）",
+        expanded=False,
+        key="tone_expand_bidder",
+    ):
+        rules = _render_mapping_editor(rules, "bidder_terms", "tone_editor_bidder", "投标人称谓替换")
 
     # 4. 例外词列表（3 组）
-    render_section_title("▸ 例外词列表")
     exceptions = rules.setdefault("exceptions", {})
     if not isinstance(exceptions, dict):
         exceptions = {}
         rules["exceptions"] = exceptions
+    exc_total = (
+        len(exceptions.get("multi", []) or [])
+        + len(exceptions.get("ying", []) or [])
+        + len(exceptions.get("xu", []) or [])
+    )
+    with st.expander(
+        f"▸ 例外词列表（{exc_total} 个）",
+        expanded=False,
+        key="tone_expand_exceptions",
+    ):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            _render_list_editor(exceptions, "multi", "tone_editor_exc_multi",
+                                "多字祈使词例外（每行一个词）",
+                                "这些词中即使包含祈使词也不会被替换")
+        with col_b:
+            _render_list_editor(exceptions, "ying", "tone_editor_exc_ying",
+                                "「应」字例外词（每行一个词）",
+                                "这些词中的「应」字不会被替换")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        _render_list_editor(exceptions, "multi", "tone_editor_exc_multi",
-                            "多字祈使词例外（每行一个词）",
-                            "这些词中即使包含祈使词也不会被替换")
-    with col_b:
-        _render_list_editor(exceptions, "ying", "tone_editor_exc_ying",
-                            "「应」字例外词（每行一个词）",
-                            "这些词中的「应」字不会被替换")
-
-    _render_list_editor(exceptions, "xu", "tone_editor_exc_xu",
-                        "「须」字例外词（每行一个词）",
-                        "这些词中的「须」字不会被替换")
-
-    st.markdown("---")
+        _render_list_editor(exceptions, "xu", "tone_editor_exc_xu",
+                            "「须」字例外词（每行一个词）",
+                            "这些词中的「须」字不会被替换")
 
     # 5. "应+对"分离结构标志动词
-    render_section_title("▸ 应+对分离结构标志动词")
-    _render_list_editor(rules, "ying_dui_verbs", "tone_editor_verbs",
-                        "标志动词（每行一个词）",
-                        "用于检测「应+对+动词」分离结构（如「应对…负责」），避免误替换")
+    verbs_count = len(rules.get("ying_dui_verbs", []) or [])
+    with st.expander(
+        f"▸ 应+对分离结构标志动词（{verbs_count} 个）",
+        expanded=False,
+        key="tone_expand_verbs",
+    ):
+        _render_list_editor(rules, "ying_dui_verbs", "tone_editor_verbs",
+                            "标志动词（每行一个词）",
+                            "用于检测「应+对+动词」分离结构（如「应对…负责」），避免误替换")
 
     return rules
 
