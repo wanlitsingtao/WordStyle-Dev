@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-源文档标题预处理引擎（T04 / 工具箱 Tab A）
+源文档标题预处理引擎（T04 / 工具箱：标题查漏 + 标题预处理）
 无 Streamlit 依赖，可独立测试。
 
 职责：
-1. 检测以正文格式出现的编号标题（数字编号 + 制表符 + 单列标题，如 "1.1\t线路"）
+1. 检测以正文格式出现的编号标题（数字编号 + 空白分隔符 + 单列标题，如 "1.1 线路"）
 2. 按编号层级推断大纲级别（1→H1, 1.1→H2, 1.1.1→H3）
 3. 将选中段落应用对应 Heading N 样式（并设置大纲级别）
 4. 判断文档是否已使用标题样式（供转换页引导提示）
+5. 查漏：找出"本应是标题、却既非标题格式也无大纲级别"的编号段落（只检查、不修改）
 """
 import re
 from typing import List, Dict, Optional
@@ -16,10 +17,14 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-# 编号标题检测：数字编号 + 制表符 + 单列标题文本（如 "1.1\t线路"）。
-# 排除列表项（"1、"、"1）"、"2)"）、多列表格行（"1\t小于 300\t1.2\t65"）等。
+# 编号标题检测：数字编号 + 空白分隔符 + 单列标题文本（如 "1.1 线路"、"1.1\t线路"）。
+# 分隔符为半角空格 / 制表符 / 全角空格 / 不换行空格中的一种或多种。
+# 注意：不要退回"只认制表符"。同一份源文档里空格与制表符经常混用（例如 8js1.docx
+# 全篇编号标题都用半角空格），只认制表符会导致整批标题漏检（2026-09-17 修复）。
+# 排除列表项（"1、"、"1）"、"2)"）：编号后紧跟标点而非空白，天然不匹配本条规则；
+# 排除多列表格行（"1\t小于 300\t1.2\t65"）：正文部分不允许再出现制表符。
 # 捕获组 1 = 纯数字编号（用于推断层级），组 2 = 标题正文。
-HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)\t([^\t]*)$')
+HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)[ \t\u3000\xa0]+([^\t]*)$')
 
 # 文本开头数字编号：用于已具有标题样式/大纲级别的段落统一按编号推断级别（如 "1.1 线路" / "1.1线路"）。
 NUMBER_PREFIX_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)')
@@ -55,11 +60,13 @@ class TitlePreprocessor:
         return min(depth, TitlePreprocessor.MAX_LEVEL)
 
     @staticmethod
-    def detect_headings(docx_file) -> List[Dict]:
+    def detect_headings(docx_file, progress_callback=None) -> List[Dict]:
         """检测文档中的编号标题段落。
 
         Args:
-            docx_file: docx 文件路径。
+            docx_file: docx 文件路径，或可读的文件对象（如 io.BytesIO）。
+            progress_callback: 可选，段落扫描进度回调 progress_callback(done: int, total: int)，
+                用于非阻塞进度条（不影响识别结果）。
 
         Returns:
             List[Dict]，每个元素结构：
@@ -70,9 +77,27 @@ class TitlePreprocessor:
                     "detected_level": int,    # 自动推断的级别（1-9）
                 }
         """
-        doc = Document(docx_file)
+        return TitlePreprocessor._detect_headings_in(
+            Document(docx_file), progress_callback=progress_callback
+        )
+
+    @staticmethod
+    def _detect_headings_in(doc, progress_callback=None) -> List[Dict]:
+        """在已打开的 Document 上执行标题识别（detect_headings 与 check_heading_leaks 共用）。
+
+        识别规则、判断分支与顺序与 detect_headings 完全一致，仅把"加载文档"与"识别"拆开：
+        查漏功能必须与预处理共用同一套识别逻辑，否则两处各写一份会产生口径分歧。
+
+        Args:
+            progress_callback: 可选，段落扫描进度回调 progress_callback(done: int, total: int)。
+                仅在识别前对全部段落做一次扫描时按比例推进（用于查漏/预处理的进度条），
+                不影响识别结果。
+        """
         candidates = []
+        total_paras = len(doc.paragraphs)
         for idx, para in enumerate(doc.paragraphs):
+            if progress_callback:
+                progress_callback(idx + 1, total_paras)
             # 用原始文本匹配（不 strip），以便区分"单列标题"与"多列表格行/列表项"。
             raw_text = para.text
             if not raw_text.strip():
@@ -201,27 +226,109 @@ class TitlePreprocessor:
         return headings
 
     @staticmethod
+    def check_heading_leaks(docx_file, progress_callback=None) -> List[Dict]:
+        """查漏：检查"本应是标题、却既非标题格式也无大纲级别"的编号段落。
+
+        识别对象与 detect_headings 完全一致（同一个 _detect_headings_in，同一套
+        识别规则与排除规则），区别只在于额外附带每段当前的样式说明，并标出格式异常项。
+
+        Args:
+            docx_file: docx 文件路径，或可读的文件对象（如 io.BytesIO）。
+            progress_callback: 可选，段落扫描进度回调 progress_callback(done: int, total: int)，
+                用于非阻塞进度条（不影响识别结果）。
+
+        Returns:
+            List[Dict]，每个元素在 detect_headings 结果的基础上增加：
+                {
+                    "index": int,
+                    "text": str,
+                    "number": str,
+                    "detected_level": int,
+                    "style_name": str,          # 当前样式名，取不到时为 "无样式"
+                    "is_heading_style": bool,   # 样式名是否为标题样式（Heading N / 标题 N）
+                    "outline_level": int | None,# 显式大纲级别（1-9），未设置则 None
+                    "is_heading": bool,         # 已是标题格式（标题样式或大纲级别任一成立）
+                    "is_leak": bool,            # 格式异常：既非标题样式、也无大纲级别
+                    "style_description": str,   # 当前样式说明，如 "Normal｜无大纲级别"
+                }
+        """
+        doc = Document(docx_file)
+        headings = TitlePreprocessor._detect_headings_in(doc, progress_callback=progress_callback)
+        paragraphs = doc.paragraphs
+        results = []
+        for h in headings:
+            idx = h["index"]
+            if not 0 <= idx < len(paragraphs):
+                continue
+            info = TitlePreprocessor.describe_paragraph_style(paragraphs[idx])
+            item = dict(h)
+            item.update(info)
+            item["is_leak"] = not info["is_heading"]
+            results.append(item)
+        return results
+
+    @staticmethod
+    def describe_paragraph_style(paragraph) -> Dict:
+        """描述段落当前的样式状态（供查漏功能展示"当前样式说明"）。
+
+        Returns:
+            {
+                "style_name": str,          # 当前样式名，取不到时为 "无样式"
+                "is_heading_style": bool,   # 样式名是否为标题样式
+                "outline_level": int | None,# 显式大纲级别（1-9），未设置则 None
+                "is_heading": bool,         # 标题样式或大纲级别任一成立
+                "style_description": str,   # 人可读说明，如 "Normal｜无大纲级别"
+            }
+        """
+        style_name = ''
+        if paragraph.style is not None and paragraph.style.name:
+            style_name = paragraph.style.name
+        style_level = TitlePreprocessor._get_heading_style_level(paragraph)
+        outline_level = TitlePreprocessor._get_outline_level(paragraph)
+        display_name = style_name or '无样式'
+        outline_text = (f'大纲级别 {outline_level}'
+                        if outline_level is not None else '无大纲级别')
+        return {
+            "style_name": display_name,
+            "is_heading_style": style_level is not None,
+            "outline_level": outline_level,
+            "is_heading": (style_level is not None) or (outline_level is not None),
+            "style_description": f'{display_name}｜{outline_text}',
+        }
+
+    @staticmethod
+    def _get_heading_style_level(paragraph) -> Optional[int]:
+        """段落样式名对应的标题级别（Heading N / 标题 N）；非标题样式返回 None。"""
+        if paragraph.style is not None and paragraph.style.name:
+            return HEADING_STYLE_LEVELS.get(paragraph.style.name.lower())
+        return None
+
+    @staticmethod
+    def _get_outline_level(paragraph) -> Optional[int]:
+        """段落显式设置的大纲级别（w:outlineLvl，1-9）；未设置或非法返回 None。"""
+        pPr = paragraph._p.find(qn('w:pPr'))
+        if pPr is None:
+            return None
+        outline = pPr.find(qn('w:outlineLvl'))
+        if outline is None:
+            return None
+        val = outline.get(qn('w:val'))
+        if val is None:
+            return None
+        try:
+            level = int(val) + 1  # outlineLvl 是 0-based
+        except ValueError:
+            return None
+        return level if 1 <= level <= 9 else None
+
+    @staticmethod
     def _is_existing_heading(paragraph) -> bool:
         """判断段落是否已具有标题样式（Heading N / 标题 N）或大纲级别。
 
         仅用于识别“已是标题”的段落，不再据此推断级别。
         """
-        if paragraph.style is not None and paragraph.style.name:
-            if HEADING_STYLE_LEVELS.get(paragraph.style.name.lower()):
-                return True
-        pPr = paragraph._p.find(qn('w:pPr'))
-        if pPr is not None:
-            outline = pPr.find(qn('w:outlineLvl'))
-            if outline is not None:
-                val = outline.get(qn('w:val'))
-                if val is not None:
-                    try:
-                        level = int(val) + 1
-                        if 1 <= level <= 9:
-                            return True
-                    except ValueError:
-                        pass
-        return False
+        return (TitlePreprocessor._get_heading_style_level(paragraph) is not None
+                or TitlePreprocessor._get_outline_level(paragraph) is not None)
 
     @staticmethod
     def _extract_number_prefix(text: str) -> Optional[str]:

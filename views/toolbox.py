@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 工具箱页（T04）
-st.tabs 组合两个预处理功能：源文档标题预处理 + 模板样式精简。
+st.tabs 组合三个工具：源文档标题查漏 + 源文档标题预处理 + 模板样式精简。
 """
 import streamlit as st
 
@@ -14,7 +14,7 @@ def render_toolbox_page():
     st.markdown(
         """
         <style>
-            /* 工具箱的两个工作区标签（CSS 兜底）。
+            /* 工具箱的三个工作区标签（CSS 兜底）。
                字号统一引用 --ws-font-tab（定义见 ui_theme.py），
                当前值与系统主标题一致，改 ui_theme.py 一处即同步。 */
             [data-testid="stAppViewContainer"] [data-testid="stTabs"] [data-baseweb="tab"],
@@ -39,7 +39,9 @@ def render_toolbox_page():
         </style>
         <script>
             (function() {
-                var TARGET_TERMS = ['源文档标题预处理', '模板样式精简'];
+                // 注意：下面是"按文字内容定位标签节点"的兜底匹配词。
+                // 各标签正文中不要出现这些词的完整字样，否则那段正文会被误判成标签被一并放大。
+                var TARGET_TERMS = ['源文档标题查漏', '源文档标题预处理', '模板样式精简'];
 
                 // 从 ui_theme.py 注入的 :root 变量读取字号，保证全局统一。
                 function readTabFont() {
@@ -111,7 +113,15 @@ def render_toolbox_page():
         unsafe_allow_html=True,
     )
 
-    tab_title, tab_style = st.tabs(["📑 源文档标题预处理", "🧹 模板样式精简"])
+    tab_leak, tab_title, tab_style = st.tabs([
+        "🔍 源文档标题查漏",
+        "📑 源文档标题预处理",
+        "🧹 模板样式精简",
+    ])
+
+    with tab_leak:
+        from components.title_leak_check import render_title_leak_check
+        render_title_leak_check()
 
     with tab_title:
         from components.title_preprocess import render_title_preprocess

@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-源文档标题预处理交互组件（T04 / 工具箱 Tab A）
+源文档标题预处理交互组件（T04 / 工具箱标签：源文档标题预处理）
 检测表格 + 级别编辑 + 处理下载。
 """
 import logging
 import os
 import threading
+import time
 
 import streamlit as st
 
@@ -106,13 +107,13 @@ def _level_to_int(level_label):
     return int(level_label[1:])
 
 
-def _detect(user_id, uploaded_file):
+def _detect(user_id, uploaded_file, progress_callback=None):
     """保存上传文件并检测标题。返回 (headings, temp_path)。"""
     from config import TEMP_DIR
     temp_path = str(TEMP_DIR / f"temp_title_preprocess_{user_id}.docx")
     with open(temp_path, 'wb') as f:
         f.write(uploaded_file.getbuffer())
-    headings = TitlePreprocessor.detect_headings(temp_path)
+    headings = TitlePreprocessor.detect_headings(temp_path, progress_callback=progress_callback)
     return headings, temp_path
 
 
@@ -137,11 +138,27 @@ def render_title_preprocess():
         return
 
     # 检测（每次上传/重跑都基于当前上传文件重新分析；数据量小，无需缓存）
+    # 带进度条：检测阶段按段落扫描推进，处理阶段由后台任务轮询推进。
+    detect_bar = st.progress(0)
+    detect_status = st.empty()
+    _detect_ts = [0.0]
+
+    def _on_detect_progress(done, total):
+        frac = done / total if total else 0.0
+        _now = time.time()
+        if frac >= 1.0 or _now - _detect_ts[0] >= 0.1:
+            _detect_ts[0] = _now
+            detect_bar.progress(min(frac, 1.0))
+            detect_status.caption(f"🔍 正在检测标题… {done}/{total} 段")
+
     try:
-        headings, temp_path = _detect(user_id, uploaded)
+        headings, temp_path = _detect(user_id, uploaded, progress_callback=_on_detect_progress)
     except Exception as e:
         st.error(f"❌ 文档解析失败：{e}")
         return
+
+    detect_bar.progress(1.0)
+    detect_status.caption("✅ 检测完成")
 
     if not headings:
         st.warning("未检测到编号标题（数字编号 + 制表符 + 标题文本 格式）。")

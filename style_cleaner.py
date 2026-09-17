@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-模板样式精简引擎（T04 / 工具箱 Tab B）
+模板样式精简引擎（T04 / 工具箱：模板样式精简）
 无 Streamlit 依赖，可独立测试。
 
 职责：
@@ -57,8 +57,12 @@ class StyleCleaner:
         return paragraphs
 
     @staticmethod
-    def analyze_styles(docx_file) -> Dict:
+    def analyze_styles(docx_file, progress_callback=None) -> Dict:
         """分析模板文档样式及使用次数。
+
+        Args:
+            progress_callback: 可选，扫描进度回调 progress_callback(done: int, total: int)。
+                在遍历全部段落统计样式使用次数时按比例推进（用于非阻塞进度条）。
 
         Returns:
             {
@@ -84,7 +88,11 @@ class StyleCleaner:
 
         # 统计使用次数（按 style_id）
         usage = {}
-        for para in StyleCleaner._iter_all_paragraphs(doc):
+        paragraphs = StyleCleaner._iter_all_paragraphs(doc)
+        total_paras = len(paragraphs)
+        for i, para in enumerate(paragraphs):
+            if progress_callback:
+                progress_callback(i + 1, max(total_paras, 1))
             if para.style is not None:
                 sid = para.style.style_id
                 if sid:
@@ -161,7 +169,7 @@ class StyleCleaner:
         return default
 
     @staticmethod
-    def cleanup_styles(docx_file, output_file, delete_style_ids: List[str]) -> Dict:
+    def cleanup_styles(docx_file, output_file, delete_style_ids: List[str], progress_callback=None) -> Dict:
         """删除指定样式并保存新文档。
 
         Args:
@@ -169,12 +177,21 @@ class StyleCleaner:
             output_file: 输出 docx 路径。
             delete_style_ids: 要删除的 styleId 列表（内部会过滤最小保留集，
                 并对 basedOn/next 引用自动重指向，对 link 引用清理）。
+            progress_callback: 可选，处理进度回调 progress_callback(done: int, total: int)。
+                按「过滤保护集 → 建引用链 → 物理删除 → 重指向 → 保存」分阶段推进，
+                删除/重指向阶段按真实处理的样式数推进（用于非阻塞进度条）。
 
         Returns:
             {"deleted": int, "skipped_protected": int, "repointed": int, "message": str}
         """
+        def _tick(step, total_steps):
+            """把 0..total_steps 归一成 0..100 的百分比推进（内部不直接写满 100）。"""
+            if progress_callback:
+                progress_callback(step, total_steps)
+
         doc = Document(docx_file)
         delete_set = set(delete_style_ids or [])
+        _tick(0, 100)
 
         # 1. 过滤最小保留集样式（内置且必需：Normal / Heading 1-9 / Body Text / List Paragraph / Header / Footer）
         skipped_protected = 0
@@ -183,6 +200,7 @@ class StyleCleaner:
                 if bool(getattr(style, 'builtin', False)) and (style.name or "") in ESSENTIAL_STYLE_NAMES:
                     delete_set.discard(style.style_id)
                     skipped_protected += 1
+        _tick(5, 100)
 
         # 构建删除前的引用链（用于重指向）
         styles_elm = doc.styles.element
@@ -194,18 +212,23 @@ class StyleCleaner:
             n = style_elm.find(qn('w:next'))
             basedon_map[sid] = b.get(qn('w:val')) if b is not None else None
             next_map[sid] = n.get(qn('w:val')) if n is not None else None
+        _tick(10, 100)
 
-        # 2. 物理删除样式元素
+        # 2. 物理删除样式元素（按待删样式数推进 10% -> 60%）
         deleted = 0
-        for style_elm in list(styles_elm.findall(qn('w:style'))):
-            sid = style_elm.get(qn('w:styleId'))
-            if sid in delete_set:
-                styles_elm.remove(style_elm)
-                deleted += 1
+        delete_list = [s for s in list(styles_elm.findall(qn('w:style')))
+                       if s.get(qn('w:styleId')) in delete_set]
+        total_delete = max(len(delete_list), 1)
+        for i, style_elm in enumerate(delete_list):
+            styles_elm.remove(style_elm)
+            deleted += 1
+            _tick(10 + int((i + 1) / total_delete * 50), 100)
 
-        # 3. 重指向 / 清理保留样式中指向已删除样式的引用
+        # 3. 重指向 / 清理保留样式中指向已删除样式的引用（按保留样式数推进 60% -> 95%）
         repointed = 0
-        for style_elm in styles_elm.findall(qn('w:style')):
+        remain_list = list(styles_elm.findall(qn('w:style')))
+        total_remain = max(len(remain_list), 1)
+        for i, style_elm in enumerate(remain_list):
             # basedOn：重指向到被删样式的第一个非删除祖先；无祖先则移除（等价于基于 Normal）
             b = style_elm.find(qn('w:basedOn'))
             if b is not None and b.get(qn('w:val')) in delete_set:
@@ -233,8 +256,11 @@ class StyleCleaner:
             if link is not None and link.get(qn('w:val')) in delete_set:
                 style_elm.remove(link)
                 repointed += 1
+            _tick(60 + int((i + 1) / total_remain * 35), 100)
 
+        _tick(95, 100)
         doc.save(output_file)
+        _tick(100, 100)
 
         message = f"已删除 {deleted} 个样式"
         if skipped_protected:
