@@ -44,7 +44,17 @@ def count_paragraphs(docx_file):
 
 
 def get_template_styles_list(template_file):
-    """获取模板文档中的所有段落样式"""
+    """获取模板文档中所有可选的「目标样式」。
+
+    返回两段拼起来的列表（真实样式在前、格式快照在后）：
+      1) 模板里真实存在的段落样式名
+      2) 模板段落身上出现过的「样式 + 直接格式」组合（格式快照）
+
+    第 2 类是 Word 样式窗格里显示的形如
+      「标题 1 + 四号, 段前: 0 磅, 段后: 0 磅, 行距: 1.5 倍行距」
+    的条目 —— 它不是文档里真正的样式，而是某段落套了 X 样式、又在段落上额外刷了格式。
+    用户把它选为目标时，转换器会先套 X 样式，再把这套直接格式补回段落。
+    """
     try:
         doc = Document(template_file)
         styles = []
@@ -52,7 +62,20 @@ def get_template_styles_list(template_file):
             # 某些 WPS 模板存在缺少名称的样式，不能加入下拉框或排序列表。
             if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
                 styles.append(style.name)
-        return sorted(styles)
+        plain_styles = sorted(styles)
+        plain_set = set(styles)
+
+        # 模板段落上的「样式 + 直接格式」快照（与转换引擎共用同一份提取逻辑）
+        try:
+            from doc_converter import extract_template_format_snapshots
+            snapshots = extract_template_format_snapshots(doc)
+        except Exception as e:
+            logger.warning(f"提取模板格式快照失败: {e}")
+            snapshots = {}
+
+        # 与真实样式同名的不重复添加，避免下拉框里出现两个一模一样的选项
+        snapshot_names = sorted(n for n in snapshots if n not in plain_set)
+        return plain_styles + snapshot_names
     except:
         return ["Normal"]  # 默认返回Normal样式
 

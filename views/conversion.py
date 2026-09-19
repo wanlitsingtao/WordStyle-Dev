@@ -375,7 +375,7 @@ def render_conversion_page():
             template_status_text.text("正在提取所有段落样式...")
             template_styles_list = get_template_styles_list(current_temp_template)
             template_progress_bar.progress(1.0)
-            template_status_text.text(f"[OK] 已提取 {len(template_styles_list)} 种样式！")
+            template_status_text.text(f"[OK] 已提取 {len(template_styles_list)} 个可选目标（样式 + 格式变体）！")
             app_state.set_template_styles(template_styles_list)
             app_state.set_last_template_name(last_template_name)
         else:
@@ -383,9 +383,14 @@ def render_conversion_page():
             template_status_text.text("[OK] 已分析完成（使用缓存）")
 
         template_styles = app_state.get_template_styles() or []
-        with st.expander(f"📋 模板文档信息：{os.path.basename(current_temp_template)} | {len(template_styles)}种样式", expanded=True):
+        with st.expander(f"📋 模板文档信息：{os.path.basename(current_temp_template)} | {len(template_styles)} 个可选目标", expanded=True):
             st.markdown(f"**✅ 已上传:** {os.path.basename(current_temp_template)}")
-            st.markdown(f"**📋 检测到样式:** {len(template_styles)} 种 - {', '.join(template_styles[:10])}{'...' if len(template_styles) > 10 else ''}")
+            st.markdown(f"**📋 检测到可选目标:** {len(template_styles)} 个 - {', '.join(template_styles[:10])}{'...' if len(template_styles) > 10 else ''}")
+            st.caption(
+                "提示：列表中形如「标题 1 + 四号, 段前: 0 磅, 段后: 0 磅, 行距: 1.5 倍行距」的条目，"
+                "是模板段落上的「样式 + 直接格式」组合（Word 样式窗格里也能看到）。"
+                "选中它作为目标时，转换后会与该示范段落格式保持一致。"
+            )
 
         # P1-2：模板样式过多引导提示
         try:

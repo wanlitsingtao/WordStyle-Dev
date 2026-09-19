@@ -18,8 +18,9 @@ try:
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement, parse_xml
     from lxml import etree
-    from docx.shared import Emu
+    from docx.shared import Emu, Pt, RGBColor
     from docx.enum.style import WD_STYLE_TYPE
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.image.exceptions import UnrecognizedImageError
 except ImportError:
     print("错误：未安装 python-docx 库。请运行: pip install python-docx")
@@ -62,6 +63,570 @@ OUTLINE_STYLE_MAP = {
     7: "Heading 7", 8: "Heading 8", 9: "Heading 9",
 }
 
+# ==================== 样式映射：候选解析与宽松比较 ====================
+# [2026-09-18] 默认样式映射支持"一个源样式对应多个候选目标样式"（多对多）。
+# 历史数据是单个字符串，视作"只有一个候选"，取值行为与改造前完全一致。
+STYLE_CANDIDATE_LIMIT = 5   # 每个源样式最多保留的候选数（新的排最前，超出丢最旧）
+
+
+def normalize_style_name(name):
+    """把样式名归一化，仅用于宽松查找，绝不作为结果写回文档。
+
+    规则：忽略大小写、忽略全部空白（半角/全角/制表符/不换行空格），
+    并把中文「标题」与英文「heading」视为同一种写法。
+    例：'Heading 1' / 'heading1' / '标题 1' / '标题1' 归一后均为 'heading1'。
+    """
+    if not name:
+        return ""
+    s = str(name)
+    for ch in ("\u3000", "\xa0", "\t", "\r", "\n"):
+        s = s.replace(ch, " ")
+    s = re.sub(r"\s+", "", s)
+    s = s.lower()
+    s = s.replace("标题", "heading")
+    return s
+
+
+def as_style_candidates(value):
+    """把样式映射的值归一化成"有序候选列表"。
+
+    兼容三种历史形态：
+      None / 空串              -> []                        （未配置）
+      '标题1'                  -> ['标题1']                  （旧数据：单一候选）
+      ['投标标题1', '标题1']     -> 去掉空项后的列表            （新数据：按优先级排序）
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if isinstance(v, str) and v]
+    return []
+
+
+def merge_style_candidates(old_default, updated_mapping, limit=STYLE_CANDIDATE_LIMIT):
+    """把本次配置合入默认候选表（供「⭐ 设为默认」使用）。
+
+    - 本次未涉及的源样式：候选原样保留（并集语义不变，配过就一直记得）
+    - 本次涉及的源样式：选中的目标样式排到最前，去重后最多保留 limit 个
+    - 下划线开头的键（_answer_config / _table_image_style 等）是独立配置块，
+      不参与候选累积，整体覆盖
+    - 归一化后，样式键的值一律是列表，读取侧不必再做类型判断
+    """
+    old_map = old_default if isinstance(old_default, dict) else {}
+    new_map = updated_mapping if isinstance(updated_mapping, dict) else {}
+
+    merged = {}
+    for key, value in old_map.items():
+        if isinstance(key, str) and key.startswith("_"):
+            merged[key] = value          # 配置块 / 历史遗留键（如 _remove_chapter_label）：保持原样
+        else:
+            merged[key] = as_style_candidates(value)
+
+    for key, value in new_map.items():
+        if isinstance(key, str) and key.startswith("_"):
+            merged[key] = value          # 配置块整体覆盖
+            continue
+        if not isinstance(value, str) or not value:
+            continue                     # 空值不参与累积，保留旧候选
+        cands = [c for c in merged.get(key, []) if c != value]
+        cands.insert(0, value)
+        merged[key] = cands[:limit]
+
+    return merged
+
+
+def match_style_in_list(style_name, style_names):
+    """在样式名列表中查找匹配项：先精确，再宽松（规则同 normalize_style_name）。
+
+    返回列表中真实存在的样式名，找不到返回 None。
+    """
+    if not style_name or not isinstance(style_name, str):
+        return None
+    if style_name in style_names:
+        return style_name
+    key = normalize_style_name(style_name)
+    if not key:
+        return None
+    for name in style_names:
+        if normalize_style_name(name) == key:
+            return name
+    return None
+
+
+def resolve_default_target(source_style, file_mapping, default_style_map, template_styles,
+                           fallback, allow_same_name=False):
+    """算出「源样式」在配置界面上应默认选中的模板样式（下拉框回显用）。
+
+    **逐键**判定，与改造前的语义保持一致：
+
+    - 文件级映射里有这个源样式 → **只用它**；它在模板里不存在时直接回落，
+      不去看默认候选 —— 这与转换时"文件级映射优先且不回落"的行为一致，
+      否则会出现"界面显示 A、实际转换用 B"的错位。
+    - 文件级映射里没有这个源样式 → 默认候选（按优先级依次命中）→
+      [可选] 源样式同名 → 兜底样式。
+
+    allow_same_name 用于保留各分支改造前的原有行为（标题分支原本有同名回退，正文分支没有）。
+    """
+    mapping = file_mapping or {}
+    defaults = default_style_map or {}
+
+    if source_style in mapping:
+        hit = match_style_in_list(mapping.get(source_style), template_styles)
+        if hit:
+            return hit
+    else:
+        for cand in as_style_candidates(defaults.get(source_style)):
+            hit = match_style_in_list(cand, template_styles)
+            if hit:
+                return hit
+
+    if allow_same_name:
+        hit = match_style_in_list(source_style, template_styles)
+        if hit:
+            return hit
+    if fallback in template_styles:
+        return fallback
+    return template_styles[0] if template_styles else fallback
+
+
+# ==================== 模板段落「格式快照」（样式 + 直接格式） ====================
+# [2026-09-18] Word 的样式窗格会把「某段落套了 X 样式、又在段落上直接刷了格式」
+# 显示成一个额外条目，形如：
+#     标题 1 + 四号, 段前: 0 磅, 段后: 0 磅, 行距: 1.5 倍行距
+# 这类条目并不是真正的样式（文档 styles.xml 里没有它），而是「样式 + 直接格式」的组合。
+# 这里把模板文档里出现过的这类组合提取成「格式快照」，作为可选的目标样式：
+# 转换时先套快照里的真实样式，再把直接格式补到段落上，使结果与模板示范段落逐项一致。
+
+# 磅值 → 中文字号名（Word 中文界面的习惯叫法）
+CN_FONT_SIZE_NAMES = {
+    42.0: "初号", 36.0: "小初", 26.0: "一号", 24.0: "小一", 22.0: "二号",
+    18.0: "小二", 16.0: "三号", 15.0: "小三", 14.0: "四号", 12.0: "小四",
+    10.5: "五号", 9.0: "小五", 7.5: "六号", 6.5: "小六", 5.5: "七号", 5.0: "八号",
+}
+
+# 内置样式名（英文）→ Word 中文界面显示名。仅用于拼快照显示名，绝不改变真实样式名。
+BUILTIN_STYLE_CN_NAMES = {
+    "Normal": "正文",
+    "Body Text": "正文文本",
+    "Header": "页眉",
+    "Footer": "页脚",
+    "Caption": "题注",
+    "List Paragraph": "列表段落",
+}
+for _cn_i in range(1, 10):
+    BUILTIN_STYLE_CN_NAMES["Heading %d" % _cn_i] = "标题 %d" % _cn_i
+    BUILTIN_STYLE_CN_NAMES["toc %d" % _cn_i] = "目录 %d" % _cn_i
+del _cn_i
+
+# 段落对齐值 → 中文叫法
+ALIGN_CN_NAMES = {
+    "center": "居中", "right": "右对齐", "both": "两端对齐",
+    "distribute": "分散对齐", "left": "左对齐",
+}
+
+
+def cn_font_size_name(pt):
+    """磅值 → 中文字号名（14.0 → 四号）；没有对应中文名时返回 None。"""
+    if pt is None:
+        return None
+    try:
+        return CN_FONT_SIZE_NAMES.get(round(float(pt), 1))
+    except (TypeError, ValueError):
+        return None
+
+
+def display_style_name(name):
+    """样式名 → Word 中文界面显示名（仅用于拼快照显示名，不改真实样式名）。"""
+    if not name:
+        return ""
+    return BUILTIN_STYLE_CN_NAMES.get(name, name)
+
+
+def fmt_number(value):
+    """把 0.0 / 1.5 / 12.0 写成 0 / 1.5 / 12（去掉多余小数位）。"""
+    if value is None:
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(f - round(f)) < 1e-6:
+        return str(int(round(f)))
+    return "%g" % f
+
+
+def extract_paragraph_direct_format(para):
+    """读出段落身上「显式写的」直接格式（不含从样式继承来的）。
+
+    返回 (run_fmt, para_fmt) 两个字典，只收录显式存在的项；
+    键不存在 = 该段没写这一项、跟随样式。
+
+    run_fmt  : size_pt / bold / italic / underline / font_eastasia / font_ascii / color
+    para_fmt : align / space_before_pt / space_after_pt / line_spacing /
+               line_spacing_exact_pt / line_spacing_min_pt /
+               first_line_chars / first_line_pt / left_chars / outline_level
+    """
+    run_fmt = {}
+    para_fmt = {}
+    try:
+        pPr = para._p.pPr
+    except Exception:
+        return run_fmt, para_fmt
+
+    # ---- 字体级：取段落中第一个带 rPr 的 run 作代表 ----
+    rPr = None
+    try:
+        for run in para.runs:
+            if run._r.rPr is not None:
+                rPr = run._r.rPr
+                break
+    except Exception:
+        rPr = None
+
+    if rPr is not None:
+        sz = rPr.find(qn("w:sz"))
+        if sz is not None:
+            try:
+                run_fmt["size_pt"] = int(sz.get(qn("w:val"))) / 2.0
+            except (TypeError, ValueError):
+                pass
+        for tag, key in (("w:b", "bold"), ("w:i", "italic")):
+            el = rPr.find(qn(tag))
+            if el is not None:
+                val = el.get(qn("w:val"))
+                run_fmt[key] = val is None or str(val).lower() not in ("0", "false", "off")
+        el = rPr.find(qn("w:u"))
+        if el is not None:
+            val = el.get(qn("w:val"))
+            if val and str(val).lower() != "none":
+                run_fmt["underline"] = val
+        rf = rPr.find(qn("w:rFonts"))
+        if rf is not None:
+            ea = rf.get(qn("w:eastAsia"))
+            asc = rf.get(qn("w:ascii"))
+            if ea:
+                run_fmt["font_eastasia"] = ea
+            if asc:
+                run_fmt["font_ascii"] = asc
+        col = rPr.find(qn("w:color"))
+        if col is not None:
+            val = col.get(qn("w:val"))
+            if val and str(val).lower() != "auto":
+                run_fmt["color"] = val
+
+    # ---- 段落级 ----
+    if pPr is not None:
+        jc = pPr.find(qn("w:jc"))
+        if jc is not None:
+            val = jc.get(qn("w:val"))
+            if val:
+                para_fmt["align"] = val
+
+        sp = pPr.find(qn("w:spacing"))
+        if sp is not None:
+            for attr, key in (("w:before", "space_before_pt"), ("w:after", "space_after_pt")):
+                raw = sp.get(qn(attr))
+                if raw is not None:
+                    try:
+                        para_fmt[key] = int(raw) / 20.0
+                    except (TypeError, ValueError):
+                        pass
+            raw_line = sp.get(qn("w:line"))
+            if raw_line is not None:
+                try:
+                    line_v = int(raw_line)
+                except (TypeError, ValueError):
+                    line_v = None
+                if line_v is not None:
+                    rule = sp.get(qn("w:lineRule"))
+                    if rule == "exact":
+                        para_fmt["line_spacing_exact_pt"] = line_v / 20.0
+                    elif rule == "atLeast":
+                        para_fmt["line_spacing_min_pt"] = line_v / 20.0
+                    else:
+                        para_fmt["line_spacing"] = line_v / 240.0
+
+        ind = pPr.find(qn("w:ind"))
+        if ind is not None:
+            flc = ind.get(qn("w:firstLineChars"))
+            if flc:
+                try:
+                    para_fmt["first_line_chars"] = int(flc) / 100.0
+                except (TypeError, ValueError):
+                    pass
+            else:
+                fl = ind.get(qn("w:firstLine"))
+                if fl:
+                    try:
+                        para_fmt["first_line_pt"] = int(fl) / 20.0
+                    except (TypeError, ValueError):
+                        pass
+            lc = ind.get(qn("w:leftChars"))
+            if lc:
+                try:
+                    para_fmt["left_chars"] = int(lc) / 100.0
+                except (TypeError, ValueError):
+                    pass
+
+        ol = pPr.find(qn("w:outlineLvl"))
+        if ol is not None:
+            try:
+                para_fmt["outline_level"] = int(ol.get(qn("w:val"))) + 1
+            except (TypeError, ValueError):
+                pass
+
+    return run_fmt, para_fmt
+
+
+def build_snapshot_name(style_name, run_fmt, para_fmt):
+    """按 Word 样式窗格的写法拼出快照显示名。
+
+    形如「标题 1 + 四号, 段前: 0 磅, 段后: 0 磅, 行距: 1.5 倍行距」。
+    段落没有任何直接格式时，返回纯样式显示名（调用方据此跳过，不生成快照）。
+    """
+    parts = []
+
+    # 字体级
+    if run_fmt.get("font_eastasia"):
+        parts.append(run_fmt["font_eastasia"])
+    if "size_pt" in run_fmt:
+        cn = cn_font_size_name(run_fmt["size_pt"])
+        parts.append(cn if cn else "%s 磅" % fmt_number(run_fmt["size_pt"]))
+    if run_fmt.get("bold"):
+        parts.append("加粗")
+    if run_fmt.get("italic"):
+        parts.append("倾斜")
+    if run_fmt.get("color"):
+        parts.append("颜色 %s" % run_fmt["color"])
+
+    # 段落级
+    if para_fmt.get("align"):
+        parts.append(ALIGN_CN_NAMES.get(para_fmt["align"], para_fmt["align"]))
+    if "first_line_chars" in para_fmt:
+        parts.append("首行缩进: %s 字符" % fmt_number(para_fmt["first_line_chars"]))
+    elif "first_line_pt" in para_fmt:
+        parts.append("首行缩进: %s 磅" % fmt_number(para_fmt["first_line_pt"]))
+    if "left_chars" in para_fmt:
+        parts.append("左缩进: %s 字符" % fmt_number(para_fmt["left_chars"]))
+    if "space_before_pt" in para_fmt:
+        parts.append("段前: %s 磅" % fmt_number(para_fmt["space_before_pt"]))
+    if "space_after_pt" in para_fmt:
+        parts.append("段后: %s 磅" % fmt_number(para_fmt["space_after_pt"]))
+    if "line_spacing" in para_fmt:
+        parts.append("行距: %s 倍行距" % fmt_number(para_fmt["line_spacing"]))
+    elif "line_spacing_exact_pt" in para_fmt:
+        parts.append("行距: 固定值 %s 磅" % fmt_number(para_fmt["line_spacing_exact_pt"]))
+    elif "line_spacing_min_pt" in para_fmt:
+        parts.append("行距: 最小值 %s 磅" % fmt_number(para_fmt["line_spacing_min_pt"]))
+    if "outline_level" in para_fmt:
+        parts.append("大纲级别 %s" % fmt_number(para_fmt["outline_level"]))
+
+    base = display_style_name(style_name)
+    if not parts:
+        return base
+    return "%s + %s" % (base, ", ".join(parts))
+
+
+def build_style_id_name_map(doc):
+    """建立 {styleId: 样式名} 与默认段落样式名，供批量取段落样式名使用。
+
+    为什么要自己建表：python-docx 的 `paragraph.style.name` 每次都线性扫描整张
+    样式表（`Styles.get_by_id`），大文档下逐段调用会非常慢（实测 318 个样式 ×
+    1865 段要 3.8 秒）。这里一次性建表，之后 O(1) 查。
+    """
+    id2name = {}
+    default_name = "Normal"
+    try:
+        for style in doc.styles:
+            try:
+                if style.type != WD_STYLE_TYPE.PARAGRAPH:
+                    continue
+                sid = style.element.get(qn("w:styleId"))
+                name = style.name
+                if sid and name:
+                    id2name[sid] = name
+                if style.element.get(qn("w:default")) in ("1", "true", "on"):
+                    default_name = name or default_name
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return id2name, default_name
+
+
+def paragraph_style_name(para, id2name, default_name):
+    """快速取段落样式名（先查预建映射，极少见的情况才回退到 python-docx 原路径）。"""
+    sid = None
+    try:
+        pPr = para._p.pPr
+        if pPr is not None:
+            pStyle = pPr.find(qn("w:pStyle"))
+            if pStyle is not None:
+                sid = pStyle.get(qn("w:val"))
+    except Exception:
+        sid = None
+
+    if sid:
+        name = id2name.get(sid)
+        if name:
+            return name
+    elif not sid:
+        return default_name
+
+    # 兜底：样式定义缺失时，走 python-docx 原路径，保证与旧行为一致
+    try:
+        return para.style.name
+    except Exception:
+        return None
+
+
+def iter_document_paragraphs(doc):
+    """遍历文档里所有段落（正文、表格单元格、文本框内都算）。
+
+    直接扫 body 下全部 w:p 元素：表格里的段落天然包含在内，
+    比逐个单元格递归更快，也不会漏掉文本框里的段落。
+    """
+    from docx.text.paragraph import Paragraph
+    try:
+        body = doc.element.body
+    except Exception:
+        return
+    for p in body.iter(qn("w:p")):
+        try:
+            yield Paragraph(p, doc)
+        except Exception:
+            continue
+
+
+def extract_template_format_snapshots(doc):
+    """扫描模板文档，提取「样式 + 直接格式」快照表。
+
+    返回 {显示名: 快照}。只收录确有直接格式的段落，同一组合只保留第一次出现的那份。
+    """
+    snapshots = {}
+    id2name, default_name = build_style_id_name_map(doc)
+    for para in iter_document_paragraphs(doc):
+        style_name = paragraph_style_name(para, id2name, default_name)
+        if not style_name:
+            continue
+        run_fmt, para_fmt = extract_paragraph_direct_format(para)
+        if not run_fmt and not para_fmt:
+            continue
+        name = build_snapshot_name(style_name, run_fmt, para_fmt)
+        if not name or name in snapshots:
+            continue
+        snapshots[name] = {
+            "name": name,
+            "style": style_name,
+            "run": run_fmt,
+            "para": para_fmt,
+        }
+    return snapshots
+
+
+def _ensure_ppr_child(pPr, tag, successors):
+    """在 pPr 中取出（必要时新建）某个子元素，并保证符合 OOXML 的元素顺序。"""
+    el = pPr.find(qn(tag))
+    if el is not None:
+        return el
+    el = OxmlElement(tag)
+    pPr.insert_element_before(el, *successors)
+    return el
+
+
+def apply_format_snapshot(paragraph, snapshot):
+    """把快照的「样式 + 直接格式」落到段落上。
+
+    调用前请先把 paragraph.style 设为快照里的真实样式名（见 set_paragraph_style）。
+    这里只负责补直接格式，使结果与模板示范段落逐项一致。
+    """
+    if not snapshot:
+        return
+    run_fmt = snapshot.get("run") or {}
+    para_fmt = snapshot.get("para") or {}
+
+    # ---------- 段落级 ----------
+    pf = paragraph.paragraph_format
+
+    if para_fmt.get("align"):
+        _align_map = {
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            "both": WD_ALIGN_PARAGRAPH.JUSTIFY,
+            "distribute": WD_ALIGN_PARAGRAPH.DISTRIBUTE,
+        }
+        _align = _align_map.get(para_fmt["align"])
+        if _align is not None:
+            pf.alignment = _align
+
+    if "space_before_pt" in para_fmt:
+        pf.space_before = Pt(para_fmt["space_before_pt"])
+    if "space_after_pt" in para_fmt:
+        pf.space_after = Pt(para_fmt["space_after_pt"])
+
+    if "line_spacing" in para_fmt:
+        pf.line_spacing = para_fmt["line_spacing"]          # 浮点 = 倍数（lineRule=auto）
+    elif "line_spacing_exact_pt" in para_fmt:
+        pf.line_spacing = Pt(para_fmt["line_spacing_exact_pt"])   # 磅值 = 固定值（lineRule=exact）
+
+    if "first_line_pt" in para_fmt:
+        pf.first_line_indent = Pt(para_fmt["first_line_pt"])
+
+    # 字符单位的缩进、最小行距、大纲级别：python-docx 无对应 API，直接写原生 XML
+    pPr = paragraph._p.get_or_add_pPr()
+
+    if "line_spacing_min_pt" in para_fmt:
+        sp = _ensure_ppr_child(pPr, "w:spacing", (
+            "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap",
+            "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap",
+            "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+        ))
+        sp.set(qn("w:line"), str(int(round(para_fmt["line_spacing_min_pt"] * 20))))
+        sp.set(qn("w:lineRule"), "atLeast")
+
+    if "first_line_chars" in para_fmt or "left_chars" in para_fmt:
+        ind = _ensure_ppr_child(pPr, "w:ind", (
+            "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc",
+            "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl",
+            "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+        ))
+        if "first_line_chars" in para_fmt:
+            ind.set(qn("w:firstLineChars"), str(int(round(para_fmt["first_line_chars"] * 100))))
+        if "left_chars" in para_fmt:
+            ind.set(qn("w:leftChars"), str(int(round(para_fmt["left_chars"] * 100))))
+
+    if "outline_level" in para_fmt:
+        ol = _ensure_ppr_child(pPr, "w:outlineLvl", (
+            "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+        ))
+        ol.set(qn("w:val"), str(int(para_fmt["outline_level"]) - 1))
+
+    # ---------- 字体级 ----------
+    for run in paragraph.runs:
+        try:
+            if "size_pt" in run_fmt:
+                run.font.size = Pt(run_fmt["size_pt"])
+            if "bold" in run_fmt:
+                run.font.bold = bool(run_fmt["bold"])
+            if "italic" in run_fmt:
+                run.font.italic = bool(run_fmt["italic"])
+            if "underline" in run_fmt:
+                run.font.underline = True
+            if run_fmt.get("font_ascii"):
+                run.font.name = run_fmt["font_ascii"]
+            if run_fmt.get("font_eastasia"):
+                rPr = run._r.get_or_add_rPr()
+                rfonts = rPr.find(qn("w:rFonts"))
+                if rfonts is not None:
+                    rfonts.set(qn("w:eastAsia"), run_fmt["font_eastasia"])
+            if run_fmt.get("color"):
+                run.font.color.rgb = RGBColor.from_string(run_fmt["color"])
+        except Exception:
+            continue
+
+
 def build_word_pattern(word):
     """构建单词匹配正则（前后用非字母数字边界限定）"""
     return r'(?<![a-zA-Z0-9])' + re.escape(word) + r'(?![a-zA-Z0-9])'
@@ -93,6 +658,10 @@ class DocumentConverter:
         self.stats = {"para": 0, "table": 0, "heading": 0}
         self.source_styles = set()  # 源文档中使用的样式
         self.template_styles = set()  # 模板文档中的样式
+        # 模板「样式 + 直接格式」快照表（{显示名: 快照}）。
+        # 由 convert_styles / _convert_styles_in_memory 在清空模板内容之前提取并缓存；
+        # None 表示尚未提取，取用一律走 get_format_snapshots()。
+        self.template_format_snapshots = None
         self.list_bullet = LIST_BULLET_SYMBOL  # 列表段落符号，默认为配置常量
         # 语气规则由调用方从持久化用户配置注入。
         self.tone_rules = tone_rules if isinstance(tone_rules, dict) else {}
@@ -836,27 +1405,126 @@ class DocumentConverter:
                         pass
         return False
 
-    def get_target_style(self, original_style_name, template_doc, source_file=""):
-        """获取目标样式名称"""
-        # 使用实例变量中的样式映射，避免使用全局变量
-        style_map = getattr(self, 'current_style_map', STYLE_MAP)
-        target = style_map.get(original_style_name)
-        if target is not None:
-            try:
-                template_doc.styles[target]
-                return target
-            except KeyError:
+    def resolve_template_style(self, style_name, template_doc):
+        """在模板中查找样式：先精确匹配，再宽松匹配。
+
+        宽松规则见 normalize_style_name（忽略空格/大小写、「标题」与「Heading」写法差异）。
+        返回模板中真实存在的样式名，找不到返回 None。
+        仅用于查找，绝不会返回模板里不存在的名字。
+        """
+        if not style_name or not isinstance(style_name, str):
+            return None
+        try:
+            template_doc.styles[style_name]
+            return style_name
+        except KeyError:
+            pass
+        except Exception:
+            pass
+        key = normalize_style_name(style_name)
+        if not key:
+            return None
+        return self._get_template_style_lookup(template_doc).get(key)
+
+    def _get_template_style_lookup(self, template_doc):
+        """模板样式的 {归一化名: 真实名} 查找表（同名时取文档中先定义的那个）。
+
+        按模板文档对象缓存，避免逐段落重复遍历样式表。
+        """
+        if getattr(self, '_tpl_lookup_doc', None) is template_doc:
+            cached = getattr(self, '_tpl_lookup_map', None)
+            if cached is not None:
+                return cached
+        lookup = {}
+        try:
+            for style in template_doc.styles:
                 try:
-                    template_doc.styles[original_style_name]
-                    return original_style_name
-                except KeyError:
-                    return DEFAULT_TARGET
-        else:
+                    name = style.name
+                except Exception:
+                    continue
+                if not name:
+                    continue
+                key = normalize_style_name(name)
+                if key and key not in lookup:
+                    lookup[key] = name
+        except Exception:
+            pass
+        self._tpl_lookup_doc = template_doc
+        self._tpl_lookup_map = lookup
+        return lookup
+
+    def get_format_snapshots(self):
+        """模板「样式 + 直接格式」快照表（{显示名: 快照}）。
+
+        由 convert_styles / _convert_styles_in_memory 在**清空模板内容之前**用原始
+        模板文档提取并缓存。取不到时返回空表，行为退化为改造前的「纯样式」逻辑。
+        """
+        cached = getattr(self, 'template_format_snapshots', None)
+        return cached if cached else {}
+
+    def is_format_snapshot(self, name):
+        """该名字是否是模板里的一个格式快照（而不是真实样式名）。"""
+        return bool(name) and name in self.get_format_snapshots()
+
+    def set_paragraph_style(self, paragraph, style_name, doc=None):
+        """给段落设目标样式；命中格式快照时，改套快照里的真实样式名。
+
+        返回命中的快照（未命中返回 None），调用方据此决定要不要补直接格式。
+        """
+        snap = self.get_format_snapshots().get(style_name)
+        real_style = snap["style"] if snap else style_name
+        try:
+            paragraph.style = real_style
+        except Exception:
             try:
-                template_doc.styles[original_style_name]
-                return original_style_name
-            except KeyError:
-                return DEFAULT_TARGET
+                paragraph.style = (doc or paragraph.part.document).styles[DEFAULT_TARGET]
+            except Exception:
+                pass
+        return snap
+
+    def is_heading_by_mapping(self, original_style_name):
+        """映射是否把该源样式指向了标题样式（Heading 1..9）。
+
+        注意：映射值可能是有序候选列表，**任一候选**指向标题样式即视为标题映射。
+        这里不能直接用 `value in HEADING_STYLES` 判断，否则列表形态永远为 False，
+        本应作为标题处理的段落会被误判成正文（列表段落分支）。
+
+        候选还可能是格式快照名（如「标题 1 + 四号, 段前: 0 磅」），
+        此时要看快照里的**真实样式**是不是标题样式。
+        """
+        style_map = getattr(self, 'current_style_map', STYLE_MAP)
+        snapshots = self.get_format_snapshots()
+        for c in as_style_candidates(style_map.get(original_style_name)):
+            if c in HEADING_STYLES:
+                return True
+            snap = snapshots.get(c)
+            if snap and snap.get("style") in HEADING_STYLES:
+                return True
+        return False
+
+    def get_target_style(self, original_style_name, template_doc, source_file=""):
+        """获取目标样式名称。
+
+        命中顺序：
+          1) 映射候选按优先级依次解析（精确 → 宽松），谁在模板里就用谁；
+             候选也可能是「格式快照」名，此时原样返回（落地时换成真实样式 + 补格式）
+          2) 模板中与源样式同名的样式（精确 → 宽松）
+          3) 兜底样式 DEFAULT_TARGET
+
+        映射值兼容旧数据：字符串视作"只有一个候选"，取值结果与改造前一致。
+        """
+        style_map = getattr(self, 'current_style_map', STYLE_MAP)
+        snapshots = self.get_format_snapshots()
+        for candidate in as_style_candidates(style_map.get(original_style_name)):
+            if candidate in snapshots:
+                return candidate
+            resolved = self.resolve_template_style(candidate, template_doc)
+            if resolved:
+                return resolved
+        resolved = self.resolve_template_style(original_style_name, template_doc)
+        if resolved:
+            return resolved
+        return DEFAULT_TARGET
     
     def get_image_size(self, image_bytes):
         """获取图片尺寸"""
@@ -1131,10 +1799,7 @@ class DocumentConverter:
         try:
             # 创建一个新的段落来容纳特殊对象
             new_para = target_doc.add_paragraph()
-            try:
-                new_para.style = target_style_name
-            except KeyError:
-                new_para.style = target_doc.styles['Normal']
+            self.set_paragraph_style(new_para, target_style_name, target_doc)
             
             # 检查是否包含OLE对象或形状（使用正确的命名空间）
             objects = source_elem.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object')
@@ -1167,10 +1832,7 @@ class DocumentConverter:
             print(f"警告：复制特殊元素时出错: {e}")
             # 出错时返回一个空段落
             new_para = target_doc.add_paragraph()
-            try:
-                new_para.style = target_style_name
-            except KeyError:
-                new_para.style = target_doc.styles['Normal']
+            self.set_paragraph_style(new_para, target_style_name, target_doc)
             return new_para
     
     def extract_and_add_images(self, source_para, new_para, page_width_emu, available_width_emu):
@@ -1207,14 +1869,32 @@ class DocumentConverter:
         # 调试：检查大纲级别
         outline_level = self.get_outline_level(source_para)
         
+        # [2026-09-18] 格式快照（样式 + 直接格式）：命中时先套快照里的真实样式，
+        # 等段落内容填完（各分支的 clear()/add_run() 之后）再统一补直接格式 ——
+        # 因为 clear() 会清掉 run，格式必须在内容就绪之后才补得上。
+        _snap_holder = [None]
+
+        def _set_style(p, style_name):
+            """设样式；命中格式快照则改套真实样式名，并记下待补的格式。"""
+            snap = self.set_paragraph_style(p, style_name, target_doc)
+            if snap:
+                _snap_holder[0] = snap
+            return p
+
+        def _finish(p):
+            """段落收尾：把快照的直接格式补到段落与所有 run 上。"""
+            if _snap_holder[0] and p is not None:
+                try:
+                    apply_format_snapshot(p, _snap_holder[0])
+                except Exception as _e:
+                    print(f"[WARNING] 应用格式快照失败: {_e}")
+            return p
+
         # 检查是否为目录段落，如果是则保持原样式
         if self.is_toc_paragraph(source_para):
             new_para = target_doc.add_paragraph()
             # 保持原始样式或应用目标样式
-            try:
-                new_para.style = target_style_name
-            except KeyError:
-                new_para.style = target_doc.styles['Normal']
+            _set_style(new_para, target_style_name)
             
             # 复制内容但不修改
             for run in source_para.runs:
@@ -1237,7 +1917,7 @@ class DocumentConverter:
                             self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
                         except Exception:
                             pass
-            return new_para
+            return _finish(new_para)
         
         # 检查是否包含 OLE 对象或 VML 形状
         has_ole_objects = source_para._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object')
@@ -1256,10 +1936,7 @@ class DocumentConverter:
                 except KeyError:
                     pass
             new_para = target_doc.add_paragraph()
-            try:
-                new_para.style = ole_para_style
-            except KeyError:
-                new_para.style = target_doc.styles['Normal']
+            _set_style(new_para, ole_para_style)
             
             ole_fallback = False
             for run in source_para.runs:
@@ -1310,7 +1987,7 @@ class DocumentConverter:
                     except:
                         pass
             
-            return new_para
+            return _finish(new_para)
         
         # 普通段落处理（原有逻辑）
         has_image = any(run._element.findall('.//' + qn('a:blip')) for run in source_para.runs)
@@ -1326,15 +2003,34 @@ class DocumentConverter:
                 # 回退：用原始样式名查找
                 mapped_style = style_map.get(src_style_name)
             
-            if mapped_style is not None:
-                # 使用用户配置的映射样式
-                final_style = mapped_style
-            else:
+            # [2026-09-18] 映射值可能是有序候选列表，依次解析（精确 → 宽松），
+            # 首个在模板中存在的候选即结果；都不存在时退回第一个候选，
+            # 保留"从源文档复制该样式 / 新建该样式"的原有兜底行为。
+            _candidates = as_style_candidates(mapped_style)
+            final_style = None
+            for _cand in _candidates:
+                if self.is_format_snapshot(_cand):
+                    final_style = _cand          # 命中格式快照
+                    break
+                _resolved = self.resolve_template_style(_cand, target_doc)
+                if _resolved:
+                    final_style = _resolved
+                    break
+            if final_style is None and _candidates:
+                final_style = _candidates[0]
+            if final_style is None:
                 # 未配置映射，使用大纲级别对应的默认样式
                 final_style = OUTLINE_STYLE_MAP.get(outline_level)
                 if final_style is None:
                     final_style = f"Heading {outline_level}"
             
+            # 命中格式快照时，先把目标换成快照里的真实样式名：
+            # 快照名不是文档里真实存在的样式，直接拿去做存在性检查会被误判成缺样式。
+            _snap = self.get_format_snapshots().get(final_style)
+            if _snap:
+                _snap_holder[0] = _snap
+                final_style = _snap["style"]
+
             # 检查目标文档中是否存在该样式
             try:
                 target_doc.styles[final_style]
@@ -1377,11 +2073,13 @@ class DocumentConverter:
                 # 2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
                 if enable_image_style and image_style_override:
                     # 级别1：复选框选中，使用覆盖样式
+                    # （命中格式快照时跳过存在性检查：快照名不是文档里真实存在的样式）
                     final_style = image_style_override
-                    try:
-                        target_doc.styles[final_style]
-                    except KeyError:
-                        final_style = DEFAULT_TARGET
+                    if not self.is_format_snapshot(final_style):
+                        try:
+                            target_doc.styles[final_style]
+                        except KeyError:
+                            final_style = DEFAULT_TARGET
                 else:
                     # 级别2：保留源样式名
                     try:
@@ -1392,10 +2090,7 @@ class DocumentConverter:
             else:
                 final_style = target_style_name
         
-        try:
-            new_para.style = final_style
-        except Exception:
-            new_para.style = target_doc.styles['Normal']
+        _set_style(new_para, final_style)
         
         is_heading_by_outline = outline_level > 0
         is_heading_by_style = src_style_name in HEADING_STYLES
@@ -1439,21 +2134,25 @@ class DocumentConverter:
             new_para.add_run(cleaned_text)
             # [HIGH_VOLTAGE] 使用统一的图片处理方法
             self.extract_and_add_images(source_para, new_para, page_width_emu, available_width_emu)
-            return new_para
+            return _finish(new_para)
         
         if self.has_numbering(source_para) and enable_list_style:
             if list_method == 'style':
                 # "样式"模式：使用 Step 4 的 list_style 作为列表段落的样式。
                 # 列表段落的样式由 Step 4 的"列表段落"配置区独立控制，不使用 Step 3 的样式映射结果。
                 # 不加符号，不清除自动编号，只复制文本内容（保留原始编号）
-                try:
-                    target_doc.styles[list_style]
-                    new_para.style = list_style
-                except Exception:
+                if self.is_format_snapshot(list_style):
+                    # 列表目标命中了格式快照：快照名不是真实样式，走统一设样式入口
+                    _set_style(new_para, list_style)
+                else:
                     try:
-                        new_para.style = target_doc.styles['Normal']
+                        target_doc.styles[list_style]
+                        new_para.style = list_style
                     except Exception:
-                        pass
+                        try:
+                            new_para.style = target_doc.styles['Normal']
+                        except Exception:
+                            pass
                 # 检查目标样式本身是否已经包含 numPr 定义（如 BN_原文引用列表项目符号
                 # 样式自带 numId=4 的项目符号编号）。如果样式自带编号，则不再从源段落
                 # 拷贝 numPr，以免覆盖样式中定义的项目符号/编号格式。
@@ -1511,7 +2210,7 @@ class DocumentConverter:
                         else:
                             if run.text:
                                 new_para.add_run(run.text)
-                return new_para
+                return _finish(new_para)
             else:
                 # "符号"模式：保留原有逻辑（添加 bullet 符号，清除编号）
                 new_para.add_run(self.list_bullet)
@@ -1540,7 +2239,7 @@ class DocumentConverter:
                                 self.add_picture(pic_run, img_bytes, page_width_emu, available_width_emu, emu_w, emu_h)
                             except Exception:
                                 pass
-                return new_para
+                return _finish(new_para)
         
         # ★ 修复：如果传入了 resolved_numbering_text（虚拟样式映射到非列表样式时，
         # 需要保留原始编号文本），将其作为第一个 run 添加到段落最前面
@@ -1592,7 +2291,7 @@ class DocumentConverter:
                     if run.text:
                         new_para.add_run(run.text)
         
-        return new_para
+        return _finish(new_para)
     
     def _copy_table_grid(self, new_table, source_table):
         """复制源表格的列宽网格（w:tblGrid，纯数值，不含任何样式定义）。"""
@@ -1653,6 +2352,8 @@ class DocumentConverter:
         """
         def _get_table_para_style(src_style_name):
             if enable_table_style and table_style_override:
+                if self.is_format_snapshot(table_style_override):
+                    return table_style_override   # 格式快照：真实样式与直接格式稍后统一落地
                 try:
                     target_doc.styles[table_style_override]
                     return table_style_override
@@ -1671,7 +2372,7 @@ class DocumentConverter:
         for para in source_cell.paragraphs:
             new_para = new_cell.add_paragraph()
             src_para_style = para.style.name
-            new_para.style = _get_table_para_style(src_para_style)
+            self.set_paragraph_style(new_para, _get_table_para_style(src_para_style), target_doc)
             
             if self.has_numbering(para):
                 new_para.add_run(self.list_bullet)
@@ -1738,6 +2439,16 @@ class DocumentConverter:
                         if run.text:
                             new_para.add_run(run.text)
     
+        # [2026-09-18] 表格内的格式快照：单元格段落内容填完后，统一补上直接格式
+        if enable_table_style and table_style_override:
+            _tbl_snap = self.get_format_snapshots().get(table_style_override)
+            if _tbl_snap:
+                for _p in new_cell.paragraphs:
+                    try:
+                        apply_format_snapshot(_p, _tbl_snap)
+                    except Exception:
+                        pass
+
     def copy_table_with_images(self, source_table, target_doc, table_idx, available_width_emu, source_file="",
                                warning_callback=None, table_style_override=None, enable_table_style=False):
         """
@@ -1857,6 +2568,9 @@ class DocumentConverter:
         
         # 获取模板和源文档的样式
         self.template_styles = self.get_template_styles(template_doc)
+        # [2026-09-18] 提取模板的「样式 + 直接格式」快照。
+        # 必须用尚未清空内容的原始模板文档 —— 下面的 new_doc 会被 clear_document_content 清空。
+        self.template_format_snapshots = extract_template_format_snapshots(template_doc)
         
         try:
             source_doc = Document(source_file)
@@ -1898,7 +2612,7 @@ class DocumentConverter:
                     is_heading_by_outline = self.get_outline_level(para) > 0
                     is_heading_by_style = src_style in HEADING_STYLES
                     style_map = getattr(self, 'current_style_map', STYLE_MAP)
-                    is_heading_by_mapped = style_map.get(src_style) in HEADING_STYLES
+                    is_heading_by_mapped = self.is_heading_by_mapping(src_style)
                     is_custom_heading = '标题' in src_style or src_style.startswith('Heading')
                     if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                         # 标题段落：走标题样式映射
@@ -1954,7 +2668,7 @@ class DocumentConverter:
                         resolved_numbering_text=_resolve_num_text
                     )
                     
-                    if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES or style_map.get(src_style) in HEADING_STYLES or '标题' in src_style or src_style.startswith('Heading'):
+                    if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES or is_heading_by_mapped or '标题' in src_style or src_style.startswith('Heading'):
                         self.stats["heading"] += 1
                     self.stats["para"] += 1
                     para_idx += 1
@@ -3748,6 +4462,8 @@ class DocumentConverter:
             # 加载源文档和模板文档
             source_doc = Document(source_file)
             new_doc = Document(template_file)
+            # [2026-09-18] 必须在清空内容之前提取模板的「样式 + 直接格式」快照
+            self.template_format_snapshots = extract_template_format_snapshots(new_doc)
             self.clear_document_content(new_doc)
             
             # 设置样式映射
@@ -3788,7 +4504,7 @@ class DocumentConverter:
                         is_heading_by_outline = self.get_outline_level(para) > 0
                         is_heading_by_style = src_style in HEADING_STYLES
                         style_map = getattr(self, 'current_style_map', STYLE_MAP)
-                        is_heading_by_mapped = style_map.get(src_style) in HEADING_STYLES
+                        is_heading_by_mapped = self.is_heading_by_mapping(src_style)
                         is_custom_heading = '标题' in src_style or src_style.startswith('Heading')
                         if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                             # 标题段落：走标题样式映射

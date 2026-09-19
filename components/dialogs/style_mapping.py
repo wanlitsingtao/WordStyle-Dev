@@ -17,6 +17,14 @@ Step 4: 表格/图片/列表兜底配置（支持双列）+ 清除章节标签
 import streamlit as st
 from data_manager import load_user_data, save_user_data
 
+# [2026-09-18] 默认样式映射改为"一个源样式对应多个候选目标样式"（多对多）：
+# 每次「⭐ 设为默认」把本次选中的目标样式排到该源样式的候选最前，最多保留 5 个。
+# 拉取下拉框默认值时按候选顺序依次命中，换模板也能自动派上用场。
+from doc_converter import (
+    merge_style_candidates,
+    resolve_default_target,
+)
+
 
 def get_answer_mode_options():
     """获取应答句插入模式选项（与桌面版保持一致）"""
@@ -298,10 +306,10 @@ def show_style_mapping_dialog():
             with col1:
                 st.text(source_style)
             with col2:
-                default_val = current_file_mapping.get(source_style, default_style_map.get(source_style,
-                                                       source_style if source_style in template_styles else "Normal"))
-                if default_val not in template_styles:
-                    default_val = source_style if source_style in template_styles else "Normal"
+                default_val = resolve_default_target(
+                    source_style, current_file_mapping, default_style_map,
+                    template_styles, "Normal", allow_same_name=True
+                )
                 style_index = template_styles.index(default_val) if default_val in template_styles else 0
                 selected = st.selectbox(
                     "→", options=template_styles, index=style_index,
@@ -402,9 +410,10 @@ def show_style_mapping_dialog():
                 with cols[0]:
                     st.text(source_style)
                 with cols[1]:
-                    default_val = current_file_mapping.get(source_style, default_style_map.get(source_style, "Body Text"))
-                    if default_val not in template_styles:
-                        default_val = "Body Text"
+                    default_val = resolve_default_target(
+                        source_style, current_file_mapping, default_style_map,
+                        template_styles, "Body Text"
+                    )
                     idx = template_styles.index(default_val) if default_val in template_styles else 0
                     selected = st.selectbox("原文→", options=template_styles, index=idx,
                                             key=f"body_{selected_file.name}_{source_style}",
@@ -412,9 +421,10 @@ def show_style_mapping_dialog():
                     body_mapping[source_style] = selected
                 with cols[2]:
                     akey = f"answer_{source_style}"
-                    a_default = current_file_mapping.get(akey, default_style_map.get(akey, default_val))
-                    if a_default not in template_styles:
-                        a_default = default_val
+                    a_default = resolve_default_target(
+                        akey, current_file_mapping, default_style_map,
+                        template_styles, default_val
+                    )
                     aidx = template_styles.index(a_default) if a_default in template_styles else 0
                     a_selected = st.selectbox("应答→", options=template_styles, index=aidx,
                                               key=f"answer_{selected_file.name}_{source_style}",
@@ -426,10 +436,10 @@ def show_style_mapping_dialog():
                 with cols[0]:
                     st.text(source_style)
                 with cols[1]:
-                    default_val = current_file_mapping.get(source_style, default_style_map.get(source_style,
-                                                           source_style if source_style in template_styles else "Body Text"))
-                    if default_val not in template_styles:
-                        default_val = source_style if source_style in template_styles else "Body Text"
+                    default_val = resolve_default_target(
+                        source_style, current_file_mapping, default_style_map,
+                        template_styles, "Body Text", allow_same_name=True
+                    )
                     idx = template_styles.index(default_val) if default_val in template_styles else 0
                     selected = st.selectbox("→", options=template_styles, index=idx,
                                             key=f"body_{selected_file.name}_{source_style}",
@@ -564,10 +574,11 @@ def show_style_mapping_dialog():
 
     with btn_cols[1]:
         if st.button("⭐ 设为默认", use_container_width=True, key="save_default_mapping_btn"):
-            # ★ 样式映射：合并并集——新配置覆盖同名键，旧配置中不同的键保留
+            # ★ 样式映射：候选累积——同一个源样式每配置一次，本次选中的目标样式就排到该源样式的
+            #   候选最前（最多 5 个）。这样换模板也能按候选顺序依次命中，
+            #   不会再因为"新模板里没有上次那个样式"而直接掉到兜底。
             old_default = st.session_state.file_style_mappings.get('_default_style_map', {})
-            merged_style_map = dict(old_default)        # 先复制旧的
-            merged_style_map.update(updated_mapping)     # 新值覆盖同名键，新键追加
+            merged_style_map = merge_style_candidates(old_default, updated_mapping)
             st.session_state.file_style_mappings['_default_style_map'] = merged_style_map
             
             # 完整配置块：整体替换（非键值映射，不存在并集语义）
