@@ -580,11 +580,15 @@ def render_conversion_page():
                     file_mapping = None
                     file_tbl_img_config = {}
                     file_list_config = {}
+                    # [2026-09-19] 标题编号清理开关（Step 1「清理编号」复选框），
+                    # 与样式映射同为「文件级 → 默认集」两级回退；都没有时空表 = 全部清理。
+                    file_clean_numbering = {}
                     if 'file_style_mappings' in st.session_state and source_file_obj.name in st.session_state.file_style_mappings:
                         file_mapping_data = st.session_state.file_style_mappings[source_file_obj.name]
                         file_mapping = {k: v for k, v in file_mapping_data.items() if not k.startswith('_')}
                         file_tbl_img_config = file_mapping_data.get('_table_image_style', {})
                         file_list_config = file_mapping_data.get('_list_config', {})
+                        file_clean_numbering = file_mapping_data.get('_clean_numbering') or {}
 
                     if not file_mapping:
                         default_style_map = st.session_state.file_style_mappings.get('_default_style_map', {})
@@ -597,6 +601,8 @@ def render_conversion_page():
                         file_tbl_img_config = st.session_state.file_style_mappings.get('_default_tbl_img_config', {})
                     if not file_list_config:
                         file_list_config = st.session_state.file_style_mappings.get('_default_list_config', {})
+                    if not file_clean_numbering:
+                        file_clean_numbering = st.session_state.file_style_mappings.get('_default_clean_numbering', {}) or {}
 
                     warnings_list = []
                     def warning_callback(msg):
@@ -660,6 +666,7 @@ def render_conversion_page():
                         enable_image_style=file_tbl_img_config.get('enable_image_style', st.session_state.get('enable_image_style_config', False)),
                         remove_chapter_label=remove_chapter_label,
                         enable_list_style=_enable_list_style,
+                        clean_numbering_map=file_clean_numbering,
                     )
 
                     if success:

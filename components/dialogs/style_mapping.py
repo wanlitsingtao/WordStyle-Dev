@@ -14,6 +14,7 @@ Step 4: 表格/图片/列表兜底配置（支持双列）+ 清除章节标签
 - 支持恢复默认
 - 双列模式联动（与桌面版一致）
 """
+import re
 import streamlit as st
 from data_manager import load_user_data, save_user_data
 
@@ -231,6 +232,13 @@ def show_style_mapping_dialog():
             if s in (f'Heading {i}', f'heading {i}', f'Heading{i}', f'标题 {i}', f'标题{i}'):
                 is_heading = True
                 break
+        # [2026-09-21] 兼容自定义标题样式名，如 BN_标题0 / MyHeading1 / 章节标题1。
+        # 规则：样式名里出现"标题"且后跟数字，或以 Heading/heading 开头。
+        if not is_heading:
+            if '标题' in s and re.search(r'标题\s*\d', s):
+                is_heading = True
+            elif s.lower().startswith('heading'):
+                is_heading = True
         if is_heading:
             heading_styles.append(s)
         else:
@@ -297,12 +305,65 @@ def show_style_mapping_dialog():
     st.markdown("---")
     st.markdown("**1. 标题样式映射（统一，不分原文/应答句）**")
 
+    # [2026-09-19] 每个源标题样式配一个「清理编号」开关：
+    #   勾选（默认）= 转换时照原逻辑清理该标题的手动编号、自动编号与"第X章/第X节"字样；
+    #   不勾选     = 该样式对应的标题编号完全保留（手动编号、"第X章"、自动编号都不动）。
+    # 状态按「文件 + 源样式」存进 widget key，随「✅ 确定」写入文件级 _clean_numbering，
+    # 随「⭐ 设为默认」写入 _default_clean_numbering；两者都没有时默认全勾。
+    fname = selected_file.name
+    saved_clean = current_file_mapping.get('_clean_numbering')
+    if not isinstance(saved_clean, dict):
+        saved_clean = st.session_state.file_style_mappings.get('_default_clean_numbering', {})
+        if not isinstance(saved_clean, dict):
+            saved_clean = {}
+
+    def _clean_key(src):
+        """「清理编号」复选框的 session_state 键（按文件隔离）。"""
+        return f"clean_numbering_{fname}_{src}"
+
     heading_mapping = {}
+    clean_numbering = {}
     if not heading_styles:
         st.caption("（当前源文档未检测到标题样式）")
     else:
+        st.caption("「清理编号」勾选后，转换时会去掉该标题的手动编号及\"第X章/第X节\"字样；"
+                   "取消勾选则该标题的编号原样保留。默认全部勾选。")
+
+        # [2026-09-19] 全选开关：放在所有「清理编号」复选框的最上面一个「全选」复选框，
+        #   勾选 = 下面所有复选框都选中；取消 = 都取消。用 on_change 回调统一改写
+        #   session_state（控件创建前/后都能正确落到每个复选框，不依赖控件创建顺序）。
+
+        def _apply_select_all():
+            val = st.session_state.get(_select_all_key(), True)
+            for src in heading_styles:
+                st.session_state[_clean_key(src)] = val
+
+        def _select_all_key():
+            return f"clean_numbering_all_{fname}"
+
+        # 全选复选框的初始值 = 当前所有复选框是否已全部勾选（首渲默认全勾 → 选中）
+        _all_vals = [st.session_state.get(_clean_key(src), bool(saved_clean.get(src, True)))
+                     for src in heading_styles]
+        _all_on = all(_all_vals)
+        if _select_all_key() not in st.session_state:
+            st.session_state[_select_all_key()] = _all_on
+        st.checkbox(
+            "全选", key=_select_all_key(), value=_all_on,
+            on_change=_apply_select_all,
+            help="勾选：全部标题样式都清理编号；取消：全部标题样式都不清理编号",
+        )
+
+        _h1, _h2, _h3 = st.columns([3, 3, 2])
+        _h1.markdown("**源样式**")
+        _h2.markdown("**目标样式**")
+        _h3.markdown("**清理编号**")
+
         for source_style in heading_styles:
-            col1, col2 = st.columns([1, 1])
+            ck = _clean_key(source_style)
+            if ck not in st.session_state:
+                # 首次渲染：文件级配置优先，其次默认集，最后默认勾选
+                st.session_state[ck] = bool(saved_clean.get(source_style, True))
+            col1, col2, col3 = st.columns([3, 3, 2])
             with col1:
                 st.text(source_style)
             with col2:
@@ -316,6 +377,11 @@ def show_style_mapping_dialog():
                     key=f"heading_{selected_file.name}_{source_style}", label_visibility="collapsed"
                 )
                 heading_mapping[source_style] = selected
+            with col3:
+                clean_numbering[source_style] = st.checkbox(
+                    "清理编号", key=ck, label_visibility="collapsed",
+                    help="勾选：清理该标题的编号；取消：编号原样保留"
+                )
 
     # ====================================================================
     # Step 2: 应答句配置（完全参照桌面版）
@@ -529,6 +595,10 @@ def show_style_mapping_dialog():
     # 5. 保存清除章节标签
     updated_mapping['_remove_chapter_label'] = remove_chapter_label
 
+    # 6. 保存标题编号清理开关（Step 1 每个源标题样式的「清理编号」复选框）
+    #    未列出的源样式（如老配置、Step 1 之外的标题样式）转换时按"清理"处理，行为不变。
+    updated_mapping['_clean_numbering'] = dict(clean_numbering)
+
     # 更新 session_state
     st.session_state.file_style_mappings[selected_file.name] = updated_mapping
 
@@ -563,6 +633,11 @@ def show_style_mapping_dialog():
     with btn_cols[0]:
         if st.button("🔄 恢复默认", use_container_width=True, key="reset_mapping_btn"):
             st.session_state.file_style_mappings[selected_file.name] = {}
+            # 「清理编号」的控件状态也要一起复位，否则 Streamlit 会沿用上一次的值，
+            # 界面显示与刚落盘的配置对不上。清掉后按"文件级 → 默认集 → 全勾"重新初始化。
+            for _src in heading_styles:
+                st.session_state.pop(_clean_key(_src), None)
+            st.session_state.pop(f"clean_numbering_all_{fname}", None)
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")
@@ -587,6 +662,8 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings['_default_list_config'] = dict(list_config_new)
             # ★ 修复：显式保存 remove_chapter_label 默认值（与桌面版 default_config.json 一致）
             st.session_state.file_style_mappings['_default_remove_chapter_label'] = remove_chapter_label
+            # ★ 标题编号清理开关也进默认集（新文件默认全勾，这里记住用户改过的那些）
+            st.session_state.file_style_mappings['_default_clean_numbering'] = dict(clean_numbering)
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")

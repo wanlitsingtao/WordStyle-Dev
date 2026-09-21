@@ -104,6 +104,25 @@ def as_style_candidates(value):
     return []
 
 
+def _as_bool(value, default=False):
+    """把配置里的勾选值宽容地转成布尔。
+
+    前端可能传来 bool（JSON 原生）或 'true'/'false'/'1'/'0'（字符串化后的旧数据）。
+    认不出来的值一律返回 default，避免"看不懂的值"被误判成不勾选而改变行为。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on", "是", "勾选"):
+            return True
+        if v in ("false", "0", "no", "off", "否", "不勾选"):
+            return False
+    return default
+
+
 def merge_style_candidates(old_default, updated_mapping, limit=STYLE_CANDIDATE_LIMIT):
     """把本次配置合入默认候选表（供「⭐ 设为默认」使用）。
 
@@ -663,6 +682,10 @@ class DocumentConverter:
         # None 表示尚未提取，取用一律走 get_format_snapshots()。
         self.template_format_snapshots = None
         self.list_bullet = LIST_BULLET_SYMBOL  # 列表段落符号，默认为配置常量
+        # [2026-09-19] 标题编号清理开关：{源样式名: 是否清理编号}。
+        # 由样式映射对话框 Step 1 的「清理编号」复选框写入，经 convert_styles 传入；
+        # 空表 = 全部按勾选处理（向后兼容）。
+        self.current_clean_numbering_map = {}
         # 语气规则由调用方从持久化用户配置注入。
         self.tone_rules = tone_rules if isinstance(tone_rules, dict) else {}
         self._build_tone_regexes()
@@ -1101,13 +1124,119 @@ class DocumentConverter:
         cleaned = re.sub(r'^[\s\.．、，,）\)]+', '', text)
         return cleaned
 
+    # ==================== 样式链继承编号（2026-09-19 修复） ====================
+    # 背景：不少投标文档把多级编号挂在 Heading 样式定义上（段落本身没有直接 numPr）。
+    # 只查段落直接 numPr 会把这些标题误判成"无编号"，导致「清理编号」不勾选时
+    # 编号照样丢失（用户感知就是"开关没起效"）。
+
+    @staticmethod
+    def _read_numPr_vals(numPr):
+        """读 numPr 节点的 (numId, ilvl)；ilvl 缺省按 Word 语义取 '0'。无 numId 返回 (None, None)。"""
+        if numPr is None:
+            return None, None
+        nid_e = numPr.find(qn('w:numId'))
+        ilv_e = numPr.find(qn('w:ilvl'))
+        nid = nid_e.get(qn('w:val')) if nid_e is not None else None
+        ilv = ilv_e.get(qn('w:val')) if ilv_e is not None else '0'
+        return nid, ilv
+
+    @staticmethod
+    def _is_hidden_empty_anchor(element):
+        """判断段落是否是"隐藏 + 空文本"的目录锚点（Word 生成目录时插入的 _Toc 宿主）。
+
+        这类段落有 w:vanish 隐藏、无正文文本、且往往带 _Toc 书签，只用于目录跳转。
+        它们不应参与标题编号计数 —— 否则会污染同一 numId 序列的序号（真实标题
+        编号被抬高，出现"信息中心子系统 → 3.9"这类错位）。
+        """
+        pPr = element.find(qn('w:pPr'))
+        if pPr is None:
+            return False
+        rPr = pPr.find(qn('w:rPr'))
+        if rPr is None or rPr.find(qn('w:vanish')) is None:
+            return False
+        # 空文本：无任何 w:t 文字内容
+        for t in element.findall('.//' + qn('w:t')):
+            if t.text and t.text.strip():
+                return False
+        return True
+
+    def _effective_numPr(self, paragraph):
+        """段落的生效编号 (numId, ilvl)：先段落直接 numPr，再沿样式链（含 basedOn）向上找。
+
+        numId='0' 在 Word 语义里是"显式关闭编号"：直接 numPr 出现 numId=0 时不再看样式。
+        无编号返回 None。样式查询按 style_id 缓存（一篇文档里样式高度重复）。
+        """
+        pPr = paragraph._element.find(qn('w:pPr'))
+        if pPr is not None:
+            nid, ilv = self._read_numPr_vals(pPr.find(qn('w:numPr')))
+            if nid is not None:
+                return (nid, ilv) if nid != '0' else None
+
+        cache = getattr(self, '_style_numpr_cache', None)
+        if cache is None:
+            cache = self._style_numpr_cache = {}
+        style = None
+        try:
+            style = paragraph.style
+        except Exception:
+            style = None
+        seen = set()
+        while style is not None:
+            sid = getattr(style, 'style_id', None)
+            if sid is None or sid in seen:
+                break
+            seen.add(sid)
+            if sid in cache:
+                hit = cache[sid]
+            else:
+                sPr = style.element.find(qn('w:pPr'))
+                nid, ilv = self._read_numPr_vals(sPr.find(qn('w:numPr')) if sPr is not None else None)
+                if nid is None:
+                    hit = None            # 该样式未定义编号 -> 继续向 basedOn 找
+                elif nid == '0':
+                    hit = ('off',)        # 显式关闭 -> 停止向上
+                else:
+                    hit = (nid, ilv)
+                cache[sid] = hit
+            if hit is None:
+                style = style.base_style
+                continue
+            return None if hit == ('off',) else hit
+        return None
+
+    def _effective_numpr_table(self, para):
+        """整篇文档每段落的生效编号表 [(element, (numId, ilvl) | None), ...]，按文档实例缓存。
+
+        供编号计数使用：把"样式继承编号"的段落也算进序号，结果才与 Word 实际显示一致。
+
+        缓存键用 doc._element（底层 lxml 元素，稳定唯一）而不是 doc 包装对象 ——
+        python-docx 的 ``part.document`` 每次访问都返回新包装对象，用 ``is`` 比较会恒 False，
+        导致缓存失效、每次重建 2828 段落表，放大到 lxml 深层迭代时触发不稳定崩溃。
+        """
+        doc = para.part.document
+        cached = getattr(self, '_eff_numpr_cache', None)
+        if cached is not None and cached[0] is doc._element:
+            return cached[1]
+        table = []
+        for p in doc.paragraphs:
+            try:
+                # 隐藏空锚点（目录 _Toc 宿主）不参与编号计数，直接记为 None
+                if self._is_hidden_empty_anchor(p._element):
+                    table.append((p._element, None))
+                    continue
+                table.append((p._element, self._effective_numPr(p)))
+            except Exception:
+                table.append((p._element, None))
+        self._eff_numpr_cache = (doc._element, table)
+        return table
+
     def _resolve_auto_numbering_text(self, para):
         """解析段落自动编号的文本表示（如numId=4, ilvl=0 → "第二节"）
-        
+
         通过访问源文档的 numbering part（内存中的 XML），查找 numId 对应的
         abstractNumId，再找到对应级别的 lvlText 和 numFmt，结合编号实例的
         当前值，生成完整的编号文本。如果无法解析，返回空字符串。
-        
+
         改进：支持多级编号占位符（%1、%2、%3...）的完整解析。
         例如 lvlText='%1.%2.%3' 时，会分别解析级别0、1、2的编号值，
         正确替换所有占位符，避免出现未替换的"%2"等残留字符。
@@ -1118,24 +1247,50 @@ class DocumentConverter:
         numPr = pPr.find(qn('w:numPr'))
         if numPr is None:
             return ''
-        
         numId_elem = numPr.find(qn('w:numId'))
         ilvl_elem = numPr.find(qn('w:ilvl'))
         if numId_elem is None or ilvl_elem is None:
             return ''
-        
         numId = numId_elem.get(qn('w:val'))
         ilvl = ilvl_elem.get(qn('w:val'))
         if numId is None or ilvl is None:
             return ''
-        
+        return self._resolve_numbering_text(para, numId, ilvl, effective=False)
+
+    def _resolve_auto_numbering_text_effective(self, para):
+        """[2026-09-19] 编号解析的"生效"版：段落直接 numPr 优先，其次样式链继承的 numPr。
+
+        供「清理编号」不勾选分支使用 —— 编号挂在样式上也要能解析出来原样保留。
+        """
+        eff = self._effective_numPr(para)
+        if eff is None:
+            return ''
+        return self._resolve_numbering_text(para, eff[0], eff[1], effective=True)
+
+    def _resolve_numbering_text(self, para, numId, ilvl, effective=False):
+        """编号解析核心：按 (numId, ilvl) 查 numbering 定义并生成等效文字（含尾部空格）。
+
+        effective=True 时，同序号计数把"样式继承编号"的段落也算进去（贴近 Word 实际序号）。
+        """
+        if numId is None or ilvl is None:
+            return ''
         try:
             doc = para.part.document
             numbering_part = doc.part.numbering_part
             root = numbering_part._element
             
             nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-            
+
+            # [2026-09-19 修复] 构建 numId -> abstractNumId 映射。
+            # Word 对「关联段落样式(pStyle)」的多级编号，跨 numId 共享计数器
+            # （同一 abstractNum 被多个 numId 引用时，序号连续而非各自从 start 重计）。
+            num_to_abs = {}
+            for _num in root.findall('.//w:num', nsmap):
+                _nid = _num.get(qn('w:numId'))
+                _abs = _num.find('w:abstractNumId', nsmap)
+                if _nid is not None and _abs is not None:
+                    num_to_abs[_nid] = _abs.get(qn('w:val'))
+
             abstractNumId = None
             for num in root.findall('.//w:num', nsmap):
                 nid = num.get(qn('w:numId'))
@@ -1192,7 +1347,11 @@ class DocumentConverter:
                 
                 if lvl_def is None:
                     lvl_def = current_lvl
-                
+
+                # [2026-09-19 修复] 该层级是否关联段落样式(pStyle)：
+                # 关联时 Word 按 abstractNum 跨 numId 共享计数器（见 num_to_abs 说明）。
+                lvl_def_has_pstyle = lvl_def.find('w:pStyle', nsmap) is not None
+
                 start_elem = lvl_def.find('w:start', nsmap)
                 start_val = 1
                 if start_elem is not None:
@@ -1210,20 +1369,76 @@ class DocumentConverter:
                         break
                 
                 count = 0
-                for p in doc.paragraphs:
-                    if p._element is para._element:
-                        break
-                    ppPr = p._element.find(qn('w:pPr'))
-                    if ppPr is not None:
+                if effective:
+                    # [2026-09-19] 编号来源含样式链时，计数也要把"样式继承编号"的段落
+                    # 算进去，序号才与 Word 实际显示一致（用整篇生效编号表，避免重复解析）。
+                    for _el, _pair in self._effective_numpr_table(para):
+                        if _el is para._element:
+                            break
+                        if _pair is None:
+                            continue
+                        _pnid = _pair[0]
+                        if lvl_def_has_pstyle:
+                            if num_to_abs.get(_pnid) != abstractNumId:
+                                continue
+                        elif _pnid != numId:
+                            continue
+                        try:
+                            _plvl = int(_pair[1])
+                        except (TypeError, ValueError):
+                            continue
+                        # 更高层级出现 -> 当前层级计数归零（多级编号按父级重置）
+                        if _plvl < level:
+                            count = 0
+                        elif _plvl == level:
+                            count += 1
+                else:
+                    for p in doc.paragraphs:
+                        if p._element is para._element:
+                            break
+                        # 隐藏空锚点不参与编号计数
+                        if self._is_hidden_empty_anchor(p._element):
+                            continue
+                        ppPr = p._element.find(qn('w:pPr'))
+                        if ppPr is None:
+                            continue
                         pnumPr = ppPr.find(qn('w:numPr'))
-                        if pnumPr is not None:
-                            pnid = pnumPr.find(qn('w:numId'))
-                            if pnid is not None and pnid.get(qn('w:val')) == numId:
-                                pilvl = pnumPr.find(qn('w:ilvl'))
-                                if pilvl is not None and pilvl.get(qn('w:val')) == level_str:
-                                    count += 1
+                        if pnumPr is None:
+                            continue
+                        pnid = pnumPr.find(qn('w:numId'))
+                        if pnid is None:
+                            continue
+                        _pnid = pnid.get(qn('w:val'))
+                        if lvl_def_has_pstyle:
+                            if num_to_abs.get(_pnid) != abstractNumId:
+                                continue
+                        elif _pnid != numId:
+                            continue
+                        pilvl = pnumPr.find(qn('w:ilvl'))
+                        if pilvl is None:
+                            continue
+                        try:
+                            _plvl = int(pilvl.get(qn('w:val')))
+                        except (TypeError, ValueError):
+                            continue
+                        # 更高层级出现 -> 当前层级计数归零（多级编号按父级重置）
+                        if _plvl < level:
+                            count = 0
+                        elif _plvl == level:
+                            count += 1
                 
-                current_num = start_val + count
+                # [2026-09-19 修复] 区分「自己的层级」与「上级层级」的计数语义：
+                # - 自己层级（level_str == ilvl）：当前段落是同级第 count+1 个，
+                #   值 = start_val + count。
+                # - 上级层级（level_str != ilvl）：取「前面最近一个该级段落的编号」，
+                #   值 = start_val + count - 1（即前面同级的个数，start=1 时恰为 count）。
+                #   原代码统一用 start_val + count，导致上级编号多算 1
+                #   （如 Heading2 的 %1 会把最新 Heading1 的序号 +1 错位）。
+                if level_str == str(ilvl):
+                    current_num = start_val + count
+                else:
+                    # [FIX] 上级层级：count=0（前面无该级段落）时回退 start_val，避免 0.1 错位
+                    current_num = start_val + max(0, count - 1)
                 
                 numFmt_elem = lvl_def.find('w:numFmt', nsmap)
                 if numFmt_elem is None:
@@ -1290,7 +1505,17 @@ class DocumentConverter:
             numbering_part = doc.part.numbering_part
             root = numbering_part._element
             nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-            
+
+            # [2026-09-19 修复] 构建 numId -> abstractNumId 映射。
+            # Word 对「关联段落样式(pStyle)」的多级编号，跨 numId 共享计数器
+            # （同一 abstractNum 被多个 numId 引用时，序号连续而非各自从 start 重计）。
+            num_to_abs = {}
+            for _num in root.findall('.//w:num', nsmap):
+                _nid = _num.get(qn('w:numId'))
+                _abs = _num.find('w:abstractNumId', nsmap)
+                if _nid is not None and _abs is not None:
+                    num_to_abs[_nid] = _abs.get(qn('w:val'))
+
             abstractNumId = None
             for num in root.findall('.//w:num', nsmap):
                 nid = num.get(qn('w:numId'))
@@ -1373,6 +1598,158 @@ class DocumentConverter:
                 if val is not None:
                     new_child = etree.SubElement(new_numPr, qn(child_tag))
                     new_child.set(qn('w:val'), val)
+
+    # ==================== 编号原样保留（复制 numPr + 合并 numbering 定义） ====================
+
+    def _create_numbering_part(self, target_doc):
+        """为目标文档创建一个空的 numbering part（模板没有 numbering.xml 时）。
+
+        python-docx 1.2.0 的 NumberingPart.new() 未实现，这里手动构造并挂载。
+        """
+        from docx.opc.packuri import PackURI
+        from docx.opc.constants import CONTENT_TYPE as CT, RELATIONSHIP_TYPE as RT
+        from docx.parts.numbering import NumberingPart
+        from docx.oxml.ns import nsdecls
+
+        element = parse_xml('<w:numbering %s/>' % nsdecls('w'))
+        partname = PackURI('/word/numbering.xml')
+        numbering_part = NumberingPart(partname, CT.WML_NUMBERING, element, target_doc.part.package)
+        target_doc.part.relate_to(numbering_part, RT.NUMBERING)
+        return numbering_part
+
+    def _collect_used_numids(self, source_doc):
+        """收集源文档用到的 numId（段落直接 numPr + 样式继承 numPr），排除 numId=0。"""
+        used = set()
+        for p in source_doc.paragraphs:
+            pPr = p._element.find(qn('w:pPr'))
+            if pPr is None:
+                continue
+            numPr = pPr.find(qn('w:numPr'))
+            if numPr is None:
+                continue
+            numId = numPr.find(qn('w:numId'))
+            if numId is not None:
+                val = numId.get(qn('w:val'))
+                if val and val != '0':
+                    used.add(val)
+        for style in source_doc.styles:
+            for numPr in style._element.findall('.//' + qn('w:numPr')):
+                numId = numPr.find(qn('w:numId'))
+                if numId is not None:
+                    val = numId.get(qn('w:val'))
+                    if val and val != '0':
+                        used.add(val)
+        return used
+
+    def _merge_numbering_to_target(self, source_doc, target_doc):
+        """把源文档的编号定义（num + abstractNum）合并到目标文档 numbering.xml。
+
+        不清理编号模式下，直接复制 numPr 到目标段落、让 Word 自己渲染编号，
+        编号值天然与源文档一致，从而避免"重新推算编号"导致的累加/跨序列串号。
+        返回 {源numId: 目标numId} 重映射表（冲突时才重映射，否则保持原 numId）。
+        """
+        try:
+            src_np = source_doc.part.numbering_part
+        except Exception:
+            return {}
+
+        try:
+            tgt_np = target_doc.part.numbering_part
+        except Exception:
+            tgt_np = self._create_numbering_part(target_doc)
+
+        src_root = src_np.element
+        tgt_root = tgt_np.element
+
+        used_numids = self._collect_used_numids(source_doc)
+        if not used_numids:
+            return {}
+
+        # 源 numId -> abstractNumId
+        src_num_abs = {}
+        for num in src_root.findall(qn('w:num')):
+            nid = num.get(qn('w:numId'))
+            absref = num.find(qn('w:abstractNumId'))
+            if nid is not None and absref is not None:
+                src_num_abs[nid] = absref.get(qn('w:val'))
+
+        # 目标 numId -> abstractNumId
+        tgt_num_abs = {}
+        for num in tgt_root.findall(qn('w:num')):
+            nid = num.get(qn('w:numId'))
+            absref = num.find(qn('w:abstractNumId'))
+            if nid is not None and absref is not None:
+                tgt_num_abs[nid] = absref.get(qn('w:val'))
+
+        # 目标已有 abstractNumId
+        tgt_abs_ids = set()
+        for an in tgt_root.findall(qn('w:abstractNum')):
+            aid = an.get(qn('w:abstractNumId'))
+            if aid is not None:
+                tgt_abs_ids.add(aid)
+
+        def _int_id(x):
+            try:
+                return int(x)
+            except (TypeError, ValueError):
+                return -1
+        next_numid = max([_int_id(x) for x in tgt_num_abs.keys()] + [0]) + 1
+
+        numid_map = {}
+        for src_numid in sorted(used_numids):
+            src_abs_id = src_num_abs.get(src_numid)
+            if src_abs_id is None:
+                continue
+
+            # 1) 目标缺少该 abstractNum 时，先复制 abstractNum 定义
+            if src_abs_id not in tgt_abs_ids:
+                for an in src_root.findall(qn('w:abstractNum')):
+                    if an.get(qn('w:abstractNumId')) == src_abs_id:
+                        tgt_root.append(deepcopy(an))
+                        tgt_abs_ids.add(src_abs_id)
+                        break
+
+            # 2) 确定目标 numId：定义一致复用，冲突则分配新 numId
+            if src_numid in tgt_num_abs:
+                if tgt_num_abs[src_numid] == src_abs_id:
+                    new_numid = src_numid
+                else:
+                    new_numid = str(next_numid)
+                    next_numid += 1
+            else:
+                new_numid = src_numid
+
+            # 3) 新建或重映射时，复制 num 定义
+            if new_numid not in tgt_num_abs:
+                for num in src_root.findall(qn('w:num')):
+                    if num.get(qn('w:numId')) == src_numid:
+                        new_num = deepcopy(num)
+                        new_num.set(qn('w:numId'), new_numid)
+                        tgt_root.append(new_num)
+                        tgt_num_abs[new_numid] = src_abs_id
+                        break
+
+            numid_map[src_numid] = new_numid
+
+        return numid_map
+
+    def _set_numpr_values(self, target_para, numId, ilvl):
+        """显式写入 numPr（numId + ilvl）到目标段落，numPr 紧跟 pStyle 之后。"""
+        new_pPr = target_para._element.get_or_add_pPr()
+        old_numPr = new_pPr.find(qn('w:numPr'))
+        if old_numPr is not None:
+            new_pPr.remove(old_numPr)
+        new_numPr = etree.SubElement(new_pPr, qn('w:numPr'))
+        numId_elem = etree.SubElement(new_numPr, qn('w:numId'))
+        numId_elem.set(qn('w:val'), str(numId))
+        ilvl_elem = etree.SubElement(new_numPr, qn('w:ilvl'))
+        ilvl_elem.set(qn('w:val'), str(ilvl))
+        # 调整顺序：Word 要求 numPr 紧跟 pStyle
+        pStyle = new_pPr.find(qn('w:pStyle'))
+        if pStyle is not None:
+            pStyle.addnext(new_numPr)
+        else:
+            new_pPr.insert(0, new_numPr)
 
     @staticmethod
     def _elem_has_numbering(elem, doc=None):
@@ -1501,6 +1878,25 @@ class DocumentConverter:
             if snap and snap.get("style") in HEADING_STYLES:
                 return True
         return False
+
+    # ==================== 标题编号清理开关（2026-09-19） ====================
+    # 样式映射对话框 Step 1「标题样式映射」为每个源标题样式配了一个「清理编号」复选框。
+    # 勾选（默认）= 照历史逻辑清理编号；不勾选 = 该源样式对应的标题段落完全不动编号。
+    # 未配置（老数据 / 未在 Step 1 列出的样式）= 视为勾选，行为与改造前逐字一致。
+    def should_clean_heading_numbering(self, virtual_style_name, src_style_name):
+        """该标题段落是否执行编号清理。
+
+        查找顺序与标题样式映射一致：先虚拟大纲样式名（`[大纲级别 N]`），
+        再真实样式名；两者都没有配置时按勾选处理（向后兼容）。
+        取值容忍 bool / 'true' / 1 等形态（JSON 与旧数据兜底）。
+        """
+        flags = getattr(self, 'current_clean_numbering_map', None)
+        if not isinstance(flags, dict) or not flags:
+            return True
+        for key in (virtual_style_name, src_style_name):
+            if key and key in flags:
+                return _as_bool(flags.get(key), default=True)
+        return True
 
     def get_target_style(self, original_style_name, template_doc, source_file=""):
         """获取目标样式名称。
@@ -1867,7 +2263,9 @@ class DocumentConverter:
         :param enable_list_style: 是否启用列表样式处理
         """
         # 调试：检查大纲级别
-        outline_level = self.get_outline_level(source_para)
+        # [修复] 必须传入 doc，才能读取「样式定义里的 outlineLvl」——
+        # 否则 BN_标题0/BN_标题1 这类依赖样式大纲级别的自定义标题会被误判为普通段落。
+        outline_level = self.get_outline_level(source_para, source_para.part.document)
         
         # [2026-09-18] 格式快照（样式 + 直接格式）：命中时先套快照里的真实样式，
         # 等段落内容填完（各分支的 clear()/add_run() 之后）再统一补直接格式 ——
@@ -2104,7 +2502,28 @@ class DocumentConverter:
             full_text = source_para.text
             has_auto_numbering = self.has_numbering(source_para)
             
-            if remove_chapter_label:
+            # [2026-09-19] 「清理编号」开关：样式映射对话框 Step 1 里每个源标题样式后面
+            # 都有一个复选框（默认全勾）。不勾选时，该源样式对应的标题段落编号完全不动。
+            # 查找键与标题样式映射一致：先虚拟大纲样式名，再真实样式名。
+            _virtual_style_name = f'[大纲级别 {outline_level}]' if outline_level > 0 else None
+            _clean_numbering = self.should_clean_heading_numbering(_virtual_style_name, src_style_name)
+
+            if not _clean_numbering:
+                # 未勾选「清理编号」：源标题编号以纯文本保留，并使用目标样式。
+                # 1) 手动编号：编号已在 para.text 里，直接保留；
+                # 2) 自动编号：把编号解析成纯文本（而非复制 numPr / 合并 numbering 定义），
+                #    拼到标题文本前 —— 编号是纯文本、样式是目标样式，且不引入源 numbering
+                #    定义（避免 Word 打开时因 numId 缺失而衍生出新样式）；
+                # 3) 空标题 / 隐藏目录锚点段落不处理编号。
+                cleaned_text = full_text
+                if cleaned_text.strip() and not self._is_hidden_empty_anchor(source_para._element):
+                    # 确保目标段落不使用自动编号（避免目标样式自带 numPr 造成双编号）
+                    self.remove_auto_numbering(new_para)
+                    _num_text = self._resolve_auto_numbering_text_effective(source_para)
+                    if _num_text and _num_text.strip():
+                        # 自动编号文本不包含在 para.text 里，需拼接到标题文本前
+                        cleaned_text = _num_text + cleaned_text
+            elif remove_chapter_label:
                 # 勾选"清除第X章/第X节"：
                 # 1. 移除自动编号（章节标记可能来自自动编号，如numId=17→"第二节"）
                 self.remove_auto_numbering(new_para)
@@ -2527,7 +2946,8 @@ class DocumentConverter:
                        image_style_override=None, enable_image_style=False,
                        remove_chapter_label=False,
                        list_method='bullet', list_style='Body Text',
-                       enable_list_style=True):
+                       enable_list_style=True,
+                       clean_numbering_map=None):
         """
         样式转换主函数
         :param source_file: 源文件路径
@@ -2545,6 +2965,9 @@ class DocumentConverter:
         :param list_method: 列表段落处理方式 'bullet'（符号）或 'style'（样式）
         :param list_style: 列表段落兜底样式名（当list_method='style'时使用）
         :param enable_list_style: 是否启用列表样式处理
+        :param clean_numbering_map: 标题编号清理开关 {源样式名: 是否清理编号}，
+                                    来自样式映射对话框 Step 1 的「清理编号」复选框；
+                                    缺省（None/空表）= 全部清理，与历史行为一致
         :return: (success, actual_file, message)
         """
         # 使用局部样式映射副本，避免修改全局变量
@@ -2554,7 +2977,12 @@ class DocumentConverter:
         
         # 将样式映射存储为实例变量，供get_target_style使用
         self.current_style_map = style_map
-        
+        self.current_clean_numbering_map = clean_numbering_map if isinstance(clean_numbering_map, dict) else {}
+        # [2026-09-19] 编号相关缓存按文档实例键控，换文档必须清掉，
+        # 防止上一份文档的样式/编号定义串味。
+        self._style_numpr_cache = {}
+        self._eff_numpr_cache = None
+
         # 设置列表符号
         if list_bullet is not None:
             self.list_bullet = list_bullet
@@ -2609,7 +3037,7 @@ class DocumentConverter:
                     # "1 列表段落" → "BN_原文引用列表项目符号" 映射才能生效。
                     # ★ 修复：标题段落（有outlineLevel或样式为Heading）即使有编号也不视为列表段落，
                     # 应走正常的标题样式映射路径。
-                    is_heading_by_outline = self.get_outline_level(para) > 0
+                    is_heading_by_outline = self.get_outline_level(para, source_doc) > 0
                     is_heading_by_style = src_style in HEADING_STYLES
                     style_map = getattr(self, 'current_style_map', STYLE_MAP)
                     is_heading_by_mapped = self.is_heading_by_mapping(src_style)
@@ -2668,7 +3096,7 @@ class DocumentConverter:
                         resolved_numbering_text=_resolve_num_text
                     )
                     
-                    if self.get_outline_level(para) > 0 or src_style in HEADING_STYLES or is_heading_by_mapped or '标题' in src_style or src_style.startswith('Heading'):
+                    if self.get_outline_level(para, source_doc) > 0 or src_style in HEADING_STYLES or is_heading_by_mapped or '标题' in src_style or src_style.startswith('Heading'):
                         self.stats["heading"] += 1
                     self.stats["para"] += 1
                     para_idx += 1
@@ -4195,7 +4623,8 @@ class DocumentConverter:
                      list_method='bullet', list_style='Body Text',
                      list_answer_method='bullet', list_answer_style='Body Text',
                      list_answer_bullet='● ',
-                     enable_list_style=True):
+                     enable_list_style=True,
+                     clean_numbering_map=None):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
         [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
@@ -4218,6 +4647,7 @@ class DocumentConverter:
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param clean_numbering_map: 标题编号清理开关 {源样式名: 是否清理编号}（可选）
         :return: (success, actual_output_file, message)
         """
         import time
@@ -4242,7 +4672,8 @@ class DocumentConverter:
                                               remove_chapter_label=remove_chapter_label,
                                               list_method=list_method,
                                               list_style=list_style,
-                                              enable_list_style=enable_list_style)
+                                              enable_list_style=enable_list_style,
+                                              clean_numbering_map=clean_numbering_map)
         if doc is None:
             elapsed = time.time() - start_time
             return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
@@ -4444,15 +4875,21 @@ class DocumentConverter:
                                    image_style_override=None, enable_image_style=False,
                                    remove_chapter_label=False,
                                    list_method='bullet', list_style='Body Text',
-                                   enable_list_style=True):
+                                   enable_list_style=True,
+                                   clean_numbering_map=None):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
         :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
         :param enable_table_style: 是否启用表格样式覆盖
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
+        :param clean_numbering_map: 标题编号清理开关 {源样式名: 是否清理编号}（可选）
         :return: Document对象或None（失败时）
         """
+        # [2026-09-19] 编号相关缓存按文档实例键控，换文档必须清掉，
+        # 防止上一份文档的样式/编号定义串味。
+        self._style_numpr_cache = {}
+        self._eff_numpr_cache = None
         try:
             from docx import Document
             from copy import deepcopy
@@ -4471,6 +4908,7 @@ class DocumentConverter:
             if custom_style_map:
                 style_map.update(custom_style_map)
             self.current_style_map = style_map
+            self.current_clean_numbering_map = clean_numbering_map if isinstance(clean_numbering_map, dict) else {}
             
             # 使用缓存的样式列表或重新分析
             if source_styles_cache:
@@ -4501,7 +4939,7 @@ class DocumentConverter:
                         # "1 列表段落" → "BN_原文引用列表项目符号" 映射才能生效。
                         # ★ 修复：标题段落（有outlineLevel或样式为Heading）即使有编号也不视为列表段落，
                         # 应走正常的标题样式映射路径。
-                        is_heading_by_outline = self.get_outline_level(para) > 0
+                        is_heading_by_outline = self.get_outline_level(para, source_doc) > 0
                         is_heading_by_style = src_style in HEADING_STYLES
                         style_map = getattr(self, 'current_style_map', STYLE_MAP)
                         is_heading_by_mapped = self.is_heading_by_mapping(src_style)
