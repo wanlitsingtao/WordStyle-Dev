@@ -216,9 +216,14 @@ def render_conversion_page():
         accept_multiple_files=True,
         key="source_uploader",
     )
-    if source_files:
-        app_state.set_current_source_files(list(source_files))
+    # 无条件同步：清空文件时也要同步清空 current_source_files，避免解析结果残留
+    app_state.set_current_source_files(list(source_files) if source_files else [])
     current_source_files = app_state.get_current_source_files()
+
+    if not current_source_files:
+        # 已清空全部上传文件，清理源文档解析缓存，确保内存不残留旧文件的解析内容
+        for key in ('file_styles_map', 'file_paragraph_counts', 'source_styles'):
+            app_state.delete_key(key)
 
     if current_source_files:
         need_analyze = False
@@ -356,6 +361,11 @@ def render_conversion_page():
             f.write(template_file.getbuffer())
         app_state.set_current_temp_template(temp_template)
         app_state.set_last_template_name(template_file.name)
+    else:
+        # 模板文件被清空：清理模板路径状态与解析缓存，避免残留旧解析信息
+        for key in ('template_styles', 'current_temp_template', 'last_template_name'):
+            app_state.delete_key(key)
+        logger.info("[REFRESH] 模板文件已清空，清理模板解析缓存")
 
     current_temp_template = app_state.get_current_temp_template()
     last_template_name = app_state.get_last_template_name()
