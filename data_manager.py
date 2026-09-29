@@ -10,7 +10,9 @@
 """
 import os
 import sys
+import json
 import logging
+import hashlib
 import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -50,83 +52,14 @@ if DATA_SOURCE == "local":
         cleanup_expired_tasks as _cleanup_expired_tasks,
     )
     
-    def _get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
-        """
-        通过设备指纹获取或创建用户（Local模式 - 基于JSON文件）
-        
-        Args:
-            device_fingerprint: 设备指纹（32位MD5）
-            user_agent: User-Agent字符串（可选，用于日志）
-        
-        Returns:
-            用户数据字典
-        """
-        import json
-        import hashlib
-        from pathlib import Path
-        from config import FREE_PARAGRAPHS_DAILY
-        from datetime import datetime
-        
-        # 使用user_mapping.json存储设备指纹映射
-        mapping_file = Path(__file__).parent / "user_mapping.json"
-        
-        try:
-            # 读取映射文件
-            user_mapping = {}
-            if mapping_file.exists():
-                with open(mapping_file, 'r', encoding='utf-8') as f:
-                    user_mapping = json.load(f)
-            
-            # 查找设备指纹对应的用户ID
-            if device_fingerprint in user_mapping:
-                user_id = user_mapping[device_fingerprint]
-                
-                # 加载用户数据
-                user_data = _load_user(user_id)
-                if user_data:
-                    # 更新last_login
-                    user_data['last_login'] = datetime.now().isoformat()
-                    _save_user(user_data, user_id)
-                    return user_data
-            
-            # 用户不存在，创建新用户
-            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
-            
-            # [FIX] 从 config 表动态读取免费额度，不再使用硬编码
-            try:
-                config = get_config('free_paragraphs_daily')
-                initial_paragraphs = int(config) if config else 10000
-            except Exception as e:
-                logger.warning(f"读取免费额度配置失败，使用默认值10000: {e}")
-                initial_paragraphs = 10000
-            
-            # 准备用户数据
-            new_user_data = {
-                'user_id': user_id,
-                'balance': 0.0,
-                'paragraphs_remaining': initial_paragraphs,
-                'total_paragraphs_used': 0,
-                'total_converted': 0,
-                'is_active': True,
-                'created_at': datetime.now().isoformat(),
-                'last_login': datetime.now().isoformat(),
-                'conversion_history': [],
-                'style_mappings': {},
-            }
-            
-            # 保存用户数据
-            _register_user(user_id, new_user_data)
-            
-            # 保存设备指纹映射
-            user_mapping[device_fingerprint] = user_id
-            with open(mapping_file, 'w', encoding='utf-8') as f:
-                json.dump(user_mapping, f, ensure_ascii=False, indent=2)
-            
-            return new_user_data
-            
-        except Exception as e:
-            raise Exception(f"Local模式创建设备指纹用户失败: {e}")
-    
+    # [FIX 2026-09-29] 原先这里定义了一个 local 私有的 `_get_or_create_user_by_device`，
+    # 但模块级的 `get_or_create_user_by_device` 的 local 分支却调用这个同名私有名 ——
+    # 而该私有名只在「顶层 DATA_SOURCE == 'local'」时才定义，两者作用域错位，
+    # 云端未加载到 secrets 回退 local 时必然抛
+    #    NameError: name '_get_or_create_user_by_device' is not defined
+    # 现把 local 实现内联进模块级 `get_or_create_user_by_device`（与 bid-buddy-dev 修复方式一致），
+    # 此处不再重复定义，避免两套逻辑长期漂移。
+
     print(f"[OK] 数据访问层初始化：本地模式 (SQLite + JSON)")
 
 # ==================== Supabase 模式导入 ====================
@@ -1098,10 +1031,12 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
         return _get_or_create_user_by_device(device_fingerprint, user_agent)
     elif DATA_SOURCE == "supabase":
         # Supabase模式直接使用已有的实现
+        # [FIX 2026-09-29] 移除函数内冗余的 `from datetime import datetime` / `import hashlib`：
+        # 函数内的任何导入都会把该名字变成**函数局部名**，导致后面的 local 分支
+        # 走到 `hashlib.md5(...)` 时抛 UnboundLocalError（局部变量未绑定）。
+        # 二者在模块顶部已导入，直接用即可。
         from backend.app.core.database import SessionLocal
-        from datetime import datetime
-        import hashlib
-        
+
         # 从 system_config 动态读取免费段落数
         try:
             _config_val = get_config('free_paragraphs_daily')
@@ -1172,8 +1107,63 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
         finally:
             db.close()
     elif DATA_SOURCE == "local":
-        # Local模式使用JSON文件存储
-        return _get_or_create_user_by_device(device_fingerprint, user_agent)
+        # [FIX 2026-09-29] Local 模式原先调用 `_get_or_create_user_by_device`，
+        # 而该函数只在「顶层 DATA_SOURCE == 'local'」时才会被定义；云端未加载到
+        # secrets 时会自动回退 local，此时该私有名并不存在 → NameError。
+        # 现改为在本函数内直接内联实现，无外部依赖。
+        mapping_file = Path(__file__).parent / "user_mapping.json"
+
+        # 从 system_config 动态读取免费额度，读不到时回退到默认值
+        try:
+            _config_val = get_config('free_paragraphs_daily')
+            _free_paras = int(_config_val) if _config_val else 10000
+        except Exception as e:
+            logger.warning(f"读取免费额度配置失败，使用默认值10000: {e}")
+            _free_paras = 10000
+
+        try:
+            # 1) 读取设备指纹 → 用户ID 的映射文件
+            user_mapping = {}
+            if mapping_file.exists():
+                with open(mapping_file, 'r', encoding='utf-8') as f:
+                    user_mapping = json.load(f)
+
+            # 2) 命中已有映射 → 加载并刷新 last_login
+            if device_fingerprint in user_mapping:
+                _uid = user_mapping[device_fingerprint]
+                _user = _load_user(_uid)
+                if _user:
+                    _user['last_login'] = datetime.now().isoformat()
+                    _save_user(_user, _uid)
+                    return _user
+
+            # 3) 未命中 → 创建新用户
+            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+
+            new_user_data = {
+                'user_id': user_id,
+                'balance': 0.0,
+                'paragraphs_remaining': _free_paras,
+                'total_paragraphs_used': 0,
+                'total_converted': 0,
+                'is_active': True,
+                'created_at': datetime.now().isoformat(),
+                'last_login': datetime.now().isoformat(),
+                'conversion_history': [],
+                'style_mappings': {},
+            }
+
+            _register_user(user_id, new_user_data)
+
+            # 4) 回写设备指纹映射
+            user_mapping[device_fingerprint] = user_id
+            with open(mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(user_mapping, f, ensure_ascii=False, indent=2)
+
+            return new_user_data
+
+        except Exception as e:
+            raise Exception(f"Local模式创建设备指纹用户失败: {e}")
     else:
         raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
 
