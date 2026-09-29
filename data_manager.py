@@ -1154,6 +1154,9 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
             }
 
             _register_user(user_id, new_user_data)
+            # [FIX 2026-09-29] 补回 `_save_user`：仅 _register_user 只登记映射，
+            # 用户数据不会落盘到 data/user_data.json，导致下次读取取不到该用户。
+            _save_user(new_user_data, user_id)
 
             # 4) 回写设备指纹映射
             user_mapping[device_fingerprint] = user_id
