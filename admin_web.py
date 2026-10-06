@@ -35,6 +35,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(__file__))
 
 # 使用统一数据访问层（支持双模式）
+import data_manager  # 供下方诊断面板读取 DATA_SOURCE_INIT_ERROR
 from data_manager import (
     get_all_tasks,
     get_task_stats,
@@ -58,6 +59,17 @@ with st.sidebar.expander("诊断信息"):
     st.write(f"**ACTUAL_DATA_SOURCE**: {ACTUAL_DATA_SOURCE}")
     st.write(f"**get_data_source()**: {get_data_source()}")
     if DATABASE_URL:
+        masked_url = DATABASE_URL.replace(DATABASE_URL.split("//")[-1].split("@")[0], "***")
+        st.write(f"**DATABASE_URL**: {masked_url}")
+    # [2026-10-06] 配置与实际不一致时，把 data_manager 初始化失败原因直接展示出来，
+    # 避免"CONFIG=supabase 但 ACTUAL=local"时只能猜。
+    if ACTUAL_DATA_SOURCE != CONFIG_DATA_SOURCE:
+        init_error = getattr(data_manager, "DATA_SOURCE_INIT_ERROR", "")
+        if init_error:
+            st.error("**初始化异常（导致回退到 local）**")
+            st.code(init_error, language="text")
+        else:
+            st.warning("ACTUAL_DATA_SOURCE 与 CONFIG_DATA_SOURCE 不一致，但未捕获到初始化异常。")
         # 显示部分URL用于调试（隐藏密码）
         parts = DATABASE_URL.split('@')
         if len(parts) == 2:

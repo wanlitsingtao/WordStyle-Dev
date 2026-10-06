@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(__file__))
 from config import DATA_SOURCE, DATABASE_URL, BACKEND_URL, USER_DATA_FILE, TASKS_DB_FILE
 
+# 初始化异常记录（Supabase/API 分支回退到 local 时写入，供诊断面板展示）
+DATA_SOURCE_INIT_ERROR = ""
+
 # ==================== 本地模式导入 ====================
 if DATA_SOURCE == "local":
     from user_manager import (
@@ -575,6 +578,8 @@ elif DATA_SOURCE == "supabase":
         print(f" {error_msg}")
         print(f"   详细错误: {traceback.format_exc()}")
         print("   回退到本地模式")
+        # [2026-10-06] 把初始化失败原因暴露给诊断面板，方便云端排查
+        DATA_SOURCE_INIT_ERROR = traceback.format_exc()
         DATA_SOURCE = "local"
         from user_manager import (
             load_user_data as _load_user,
@@ -595,6 +600,8 @@ elif DATA_SOURCE == "supabase":
         print(f"[ERROR] {error_msg}")
         print(f"   详细错误: {traceback.format_exc()}")
         print("   回退到本地模式")
+        # [2026-10-06] 暴露初始化失败原因给诊断面板
+        DATA_SOURCE_INIT_ERROR = traceback.format_exc()
         DATA_SOURCE = "local"
         from user_manager import (
             load_user_data as _load_user,
@@ -1323,8 +1330,21 @@ def _get_supabase_engine():
         # 保留 Supabase pooler 连接串（6543）；不要把 pooler 主机改成直连主机。
         # [PERF] connect_timeout 快速失败 + pool_recycle 对齐 pgbouncer 空闲回收，
         # 避免 Supabase 不可达/僵尸连接导致首页无限期挂起。
+        # [FIX 2026-10-06] Supabase 要求 SSL；DATABASE_URL 未写 sslmode 时自动补全，
+        # 否则连接会被拒绝/握手失败，data_manager 初始化时回退到 local。
+        url = DATABASE_URL
+        # [FIX 2026-10-06] SQLAlchemy 2.x 对 postgresql:// 默认走 psycopg3，
+        # 环境里只装 psycopg2-binary 时会 ModuleNotFoundError: No module named 'psycopg'
+        # → 固定驱动为 psycopg2（与 backend/app/core/database.py 同一修法）。
+        if url and url.startswith("postgresql://"):
+            url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+        if url and url.startswith("postgresql") \
+                and ("supabase" in url.lower() or "pooler.supabase" in url.lower()) \
+                and "sslmode=" not in url.lower():
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}sslmode=require"
         _supabase_engine = create_engine(
-            DATABASE_URL,
+            url,
             connect_args={"connect_timeout": 10},
             pool_pre_ping=True,
             pool_recycle=300,
