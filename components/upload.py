@@ -57,24 +57,11 @@ def get_template_styles_list(template_file):
     """
     try:
         doc = Document(template_file)
-        styles = []
-        for style in doc.styles:
-            # 某些 WPS 模板存在缺少名称的样式，不能加入下拉框或排序列表。
-            if style.type == WD_STYLE_TYPE.PARAGRAPH and style.name:
-                styles.append(style.name)
-        plain_styles = sorted(styles)
-        plain_set = set(styles)
-
-        # 模板段落上的「样式 + 直接格式」快照（与转换引擎共用同一份提取逻辑）
-        try:
-            from doc_converter import extract_template_format_snapshots
-            snapshots = extract_template_format_snapshots(doc)
-        except Exception as e:
-            logger.warning(f"提取模板格式快照失败: {e}")
-            snapshots = {}
-
-        # 与真实样式同名的不重复添加，避免下拉框里出现两个一模一样的选项
-        snapshot_names = sorted(n for n in snapshots if n not in plain_set)
+        # [2026-10-06] 与「工具箱 → 模板样式精简」共用同一份模板样式识别实现
+        # （common.collect_template_style_names），两处清单必须完全一致：
+        # 真实段落样式（按名排序）+ 「样式 + 直接格式」快照（剔除与真实样式重名的）。
+        from common import collect_template_style_names
+        plain_styles, snapshot_names = collect_template_style_names(doc)
         return plain_styles + snapshot_names
     except:
         return ["Normal"]  # 默认返回Normal样式

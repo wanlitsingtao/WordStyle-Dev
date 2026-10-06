@@ -39,22 +39,44 @@ class StyleCleaner:
 
     @staticmethod
     def _iter_all_paragraphs(doc):
-        """遍历主体 + 表格 + 文本框段落。"""
-        paragraphs = list(doc.paragraphs)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    paragraphs.extend(cell.paragraphs)
-        try:
-            from docx.text.paragraph import Paragraph
-            body_parent = doc.paragraphs[0]._parent if doc.paragraphs else None
-            if body_parent is not None:
-                for txbx in doc.element.body.iter(qn('w:txbxContent')):
-                    for p in txbx.findall(qn('w:p')):
-                        paragraphs.append(Paragraph(p, body_parent))
-        except Exception:
-            pass
-        return paragraphs
+        """遍历主体 + 表格 + 文本框段落。
+
+        [2026-10-06] 与样式映射共用 doc_converter.iter_document_paragraphs 的同一实现，
+        确保「样式使用次数统计」与「样式/直接格式快照提取」看到的是同一批段落——
+        各自另写一份遍历会漏扫，导致在用的样式被误判成「未使用」而遭删除。
+        """
+        from doc_converter import iter_document_paragraphs
+        return list(iter_document_paragraphs(doc))
+
+    @staticmethod
+    def _count_snapshot_usage(doc, paragraphs):
+        """统计每个「样式 + 直接格式」快照在文档里出现的段落数。
+
+        [2026-10-06] 快照的「使用情况」要与内置样式同一套写法
+        （`使用（快照）` / `未使用（快照）`），因此不能恒为 0 —— 恒 0 会让
+        清单里的快照永远显示「未使用」，而它们明明是从文档段落上提取出来的。
+
+        这里复用 doc_converter 里生成快照名的同一批底层工具
+        （build_style_id_name_map / paragraph_style_name /
+        extract_paragraph_direct_format / build_snapshot_name），
+        保证算出来的名字与快照清单里的显示名逐字一致，不会出现对不上的孤儿计数。
+        """
+        from doc_converter import (build_style_id_name_map, build_snapshot_name,
+                                   extract_paragraph_direct_format,
+                                   paragraph_style_name)
+        counts = {}
+        id2name, default_name = build_style_id_name_map(doc)
+        for para in paragraphs:
+            style_name = paragraph_style_name(para, id2name, default_name)
+            if not style_name:
+                continue
+            run_fmt, para_fmt = extract_paragraph_direct_format(para)
+            if not run_fmt and not para_fmt:
+                continue
+            name = build_snapshot_name(style_name, run_fmt, para_fmt)
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
 
     @staticmethod
     def analyze_styles(docx_file, progress_callback=None) -> Dict:
@@ -66,41 +88,65 @@ class StyleCleaner:
 
         Returns:
             {
-                "total": int,
+                "total": int,           # 真实段落样式数（不含快照条目）
+                "total_with_snapshot": int,  # 清单条目总数 = 真实样式 + 快照
+                                        # （样式精简模块的「总样式」用它；转换页沿用 total）
                 "builtin_count": int,   # Word 内置样式数
                 "custom_count": int,    # 自定义样式数
                 "used": int,
                 "unused": int,
                 "cleanable": int,       # 可清理（未使用、非必需保留、且无 basedOn/next 依赖）
+                "snapshot_count": int,  # 「样式 + 直接格式」快照条目数（与样式映射清单一致）
                 "styles": [
                     {
                         "style_id": str,
                         "name": str,
                         "type": str,          # "段落"/"字符"/"表格"/"列表"
-                        "usage_count": int,
+                        "usage_count": int,   # 真实样式=被引用的段落数；快照=该组合出现的段落数
                         "builtin": bool,      # 是否内置样式
                         "protected": bool,    # 是否属于最小保留集（默认不可删）
+                        "snapshot": bool,     # True = 快照条目（非真实样式，不可删）
+                        "base_style": str,    # 仅快照条目：该快照引用的真实样式名
                     }, ...
                 ],
             }
         """
         doc = Document(docx_file)
 
-        # 统计使用次数（按 style_id）
+        # [2026-10-06] 样式识别与「样式映射」共用同一份实现（common.collect_template_style_names）：
+        #   real_names     = 模板真实段落样式名（按名排序，顺序与映射下拉框一致）
+        #   snapshot_names = 模板段落上「样式 + 直接格式」快照名（如「标题 1 + 四号」）
+        from common import collect_template_style_names
+        from doc_converter import extract_template_format_snapshots
+        real_names, snapshot_names = collect_template_style_names(doc)
+        snapshots = extract_template_format_snapshots(doc)
+
+        # 统计使用次数（按 style_id）—— 段落扫描与快照提取共用同一实现
         usage = {}
         paragraphs = StyleCleaner._iter_all_paragraphs(doc)
         total_paras = len(paragraphs)
         for i, para in enumerate(paragraphs):
             if progress_callback:
                 progress_callback(i + 1, max(total_paras, 1))
-            if para.style is not None:
-                sid = para.style.style_id
+            try:
+                para_style = para.style
+            except Exception:
+                para_style = None
+            if para_style is not None:
+                sid = para_style.style_id
                 if sid:
                     usage[sid] = usage.get(sid, 0) + 1
 
+        # 快照条目的「使用次数」= 该「样式 + 直接格式」组合在文档里出现的段落数
+        # （与真实样式统计共用同一批段落，算出的名字与快照清单逐字一致）
+        snap_usage = (StyleCleaner._count_snapshot_usage(doc, paragraphs)
+                      if snapshot_names else {})
+
         # 与文档转换模块一致：仅统计模板中的"段落样式且有名"
         # （见 doc_converter.get_template_styles / components.upload.get_template_styles_list）。
-        styles = []
+        # 真实段落样式：按共用识别的排序输出（与样式映射下拉框同序）；
+        # 同名多条样式按样式表原顺序逐个保留，不丢条目。
+        by_name = {}
         for style in doc.styles:
             try:
                 stype = style.type
@@ -111,36 +157,74 @@ class StyleCleaner:
             name = style.name or ""
             if not name:
                 continue
-            sid = style.style_id
-            type_label = STYLE_TYPE_LABELS.get(stype, "未知")
-            is_builtin = bool(getattr(style, 'builtin', False))
-            count = usage.get(sid, 0)
-            # 最小保留集：仅内置且属于必需样式的才默认保护，
-            # 其余内置样式若未使用也可清理。
-            protected = is_builtin and (name in ESSENTIAL_STYLE_NAMES)
+            by_name.setdefault(name, []).append(style)
+
+        styles = []
+        for name in real_names:
+            for style in by_name.get(name, []):
+                try:
+                    stype = style.type
+                except Exception:
+                    stype = None
+                type_label = STYLE_TYPE_LABELS.get(stype, "未知")
+                sid = style.style_id
+                is_builtin = bool(getattr(style, 'builtin', False))
+                count = usage.get(sid, 0)
+                # 最小保留集：仅内置且属于必需样式的才默认保护，
+                # 其余内置样式若未使用也可清理。
+                protected = is_builtin and (name in ESSENTIAL_STYLE_NAMES)
+                styles.append({
+                    "style_id": sid,
+                    "name": name,
+                    "type": type_label,
+                    "usage_count": count,
+                    "builtin": is_builtin,
+                    "protected": protected,
+                    "snapshot": False,
+                })
+
+        # 「样式 + 直接格式」快照条目：与样式映射下拉框一致，统一排在真实样式之后。
+        # 快照不是文档里的真实样式（没有 styleId），无法删除，
+        # 固定 protected=True 只作提示，不参与「删除全部未使用」。
+        # usage_count 用真实出现段落数 —— 界面按内置样式那一套显示「使用（快照）」。
+        for sname in snapshot_names:
+            snap = snapshots.get(sname) or {}
             styles.append({
-                "style_id": sid,
-                "name": name,
-                "type": type_label,
-                "usage_count": count,
-                "builtin": is_builtin,
-                "protected": protected,
+                "style_id": "__snapshot__::" + sname,
+                "name": sname,
+                "type": STYLE_TYPE_LABELS.get(WD_STYLE_TYPE.PARAGRAPH, "未知"),
+                "usage_count": snap_usage.get(sname, 0),
+                "builtin": False,
+                "protected": True,
+                "snapshot": True,
+                "base_style": snap.get("style") or "",
             })
 
-        used_count = sum(1 for s in styles if s["usage_count"] > 0)
-        builtin_count = sum(1 for s in styles if s["builtin"])
+        # 指标口径（[2026-10-06] 定稿）：
+        #   · total / builtin_count / custom_count / used / unused / cleanable
+        #     —— **只统计真实样式**，这样既有调用方（components.upload.count_template_styles
+        #        的「模板样式数」、转换页引导提示）语义不变；
+        #   · snapshot_count —— 快照条目单列；
+        #   · total_with_snapshot —— 清单条目总数（真实样式 + 快照），
+        #     样式精简模块的「总样式」卡片用它，这样「总样式 = 自定义 + 内置 + 快照」
+        #     与界面上那份清单的长度一致。
+        real_styles = [s for s in styles if not s.get("snapshot")]
+        used_count = sum(1 for s in real_styles if s["usage_count"] > 0)
+        builtin_count = sum(1 for s in real_styles if s["builtin"])
         # 可清理数：未使用且非最小保留集的样式数（依赖引用会被自动重指向）
         cleanable = sum(
-            1 for s in styles
+            1 for s in real_styles
             if s["usage_count"] == 0 and not s["protected"]
         )
         return {
-            "total": len(styles),
+            "total": len(real_styles),
+            "total_with_snapshot": len(styles),
             "builtin_count": builtin_count,
-            "custom_count": len(styles) - builtin_count,
+            "custom_count": len(real_styles) - builtin_count,
             "used": used_count,
-            "unused": len(styles) - used_count,
+            "unused": len(real_styles) - used_count,
             "cleanable": cleanable,
+            "snapshot_count": len(styles) - len(real_styles),
             "styles": styles,
         }
 
