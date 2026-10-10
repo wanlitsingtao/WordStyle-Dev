@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-样式映射对话框组件（完全参照桌面版四步配置流程）
+样式映射对话框组件（配置流程，2026-10-10 调整顺序）
 
-四步配置流程（与桌面版完全一致）：
-Step 1: 标题样式映射（统一配置，不分原文/应答句）
-Step 2: 应答句配置（是否启用、文本、样式、模式、原文样式、应答原文样式）
-Step 3: 样式映射（正文+列表段落，根据应答模式动态切换单列/双列）
-Step 4: 表格/图片/列表兜底配置（支持双列）+ 清除章节标签
+四个配置区（自上而下）：
+区域 1: 标题样式映射（统一配置，不分原文/应答句）+ 末尾「清除第X章/第X节字样」
+区域 2: 应答句配置 + 末尾「插入提示语」「进行祈使语气转换」（后两者仅在本区，
+        且插入提示语仅「原文+应答句+应答原文」模式下可操作）
+区域 3: 样式映射（正文+列表段落，根据应答模式动态切换单列/双列）
+区域 4: 表格/图片/列表兜底配置（支持双列）
 
 功能：
-- 按文件分别存储映射配置
+- 按文件分别存储映射配置（含插入提示语 / 祈使语气转换，均为文件级）
 - 支持设为默认（持久化到用户数据）
 - 支持恢复默认
-- 双列模式联动（与桌面版一致）
+- 双列模式联动
 """
+import os
 import re
 import streamlit as st
 from data_manager import load_user_data, save_user_data
+from config import TEMP_DIR
 
 # [2026-09-18] 默认样式映射改为"一个源样式对应多个候选目标样式"（多对多）：
 # 每次「⭐ 设为默认」把本次选中的目标样式排到该源样式的候选最前，最多保留 5 个。
@@ -39,10 +42,13 @@ def get_answer_mode_options():
 
 
 @st.fragment
-def _render_step4_fallback(selected_file_name, template_styles, current_file_mapping,
-                            default_tbl_img_config, default_list_config,
-                            default_remove_chapter_label, is_dual):
-    """Step 4: 表格/图片/列表兜底配置（使用 fragment 避免每次操作都刷新整个页面）"""
+def _render_step3_fallback(selected_file_name, template_styles, current_file_mapping,
+                           default_tbl_img_config, default_list_config, is_dual):
+    """Step 4: 表格/图片/列表兜底配置（使用 fragment 避免每次操作都刷新整个页面）
+
+    [2026-10-10] 原第 3 区，因「应答句配置」改为第 2 区、样式映射顺延为第 3 区，本区顺延为第 4 区；
+    原挂在本区末尾的「清除标题中的第X章/第X节」复选框已移到 Step 1 标题样式映射区末尾。
+    """
     st.markdown("---")
     st.markdown("**4. 表格/图片/列表兜底配置**")
 
@@ -57,10 +63,10 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
 
     # 布局：使用grid对齐（与桌面版一致）
     tbl_img_hdr = st.columns([1, 2, 2, 1, 1, 2, 2])
-    tbl_img_hdr[1].markdown("**原文**")
-    tbl_img_hdr[2].markdown("**应答原文**")
-    tbl_img_hdr[5].markdown("**原文**")
-    tbl_img_hdr[6].markdown("**应答原文**")
+    tbl_img_hdr[1].markdown("**原文目标样式**")
+    tbl_img_hdr[2].markdown("**应答目标样式**")
+    tbl_img_hdr[5].markdown("**原文目标样式**")
+    tbl_img_hdr[6].markdown("**应答目标样式**")
 
     # 第1行：表格
     tbl_img_row = st.columns([1, 2, 2, 1, 1, 2, 2])
@@ -73,14 +79,14 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
     with tbl_img_row[1]:
         td = tbl_img_config.get('table_style', 'Body Text')
         ti = template_styles.index(td) if td in template_styles else 0
-        table_style = st.selectbox("表格原文", options=template_styles, index=ti,
+        table_style = st.selectbox("表格原文目标样式", options=template_styles, index=ti,
             key=f"table_style_{selected_file_name}", disabled=not enable_table,
             label_visibility="collapsed")
 
     with tbl_img_row[2]:
         tad = tbl_img_config.get('table_answer_style', table_style)
         tai = template_styles.index(tad) if tad in template_styles else 0
-        table_answer_style = st.selectbox("表格答原文", options=template_styles, index=tai,
+        table_answer_style = st.selectbox("表格应答目标样式", options=template_styles, index=tai,
             key=f"table_answer_{selected_file_name}",
             disabled=not (enable_table and is_dual),
             label_visibility="collapsed")
@@ -93,14 +99,14 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
     with tbl_img_row[5]:
         imd = tbl_img_config.get('image_style', 'Body Text')
         imi = template_styles.index(imd) if imd in template_styles else 0
-        image_style = st.selectbox("图片原文", options=template_styles, index=imi,
+        image_style = st.selectbox("图片原文目标样式", options=template_styles, index=imi,
             key=f"image_style_{selected_file_name}", disabled=not enable_image,
             label_visibility="collapsed")
 
     with tbl_img_row[6]:
         iad = tbl_img_config.get('image_answer_style', image_style)
         iai = template_styles.index(iad) if iad in template_styles else 0
-        image_answer_style = st.selectbox("图片答原文", options=template_styles, index=iai,
+        image_answer_style = st.selectbox("图片应答目标样式", options=template_styles, index=iai,
             key=f"image_answer_{selected_file_name}",
             disabled=not (enable_image and is_dual),
             label_visibility="collapsed")
@@ -127,11 +133,11 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
             key=f"enable_list_{selected_file_name}",
             help="勾选后，未映射的列表段落将按照下方配置的方式处理")
     with list_row[1]:
-        st.markdown("**原文**")
+        st.markdown("**原文目标样式**")
     with list_row[2]:
-        st.markdown("**答原文**")
+        st.markdown("**应答目标样式**")
 
-    # 第二行：原文设置 + 答原文设置
+    # 第二行：原文设置 + 应答原文设置
     list_cols = st.columns([3, 5, 5])
     with list_cols[0]:
         st.text("")
@@ -155,7 +161,7 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
                 disabled=not list_enable)
 
     with list_cols[2]:
-        la_method = st.radio("答原文方式",
+        la_method = st.radio("应答原文方式",
             options=["bullet", "style"],
             format_func=lambda x: "符号" if x == "bullet" else "样式",
             index=0 if list_answer_method_val == "bullet" else 1,
@@ -164,24 +170,17 @@ def _render_step4_fallback(selected_file_name, template_styles, current_file_map
             disabled=not (list_enable and is_dual))
 
         if la_method == "bullet":
-            st.text_input("答原文符号", value=list_answer_bullet_val,
+            st.text_input("应答原文符号", value=list_answer_bullet_val,
                 key=f"list_answer_bullet_{selected_file_name}", label_visibility="collapsed",
                 disabled=not (list_enable and is_dual))
         else:
             lasi = template_styles.index(list_answer_style_val) if list_answer_style_val in template_styles else 0
-            st.selectbox("答原文目标样式", options=template_styles, index=lasi,
+            st.selectbox("应答原文目标样式", options=template_styles, index=lasi,
                 key=f"list_answer_style_{selected_file_name}", label_visibility="collapsed",
                 disabled=not (list_enable and is_dual))
 
-    # 清除章节标签 checkbox
-    st.markdown("---")
-    st.checkbox(
-        '清除标题中的"第X章/第X节"等字样',
-        value=current_file_mapping.get('_remove_chapter_label',
-               default_remove_chapter_label if isinstance(default_remove_chapter_label, bool)
-               else st.session_state.get('remove_chapter_label_config', False)),
-        key=f"remove_chapter_label_{selected_file_name}"
-    )
+    # [2026-10-10] 原先挂在此处的「清除标题中的“第X章/第X节”等字样」复选框，
+    # 已按需求移到 Step 1「标题样式映射」区域末尾（widget key 保持不变，状态可延续）。
 
 
 @st.dialog("📊 样式映射配置", width="large")
@@ -298,6 +297,20 @@ def show_style_mapping_dialog():
         if '_default_remove_chapter_label' in st.session_state.file_style_mappings
         else default_style_map.get('_remove_chapter_label', False)
     )
+    # [2026-10-10] 插入提示语 / 祈使语气转换 改为文件级配置（原在主页面全局配置区）。
+    # 默认值来源：_default_hint_config（新）→ _default_hint_settings（旧版遗留键）→ 内置默认。
+    default_hint_config = (
+        st.session_state.file_style_mappings.get('_default_hint_config')
+        or st.session_state.file_style_mappings.get('_default_hint_settings')
+        or {}
+    )
+    if not isinstance(default_hint_config, dict):
+        default_hint_config = {}
+    default_mood_config = st.session_state.file_style_mappings.get('_default_mood_config') or {}
+    if not isinstance(default_mood_config, dict):
+        default_mood_config = {}
+
+    # 双列模式在应答句配置区（第 2 区）由实时控件值决定，供后续第 3/4 区使用。
 
     # ====================================================================
     # Step 1: 标题样式映射（统一，不分原文/应答句）
@@ -383,8 +396,23 @@ def show_style_mapping_dialog():
                     help="勾选：清理该标题的编号；取消：编号原样保留"
                 )
 
+    # ---- 清除标题中的"第X章/第X节"等字样 ----
+    # [2026-10-10] 从原 Step 4 末尾移到 Step 1「标题样式映射」区域最后（widget key 不变）。
+    st.markdown("")
+    remove_chapter_label = st.checkbox(
+        '清除标题中的"第X章/第X节"等字样',
+        value=current_file_mapping.get(
+            '_remove_chapter_label',
+            default_remove_chapter_label if isinstance(default_remove_chapter_label, bool)
+            else st.session_state.get('remove_chapter_label_config', False)
+        ),
+        key=f"remove_chapter_label_{fname}",
+        help="勾选后，转换时去掉标题里的\"第X章/第X节\"等字样。",
+    )
+
     # ====================================================================
-    # Step 2: 应答句配置（完全参照桌面版）
+    # Step 2: 应答句配置（完全参照桌面版）+ 插入提示语 + 祈使语气转换
+    # [2026-10-10] 由第 4 区改为第 2 区，位于标题样式映射之后，作为后续样式映射和兜底配置的前提。
     # ====================================================================
     st.markdown("---")
     st.markdown("**2. 应答句配置**")
@@ -411,11 +439,11 @@ def show_style_mapping_dialog():
                                     label_visibility="collapsed",
                                     disabled=not do_answer)
 
-    # 第2行：答样式 + 插入模式 + 原文 + 答原文（与桌面版完全一致）
+    # 第2行：应答样式 + 插入模式 + 原文 + 应答原文（与桌面版完全一致）
     ans_row2 = st.columns(4)
     with ans_row2[0]:
         style_idx = template_styles.index(answer_style_val) if answer_style_val in template_styles else 0
-        answer_style = st.selectbox("答样式", options=template_styles, index=style_idx,
+        answer_style = st.selectbox("应答样式", options=template_styles, index=style_idx,
                                     key=f"ans_style_{selected_file.name}",
                                     disabled=not do_answer)
     with ans_row2[1]:
@@ -429,20 +457,158 @@ def show_style_mapping_dialog():
     with ans_row2[2]:
         src_idx = template_styles.index(answer_source_style_val) if answer_source_style_val in template_styles else 0
         is_copy = (do_answer and answer_mode == 'copy_chapter')
-        answer_source_style = st.selectbox("原文", options=template_styles, index=src_idx,
+        answer_source_style = st.selectbox("原文目标样式", options=template_styles, index=src_idx,
                                            key=f"ans_source_{selected_file.name}",
                                            disabled=not (do_answer and is_copy))
     with ans_row2[3]:
         cpy_idx = template_styles.index(answer_copy_style_val) if answer_copy_style_val in template_styles else 0
-        answer_copy_style = st.selectbox("答原文", options=template_styles, index=cpy_idx,
+        answer_copy_style = st.selectbox("应答原文目标样式", options=template_styles, index=cpy_idx,
                                          key=f"ans_copy_{selected_file.name}",
                                          disabled=not (do_answer and is_copy))
 
-    # 判断是否为双列模式（copy_chapter 模式且启用了应答句）
+    # 双列模式实时判定（本区控件变化后立即生效）
     is_dual = (do_answer and answer_mode == 'copy_chapter')
+
+    # --------------------------------------------------------------------
+    # 插入提示语（原主页面「转换配置」区，2026-10-10 搬入，改为文件级）
+    # 仅「原文+应答句+应答原文」模式（copy_chapter）下可操作，否则置灰。
+    # --------------------------------------------------------------------
+    st.markdown("---")
+    st.markdown("**插入提示语**")
+
+    hint_enabled = is_dual
+    hint_cfg = current_file_mapping.get('_hint_config') or default_hint_config or {}
+    if not isinstance(hint_cfg, dict):
+        hint_cfg = {}
+    do_hint_val = bool(hint_cfg.get('do_hint', False))
+    hint_type_val = hint_cfg.get('hint_type', 'text')
+    hint_text_val = hint_cfg.get('hint_text', '招标文件原文')
+    hint_style_val = hint_cfg.get('hint_style', 'Normal')
+    hint_image_val = st.session_state.get(f"hint_image_{fname}") or hint_cfg.get('hint_image_path') or None
+
+    st.checkbox(
+        "插入提示语",
+        value=do_hint_val,
+        key=f"hint_enable_{fname}",
+        disabled=not hint_enabled,
+        help="在每个章节标题后插入提示语（如“招标文件原文”）。"
+             "仅当应答句插入模式为「原文+应答句+应答原文」时生效。",
+    )
+    _hint_on = bool(st.session_state.get(f"hint_enable_{fname}", do_hint_val))
+    if not hint_enabled:
+        st.caption("（仅「原文+应答句+应答原文」模式下可配置，当前模式不适用）")
+
+    if _hint_on:
+        lbl = st.columns([2, 2, 5, 1.5, 1.5])
+        with lbl[0]:
+            st.markdown("**类型**")
+        with lbl[1]:
+            st.markdown("**提示语样式**")
+        with lbl[2]:
+            st.markdown("**提示语文本**" if hint_type_val == "text" else "**上传提示语图片**")
+        with lbl[3]:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+        with lbl[4]:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+
+        ctrl = st.columns([2, 2, 5, 1.5, 1.5], vertical_alignment="center")
+        with ctrl[0]:
+            hint_type = st.radio(
+                "类型",
+                options=["text", "image"],
+                format_func=lambda x: "文本" if x == "text" else "图片",
+                index=0 if hint_type_val != "image" else 1,
+                horizontal=True,
+                key=f"hint_type_{fname}",
+                label_visibility="collapsed",
+                disabled=not hint_enabled,
+            )
+        with ctrl[1]:
+            _hs_idx = template_styles.index(hint_style_val) if hint_style_val in template_styles else 0
+            hint_style = st.selectbox(
+                "提示语样式",
+                options=template_styles,
+                index=_hs_idx,
+                key=f"hint_style_{fname}",
+                label_visibility="collapsed",
+                disabled=not hint_enabled,
+            )
+        with ctrl[2]:
+            if hint_type == "text":
+                hint_text = st.text_input(
+                    "提示语文本",
+                    value=hint_text_val,
+                    help="提示语文本内容",
+                    key=f"hint_text_{fname}",
+                    label_visibility="collapsed",
+                    disabled=not hint_enabled,
+                )
+            else:
+                hint_text = hint_text_val
+                hint_uploaded = st.file_uploader(
+                    "上传提示语图片",
+                    type=['png', 'jpg', 'jpeg', 'bmp', 'gif'],
+                    help="上传要作为提示语的图片文件",
+                    key=f"hint_upload_{fname}",
+                    label_visibility="collapsed",
+                    disabled=not hint_enabled,
+                )
+                if hint_uploaded is not None:
+                    import hashlib as _hashlib
+                    _ext = os.path.splitext(hint_uploaded.name)[1] or '.png'
+                    _tag = _hashlib.md5(fname.encode('utf-8')).hexdigest()[:8]
+                    _uid = st.session_state.get('user_id', 'default')
+                    _img_path = str(TEMP_DIR / f"temp_hint_image_{_uid}_{_tag}{_ext}")
+                    with open(_img_path, 'wb') as _f:
+                        _f.write(hint_uploaded.getbuffer())
+                    st.session_state[f"hint_image_{fname}"] = _img_path
+                    hint_image_val = _img_path
+                    st.success(f"✅ 已上传: {hint_uploaded.name}")
+                elif hint_image_val and os.path.exists(hint_image_val):
+                    st.info(f"📎 当前图片: {os.path.basename(hint_image_val)}")
+                else:
+                    st.caption("请选择提示语图片文件")
+        with ctrl[3]:
+            if hint_type == "image":
+                _has_img = bool(hint_image_val and os.path.exists(hint_image_val))
+                if st.button("🗑️ 清除图片", key=f"clear_hint_img_{fname}", use_container_width=True,
+                             disabled=not (_has_img and hint_enabled),
+                             help="清除已上传的提示语图片"):
+                    if _has_img:
+                        try:
+                            os.remove(hint_image_val)
+                        except Exception:
+                            pass
+                    st.session_state[f"hint_image_{fname}"] = None
+                    st.rerun()
+        with ctrl[4]:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+        hint_type = st.session_state.get(f"hint_type_{fname}", hint_type_val)
+        hint_style = st.session_state.get(f"hint_style_{fname}", hint_style_val)
+        hint_text = st.session_state.get(f"hint_text_{fname}", hint_text_val)
+    else:
+        hint_type = hint_type_val
+        hint_style = hint_style_val
+        hint_text = hint_text_val
+
+    # --------------------------------------------------------------------
+    # 进行祈使语气转换（原主页面「转换配置」区，2026-10-10 搬入，改为文件级）
+    # --------------------------------------------------------------------
+    st.markdown("---")
+    _mood_cfg = current_file_mapping.get('_mood_config') or default_mood_config or {}
+    if not isinstance(_mood_cfg, dict):
+        _mood_cfg = {}
+    do_mood_val = bool(_mood_cfg.get('do_mood', st.session_state.get('do_mood_config', True)))
+    do_mood = st.checkbox(
+        "进行祈使语气转换",
+        value=do_mood_val,
+        key=f"mood_{fname}",
+        help="将文档中的祈使语气转换为投标人语气",
+    )
 
     # ====================================================================
     # Step 3: 样式映射（正文+列表段落）- 根据双列模式动态切换
+    # [2026-10-10] 因应答句配置改为第 2 区，本区顺延为第 3 区
     # ====================================================================
     st.markdown("---")
     if is_dual:
@@ -518,22 +684,20 @@ def show_style_mapping_dialog():
     # ====================================================================
     # Step 4: 表格/图片/列表兜底配置（使用 @st.fragment 避免每次操作刷新页面）
     # ====================================================================
-    _render_step4_fallback(
+    _render_step3_fallback(
         selected_file_name=selected_file.name,
         template_styles=template_styles,
         current_file_mapping=current_file_mapping,
         default_tbl_img_config=default_tbl_img_config,
         default_list_config=default_list_config,
-        default_remove_chapter_label=default_remove_chapter_label,
         is_dual=is_dual,
     )
-
     # ====================================================================
     # 保存所有配置到 session_state
     # ====================================================================
 
-    # ★ Step 4 的 widget 值从 session_state 读取（因为 Step 4 在 @st.fragment 中运行，
-    #    其局部变量在外部不可见，但 widget 值已自动写入 session_state）
+    # ★ 第 3 区（表格/图片/列表兜底）的 widget 值从 session_state 读取（该区在 @st.fragment
+    #    中运行，其局部变量在外部不可见，但 widget 值已自动写入 session_state）
     fname = selected_file.name
     enable_table = st.session_state.get(f"enable_table_{fname}", False)
     table_style = st.session_state.get(f"table_style_{fname}", "Body Text")
@@ -599,17 +763,24 @@ def show_style_mapping_dialog():
     #    未列出的源样式（如老配置、Step 1 之外的标题样式）转换时按"清理"处理，行为不变。
     updated_mapping['_clean_numbering'] = dict(clean_numbering)
 
+    # 7. 保存「插入提示语」配置（文件级；原主页面全局配置，2026-10-10 搬入）
+    hint_config_new = {
+        'do_hint': bool(st.session_state.get(f"hint_enable_{fname}", do_hint_val)),
+        'hint_type': hint_type,
+        'hint_text': hint_text,
+        'hint_style': hint_style,
+        'hint_image_path': st.session_state.get(f"hint_image_{fname}") or hint_image_val or "",
+    }
+    updated_mapping['_hint_config'] = hint_config_new
+
+    # 8. 保存「进行祈使语气转换」（文件级；原主页面全局配置，2026-10-10 搬入）
+    updated_mapping['_mood_config'] = {'do_mood': bool(do_mood)}
+
     # 更新 session_state
     st.session_state.file_style_mappings[selected_file.name] = updated_mapping
 
-    # 同步到全局 session_state（供转换时使用）
-    st.session_state.do_answer_config = do_answer
-    st.session_state.answer_text_config = answer_text
-    st.session_state.answer_style_config = answer_style
-    st.session_state.answer_mode_config = answer_mode
-    st.session_state.answer_source_style_config = answer_source_style
-    st.session_state.answer_copy_style_config = answer_copy_style
-    st.session_state.remove_chapter_label_config = remove_chapter_label
+    # [2026-10-10] 应答句配置 / 清除章节标签已改为真正的文件级，不再回写全局 session_state
+    #（否则「最后配置的文件」会污染其他未配置文件的全局兜底值）。
     st.session_state.list_method_config = l_method
     st.session_state.list_bullet_config = l_bullet
     st.session_state.list_style_config = l_style
@@ -638,6 +809,10 @@ def show_style_mapping_dialog():
             for _src in heading_styles:
                 st.session_state.pop(_clean_key(_src), None)
             st.session_state.pop(f"clean_numbering_all_{fname}", None)
+            # 「插入提示语 / 祈使语气转换」的控件状态一并复位（否则会沿用上一次的值）
+            for _k in (f"mood_{fname}", f"hint_enable_{fname}", f"hint_type_{fname}",
+                       f"hint_style_{fname}", f"hint_text_{fname}", f"hint_image_{fname}"):
+                st.session_state.pop(_k, None)
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")
@@ -664,6 +839,9 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings['_default_remove_chapter_label'] = remove_chapter_label
             # ★ 标题编号清理开关也进默认集（新文件默认全勾，这里记住用户改过的那些）
             st.session_state.file_style_mappings['_default_clean_numbering'] = dict(clean_numbering)
+            # ★ 插入提示语 / 祈使语气转换也进默认集（2026-10-10 改为文件级）
+            st.session_state.file_style_mappings['_default_hint_config'] = dict(hint_config_new)
+            st.session_state.file_style_mappings['_default_mood_config'] = dict(updated_mapping['_mood_config'])
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")

@@ -77,10 +77,12 @@ def _load_user_defaults():
     if 'file_style_mappings' not in st.session_state:
         st.session_state.file_style_mappings = _sm if isinstance(_sm, dict) else {}
 
-    _h = _sm.get('_default_hint_settings', {}) or {}
+    # [2026-10-10] 插入提示语 / 祈使语气转换 已改为文件级配置（原全局 _default_hint_settings 为兼容保留）
+    _h = (_sm.get('_default_hint_config') or _sm.get('_default_hint_settings') or {})
     _a = _sm.get('_default_answer_config', {}) or {}
     _l = _sm.get('_default_list_config', {}) or {}
     _t = _sm.get('_default_tbl_img_config', {}) or {}
+    _m = _sm.get('_default_mood_config', {}) or {}
 
     def _init(key, setter, value):
         if key not in st.session_state:
@@ -116,6 +118,46 @@ def _load_user_defaults():
     _init('hint_text_config', lambda v: app_state.set_hint_text_config(v), _h.get('hint_text', '招标文件原文'))
     _init('hint_style_config', lambda v: app_state.set_hint_style_config(v), _h.get('hint_style', 'Normal'))
     _init('hint_image_config', lambda v: app_state.set_hint_image_config(v), None)
+    # 祈使语气转换（文件级配置的内置兜底默认值，2026-10-10）
+    _init('do_mood_config', lambda v: app_state.set_do_mood_config(v), _m.get('do_mood', True))
+
+
+def _resolve_file_answer_and_label(file_mapping_data, file_style_mappings,
+                                   do_answer=False, answer_text='应答：本投标人理解并满足要求。',
+                                   answer_style='Normal', answer_mode='copy_chapter',
+                                   answer_source_style='', answer_copy_style=''):
+    """[2026-10-10] 按「文件级 → 默认集 → 全局兜底」解析某文件的应答句配置与「清除第X章」开关。
+
+    - 应答句配置：文件级 `_answer_config` → 默认集 `_default_answer_config` → 逐键全局兜底。
+    - 清除章节标签：文件级 `_remove_chapter_label` → `_default_remove_chapter_label`
+      → 历史遗留 `_default_style_map._remove_chapter_label` → False。
+
+    返回 (answer_config, remove_chapter_label)：answer_config 键已齐全，可直接取值。
+    """
+    file_mapping_data = file_mapping_data or {}
+    file_style_mappings = file_style_mappings or {}
+
+    answer_config = file_mapping_data.get('_answer_config') or {}
+    if not answer_config:
+        answer_config = file_style_mappings.get('_default_answer_config') or {}
+
+    remove_chapter_label = file_mapping_data.get('_remove_chapter_label')
+    if remove_chapter_label is None:
+        remove_chapter_label = file_style_mappings.get('_default_remove_chapter_label')
+        if remove_chapter_label is None:
+            remove_chapter_label = file_style_mappings.get('_default_style_map', {}).get(
+                '_remove_chapter_label', False)
+
+    answer_config = {
+        'do_answer': bool(answer_config.get('do_answer', do_answer)),
+        'answer_text': answer_config.get('answer_text', answer_text),
+        'answer_style': answer_config.get('answer_style', answer_style),
+        'answer_mode': answer_config.get('answer_mode', answer_mode),
+        'answer_source_style': answer_config.get('answer_source_style', answer_source_style),
+        'answer_copy_style': answer_config.get('answer_copy_style', answer_copy_style),
+    }
+
+    return answer_config, bool(remove_chapter_label)
 
 
 def _render_usage_instructions():
@@ -148,8 +190,8 @@ def _render_usage_instructions():
 
 1. **上传源文档**：选择需要转换样式的 Word 文档（支持同时上传多个 `.docx` 文件）
 2. **上传模板**：选择定义了目标样式的 Word 模板文档
-3. **配置样式映射**（重要‼️）：点击「📊 配置样式映射」按钮，完成四步配置
-4. **配置转换选项**：勾选祈使语气转换、插入提示语等
+3. **配置样式映射**（重要‼️）：点击「📊 配置样式映射」按钮，完成四个配置区
+4. **配置转换选项**：应答句、插入提示语、祈使语气转换均在样式映射第 2 区**按文档分别配置**
 5. **点击「🚀 开始转换」**：系统自动处理并生成结果
 6. **下载结果**：转换完成后下载文档
 
@@ -190,7 +232,6 @@ def _render_usage_instructions():
 
 def render_conversion_page():
     """文档转换页入口（供 st.navigation 调用）。"""
-    from components.config_panel import render_conversion_config
     from components.upload import (
         get_template_styles_list,
         detect_missing_heading_styles,
@@ -418,36 +459,36 @@ def render_conversion_page():
     render_section_title("⚙️ 转换配置")
     _load_user_defaults()
 
-    if 'do_mood_config' not in st.session_state:
-        app_state.set_do_mood_config(True)
-
     #st.markdown("---")
     map_col1, map_col2 = st.columns([2, 8])
     with map_col1:
         if st.button("📊 配置样式映射", key="open_style_mapping_btn", use_container_width=True,
-                     help="完整的四步样式配置（标题映射、应答句、正文映射、表格/图片/列表兜底）"):
+                     help="完整的配置流程（1.标题样式映射 2.应答句配置 3.样式映射 4.表格/图片/列表兜底，"
+                          "插入提示语与祈使语气转换在第 2 区末尾）"):
             from components.dialogs.style_mapping import show_style_mapping_dialog
             show_style_mapping_dialog()
     with map_col2:
         if current_source_files and st.session_state.get('template_styles'):
-            st.caption("点击按钮配置当前文件的样式映射")
+            st.caption("点击按钮配置当前文件的样式映射（含应答句、插入提示语、祈使语气转换）")
         else:
             st.caption("上传源文档和模板文档后即可配置样式映射")
 
-    result = render_conversion_config()
-    do_mood, do_answer, list_bullet, answer_text, answer_style, answer_mode = result[0:6]
-    do_hint, hint_type, hint_text, hint_image_path, hint_style = result[6:11]
-    answer_source_style, answer_copy_style = result[11:13]
-    list_method, list_style, list_answer_method, list_answer_style, list_answer_bullet = result[13:18]
-    remove_chapter_label = result[18]
-    enable_list_style = result[19] if len(result) > 19 else True
-
-    if not do_answer:
-        answer_text = app_state.get_answer_text_config()
-        answer_style = app_state.get_answer_style_config()
-        answer_mode = app_state.get_answer_mode_config()
-        answer_source_style = app_state.get_answer_source_style_config()
-        answer_copy_style = app_state.get_answer_copy_style_config()
+    # [2026-10-10] 原主页面「转换配置」区的两个配置（祈使语气转换 / 插入提示语）已并入
+    # 样式映射对话框，成为**文件级**配置。此处仅取全局兜底值（供未配置过的文件使用）。
+    do_answer = app_state.get_do_answer_config()
+    list_bullet = st.session_state.get('list_bullet_config', '•')
+    answer_text = app_state.get_answer_text_config()
+    answer_style = app_state.get_answer_style_config()
+    answer_mode = app_state.get_answer_mode_config()
+    answer_source_style = app_state.get_answer_source_style_config()
+    answer_copy_style = app_state.get_answer_copy_style_config()
+    list_method = app_state.get_list_method_config()
+    list_style = app_state.get_list_style_config()
+    list_answer_method = app_state.get_list_answer_method_config()
+    list_answer_style = app_state.get_list_answer_style_config()
+    list_answer_bullet = app_state.get_list_answer_bullet_config()
+    enable_list_style = app_state.get_enable_list_style_config()
+    remove_chapter_label = app_state.get_remove_chapter_label_config()
 
     # ==================== 开始转换 ====================
     st.markdown("---")
@@ -525,7 +566,8 @@ def render_conversion_page():
                 source_files_info.append((fname, temp_source, fpara))
 
             config = {
-                'do_mood': do_mood,
+                # [2026-10-10] 祈使语气转换已改为按文件配置，此处记录全局兜底值（仅作转换记录用）
+                'do_mood': app_state.get_do_mood_config(),
                 'answer_text': answer_text,
                 'answer_style': answer_style,
                 'list_bullet': list_bullet if list_bullet else "—",
@@ -588,17 +630,22 @@ def render_conversion_page():
                     status_placeholder.text(f" 正在转换第 {idx + 1}/{len(current_source_files)} 个文件 {source_file_obj.name} ({file_paragraphs:,} 段落)")
 
                     file_mapping = None
+                    file_mapping_data = {}
                     file_tbl_img_config = {}
                     file_list_config = {}
                     # [2026-09-19] 标题编号清理开关（Step 1「清理编号」复选框），
                     # 与样式映射同为「文件级 → 默认集」两级回退；都没有时空表 = 全部清理。
                     file_clean_numbering = {}
+                    file_hint_config = {}
+                    file_mood_config = {}
                     if 'file_style_mappings' in st.session_state and source_file_obj.name in st.session_state.file_style_mappings:
                         file_mapping_data = st.session_state.file_style_mappings[source_file_obj.name]
                         file_mapping = {k: v for k, v in file_mapping_data.items() if not k.startswith('_')}
                         file_tbl_img_config = file_mapping_data.get('_table_image_style', {})
                         file_list_config = file_mapping_data.get('_list_config', {})
                         file_clean_numbering = file_mapping_data.get('_clean_numbering') or {}
+                        file_hint_config = file_mapping_data.get('_hint_config') or {}
+                        file_mood_config = file_mapping_data.get('_mood_config') or {}
 
                     if not file_mapping:
                         default_style_map = st.session_state.file_style_mappings.get('_default_style_map', {})
@@ -613,6 +660,42 @@ def render_conversion_page():
                         file_list_config = st.session_state.file_style_mappings.get('_default_list_config', {})
                     if not file_clean_numbering:
                         file_clean_numbering = st.session_state.file_style_mappings.get('_default_clean_numbering', {}) or {}
+
+                    # [2026-10-10] 插入提示语 / 祈使语气转换：文件级 → 默认集 → 全局兜底
+                    if not file_hint_config:
+                        file_hint_config = (st.session_state.file_style_mappings.get('_default_hint_config')
+                                            or st.session_state.file_style_mappings.get('_default_hint_settings')
+                                            or {})
+                    if not file_mood_config:
+                        file_mood_config = st.session_state.file_style_mappings.get('_default_mood_config', {}) or {}
+
+                    # [2026-10-10] 应答句配置 / 清除章节标签：文件级 → 默认集 → 全局兜底
+                    _file_answer_cfg, file_remove_chapter_label = _resolve_file_answer_and_label(
+                        file_mapping_data, st.session_state.file_style_mappings,
+                        do_answer=do_answer, answer_text=answer_text,
+                        answer_style=answer_style, answer_mode=answer_mode,
+                        answer_source_style=answer_source_style,
+                        answer_copy_style=answer_copy_style,
+                    )
+                    _file_do_answer = _file_answer_cfg['do_answer']
+                    _file_answer_text = _file_answer_cfg['answer_text']
+                    _file_answer_style = _file_answer_cfg['answer_style']
+                    _file_answer_mode = _file_answer_cfg['answer_mode']
+                    _file_answer_source_style = _file_answer_cfg['answer_source_style']
+                    _file_answer_copy_style = _file_answer_cfg['answer_copy_style']
+
+                    _file_do_mood = bool(file_mood_config.get('do_mood',
+                                        st.session_state.get('do_mood_config', True)))
+                    _file_do_hint = bool(file_hint_config.get('do_hint',
+                                        st.session_state.get('do_hint_config', False)))
+                    # 插入提示语仅在「原文+应答句+应答原文」模式下生效（界面亦仅该模式下可配置）
+                    if not (_file_do_answer and _file_answer_mode == 'copy_chapter'):
+                        _file_do_hint = False
+                    _file_hint_type = file_hint_config.get('hint_type', st.session_state.get('hint_type_config', 'text'))
+                    _file_hint_text = file_hint_config.get('hint_text', st.session_state.get('hint_text_config', '招标文件原文'))
+                    _file_hint_style = file_hint_config.get('hint_style', st.session_state.get('hint_style_config', 'Normal'))
+                    _file_hint_image = (file_hint_config.get('hint_image_path')
+                                        or st.session_state.get('hint_image_config'))
 
                     warnings_list = []
                     def warning_callback(msg):
@@ -648,11 +731,11 @@ def render_conversion_page():
                         template_file=current_temp_template,
                         output_file=output_file,
                         custom_style_map=file_mapping,
-                        do_mood=do_mood,
-                        answer_text=answer_text,
-                        answer_style=answer_style,
-                        answer_source_style=answer_source_style,
-                        answer_copy_style=answer_copy_style,
+                        do_mood=_file_do_mood,
+                        answer_text=_file_answer_text,
+                        answer_style=_file_answer_style,
+                        answer_source_style=_file_answer_source_style,
+                        answer_copy_style=_file_answer_copy_style,
                         table_answer_style=file_table_answer_style,
                         list_bullet=_list_bullet,
                         list_method=_list_method,
@@ -660,13 +743,13 @@ def render_conversion_page():
                         list_answer_method=_list_answer_method,
                         list_answer_style=_list_answer_style,
                         list_answer_bullet=_list_answer_bullet,
-                        do_answer_insertion=do_answer,
-                        answer_mode=answer_mode,
-                        do_hint_insertion=do_hint,
-                        hint_type=hint_type,
-                        hint_text=hint_text,
-                        hint_image_path=hint_image_path,
-                        hint_style=hint_style,
+                        do_answer_insertion=_file_do_answer,
+                        answer_mode=_file_answer_mode,
+                        do_hint_insertion=_file_do_hint,
+                        hint_type=_file_hint_type,
+                        hint_text=_file_hint_text,
+                        hint_image_path=_file_hint_image,
+                        hint_style=_file_hint_style,
                         progress_callback=make_progress_callback(idx, len(current_source_files)),
                         warning_callback=warning_callback,
                         source_styles_cache=source_styles_for_file,
@@ -674,7 +757,7 @@ def render_conversion_page():
                         enable_table_style=file_tbl_img_config.get('enable_table_style', st.session_state.get('enable_table_style_config', False)),
                         image_style_override=file_tbl_img_config.get('image_style') or st.session_state.get('image_style_config', 'Body Text'),
                         enable_image_style=file_tbl_img_config.get('enable_image_style', st.session_state.get('enable_image_style_config', False)),
-                        remove_chapter_label=remove_chapter_label,
+                        remove_chapter_label=file_remove_chapter_label,
                         enable_list_style=_enable_list_style,
                         clean_numbering_map=file_clean_numbering,
                     )
