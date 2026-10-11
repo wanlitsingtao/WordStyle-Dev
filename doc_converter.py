@@ -2677,7 +2677,11 @@ class DocumentConverter:
                 return _finish(new_para)
             else:
                 # "符号"模式：保留原有逻辑（添加 bullet 符号，清除编号）
-                new_para.add_run(self.list_bullet)
+                # [2026-10-11] 第3区映射已命中时，兜底符号不再追加；
+                # 目标样式若自带 numPr 会由 Word 自动生成符号，
+                # 目标样式不带 numPr 时则按普通正文处理（同样不加兜底符号）。
+                if not region3_mapped:
+                    new_para.add_run(self.list_bullet)
                 self.remove_auto_numbering(new_para)
                 # 对于列表段落，使用专门的编号清理函数
                 # 使用 para.text 获取完整文本（包括超链接内部的run）
@@ -2807,6 +2811,47 @@ class DocumentConverter:
                     regions.append((top, left, bottom, right))
         return regions
     
+    def _collect_special_styles(self, doc):
+        """从源文档收集表格/图片专属样式集合。
+
+        与 views/conversion.py 的口径一致：
+        - table_only = 表格内使用过的样式 − 顶层段落使用过的样式
+        - image_only = 含图片段落的样式 − 纯文本段落样式
+        用于在表格复制阶段决定「非专属样式是否仍走第 3 区映射」。
+        """
+        top_level_styles = set()
+        for para in doc.paragraphs:
+            if para.style:
+                top_level_styles.add(para.style.name)
+
+        table_styles = set()
+
+        def _collect_table_styles(tbl, acc):
+            for row in tbl.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        if para.style:
+                            acc.add(para.style.name)
+                    for nested in cell.tables:
+                        _collect_table_styles(nested, acc)
+
+        for tbl in doc.tables:
+            _collect_table_styles(tbl, table_styles)
+
+        text_styles = set()
+        image_styles = set()
+        for para in doc.paragraphs:
+            if para.style:
+                style_name = para.style.name
+                has_img = (para._element.find('.//' + qn('w:drawing')) is not None or
+                           para._element.find('.//' + qn('w:pict')) is not None)
+                if has_img:
+                    image_styles.add(style_name)
+                else:
+                    text_styles.add(style_name)
+
+        return table_styles - top_level_styles, image_styles - text_styles
+    
     def _copy_cell_content(self, source_cell, new_cell, target_doc, table_idx, cell_pos,
                            available_width_emu, warning_callback=None,
                            table_style_override=None, enable_table_style=False):
@@ -2821,9 +2866,12 @@ class DocumentConverter:
         供 copy_chapter 模式生成表格的应答原文副本时使用。
         """
         def _get_table_para_style(src_style_name):
-            # [2026-10-11] 第3区映射优先（「不配置表格格式」未勾选且已映射时）
+            # [2026-10-11] 第3区映射优先：
+            # 仅对「表格专属样式」生效；共享样式（如 Normal）即使已在第3区映射，
+            # 表格内仍走第4区兜底或保持原样，避免正文映射污染表格。
             if not getattr(self, '_r3_skip_table', True):
-                if self._region3_mapped([src_style_name]):
+                _table_only = getattr(self, '_table_only_styles', set())
+                if src_style_name in _table_only and self._region3_mapped([src_style_name]):
                     mapped = self._region3_lookup(src_style_name, target_doc)
                     if mapped:
                         return mapped
@@ -2854,14 +2902,20 @@ class DocumentConverter:
             src_para_style = para.style.name
             self.set_paragraph_style(new_para, _get_table_para_style(src_para_style), target_doc)
             if _tbl_plans is not None:
-                _mapped = self._region3_mapped([src_para_style])
+                # 表格内「已映射」只认表格专属样式；共享样式视为未映射，
+                # 使 copy_chapter 应答副本能正确落回表格兜底样式。
+                _table_only = getattr(self, '_table_only_styles', set())
+                _is_r3_table_only = src_para_style in _table_only
+                _mapped = _is_r3_table_only and self._region3_mapped([src_para_style])
+                _answer = (self._region3_answer_target([src_para_style], target_doc)
+                           if _is_r3_table_only else None)
                 # ⚠️ 键必须是**元素对象本身**，不能用 id()：
                 # lxml 的 Python 代理对象在无强引用时会被回收，之后 iter() 会生成
                 # 新代理、id 变化，导致查找失效（实测踩坑）。用元素作键既保持身份
                 # 稳定（dict 键持强引用），又天然免疫代理回收。
                 _tbl_plans[new_para._element] = {
                     'mapped': _mapped,
-                    'answer': self._region3_answer_target([src_para_style], target_doc),
+                    'answer': _answer,
                 }
             
             if self.has_numbering(para):
@@ -4924,6 +4978,12 @@ class DocumentConverter:
                 self.source_styles = source_styles_cache
             else:
                 self.source_styles = self.get_all_styles_from_doc(source_doc)
+            
+            # [2026-10-11] 计算表格/图片专属样式集合，供表格复制阶段使用。
+            # 只有专属样式在表格内才走第3区映射；共享样式走兜底/保持原样。
+            _table_only, _image_only = self._collect_special_styles(source_doc)
+            self._table_only_styles = _table_only
+            self._image_only_styles = _image_only
             
             # 获取页面宽度信息
             section = new_doc.sections[0]
