@@ -2,6 +2,140 @@
 
 ## Bug 修复记录
 
+### Bug #011: 样式映射第 3 区改为「副本样式唯一权威」后的显示与兜底降级问题
+
+**日期**: 2026-10-11  
+**严重级别**: 🟠 中（Medium）—— 转换结果样式错误 + 界面配置与需求不一致  
+**影响范围**: copy_chapter 双副本样式、表格/图片兜底、样式映射对话框第 3 区  
+**发现者**: 用户报告（附截图、实测反馈）  
+**修复状态**: ✅ 已修复
+
+---
+
+#### 背景：需求变更（详见 `01-业务需求文档.md` §2.11.4~§2.11.6）
+
+用户定调三点：
+
+1. 第 2 区「原文目标样式 / 应答原文目标样式」两个下拉**不应存在** —— 副本样式完全由第 3 区决定；
+2. 「兜底」只作用于第 3 区**未映射**的段落，列表 / 表格 / 图片规则一致；
+3. 第 3 区标题后新增「不配置表格格式」「不配置图片样式」两个复选框（默认勾选），
+   并把第 4 区标题与说明合并为一行；在「✅ 确定」之前新增「💾 保存」按钮。
+
+---
+
+#### 问题描述
+
+**问题1（转换结果错误）**：copy_chapter 模式下，表格的**应答原文副本**单元格样式全部错落到
+「表格应答兜底」样式，第 3 区为单元格样式配的映射（`answer_<样式>`）完全不生效。
+
+**问题2（界面形态反复）**：第 3 区两个复选框"看不到"。
+第一版写成无条件渲染；第二版改成"只有检出专属样式才渲染"却不给任何提示；
+导致用户文档里没检出专属样式时控件整个消失，用户无法判断原因。
+
+**问题3（勾选后未隐藏）**：勾选「不配置表格格式」后，表格专属样式行（如「贵阳表格图」）
+仍然显示在第 3 区列表里。
+
+---
+
+#### 根本原因分析
+
+##### 🔴 根因1：lxml 元素代理对象不能用 `id()` 当字典键
+
+`_copy_cell_content()` 记录表格逐段计划时用 `id(new_para._element)` 作键，
+`_insert_with_copy_chapter()` 查找时用 `id(orig_p)` —— 两者**不是同一个代理对象的 id**。
+
+lxml 的 Python 代理对象在**没有强引用**时会被回收，之后 `iter()` 会生成**新代理**，`id()` 随之变化。
+探针实测：不持引用 → id 不一致；持强引用 → `is` 为同一对象。结果所有单元格查表 miss，
+统一落到兜底。
+
+##### 🔴 根因2：「按出现顺序计数」在模板清空后整体错位 1
+
+`clear_document_content()` 结束时执行了 `doc.add_paragraph()`，在正文开头残留一个空段落，
+使位置计数器（`_para_ptr`）**整体偏移 1**，图片段落被误判为「未映射」而错误套上图片兜底样式。
+纵向合并的表格 `iter(qn('w:p'))` 还会多出空 `w:p`，因此「按索引对齐」同样不可靠。
+
+##### 🟠 根因3：复选框渲染条件不符合需求
+
+需求是"在标题后增加两个复选框"（无条件存在），实现却写成
+`show_skip_table_ck = bool(_table_only_set)`，未检出专属样式时控件不渲染、且无任何提示。
+
+##### 🟠 根因4：样式名首尾空格导致隐藏判断漏命中
+
+`visible_body_styles = [s for s in body_styles if s not in hidden_styles]` 用原始字符串比较，
+样式名偶发首尾空白时 `not in` 判为不相等 → 专属样式行没被隐藏。
+
+---
+
+#### 修复方案
+
+**1. 计划表改用元素对象本身作键（`doc_converter.py`）**
+
+- `_region3_para_plans = {w:p元素: {'mapped': bool, 'answer': 名或 None}}`
+- `_region3_tbl_plans = {w:tbl元素: {w:p元素: {…}}}`
+- **删除** `_para_ptr` / `_tbl_ptr` 两个位置计数器。
+  dict 键天然持强引用 → 元素身份稳定，且默认按身份哈希，彻底免疫代理回收。
+
+**2. 第 3 区映射工具与兜底降级（`doc_converter.py`）**
+
+- 新增 `_region3_mapped(keys)` / `_region3_lookup(key, template_doc)` /
+  `_region3_answer_target(keys, template_doc)`。
+- 表格：`_get_table_para_style()` 仅当「未勾选不配置表格格式」且该样式已映射时用第 3 区结果。
+- 图片/OLE 占位段落：仅当 `_r3_skip_image or not region3_mapped` 时才覆盖为图片兜底。
+- `full_convert()` / `_convert_styles_in_memory()` 新增 `skip_table_mapping=True` / `skip_image_mapping=True`。
+
+**3. 复选框显示形态定为「条件渲染 + 就地说明」（`components/dialogs/style_mapping.py`）**
+
+- 检出对应专属样式 → 渲染复选框（默认勾选，取消勾选则该侧样式行显示并可逐样式映射）；
+- 未检出 → **不渲染控件**，就地 `st.caption`：
+  「未检测到源文档中**表格专属样式**，表格将直接按第 4 区兜底样式转换。」（图片同款），
+  且该侧强制 `skip_*=True`。
+
+**4. 隐藏判断加 `strip()` 归一化**
+
+- `visible_body_styles = [s for s in body_styles if s.strip() not in _hidden_norm]`；
+- 保存隐藏行的已存映射时同样用 `strip()` 匹配，避免切换勾选状态丢数据。
+
+**5. 删除第 2 区两个下拉、新增「💾 保存」按钮、第 4 区标题合并为一行**
+
+- 第 2 区 `answer_source_style` / `answer_copy_style` 字段从 `_answer_config` 移除
+  （`full_convert` 仅留兼容签名）；
+- 底部按钮 3 列 → 4 列：`🔄 恢复默认 / ⭐ 设为默认 / 💾 保存 / ✅ 确定`；
+- 第 4 区标题：`**4. 表格/图片/列表兜底配置（选中后，表格/图片段落统一使用指定的模板样式）**`。
+
+---
+
+#### 验证
+
+- **新增 `temp/test_region3_authority.py`（7 例）**：普通段落双列、应答列缺省回退、
+  表格已映射优先、表格 skip、图片双模式（真实断言图片段落样式）、提示语对齐、非 copy_chapter 回归。
+- **`temp/test_style_mapping_layout.py`（12 例）**：新增 H/I/J/K/L 五例，覆盖复选框默认勾选与
+  专属样式行隐藏、隐藏不丢数据与开关落盘、保存按钮位置与不关闭对话框、未检出时的就地说明、
+  **样式名带尾空格仍能正确隐藏**。
+- **`temp/test_clean_numbering_ui_smoke.py`（7 例）**：修复测试隔离
+  （清理布局测试留下的 `_ui_special_styles.json` 注入文件，否则会读到不含标题样式的
+  `file_styles_map` 而导致清理编号复选框全部不渲染）。
+- **收尾自检 `temp/_run_final_20261011.py`：17 套件 / 277 例全绿**；
+  4 个改动文件裸 LF=0、无 BOM；AST 未定义名检查通过；防呆守卫阳性对照通过。
+
+---
+
+#### 影响面与回滚
+
+- 影响面：copy_chapter 双副本样式、表格/图片兜底、样式映射对话框第 3/4 区。
+  数据库**表结构不变、无需数据迁移**：两个 skip 开关为新增可选键，
+  老配置缺键时按 `True`（= 历史行为）处理。
+- 桌面版 `desk/` 未改动；发布版 `bid-buddy-pub` 由用户自行同步。
+- 回滚：`git checkout -- doc_converter.py components/dialogs/style_mapping.py views/conversion.py state.py`
+
+**变更时间**: 2026-10-11  
+**变更人员**: AI Assistant  
+**涉及文件**: `doc_converter.py`、`components\dialogs\style_mapping.py`、`views\conversion.py`、
+`state.py`、`docs\01-业务需求文档.md`、`docs\02-系统设计文档.md`、`docs\03-Bug修复记录文档.md`  
+**审核状态**: 待用户验证  
+**部署状态**: 未提交；同步到 pub 由用户执行
+
+---
+
 ### Bug #010: 「清理编号」开关不勾选时编号仍丢失，并出现孤立编号标题
 
 **日期**: 2026-09-19  
@@ -4567,3 +4701,86 @@ stdout 上既没有 `OK` 也没有 `FAIL: xxx` → 阴性对照脚本识别不�
 **审核状态**: 待用户验证
 **部署状态**: 未提交；同步到 pub 由用户执行
 
+---
+
+## 2026-10-11（文档对齐）`docs/01` / `docs/02` 与程序实现全面对账
+
+### 背景
+
+用户要求：**「根据程序当前完整的实现，保持系统设计文档和需求文档与当前程序功能完全一致。」**
+即以**程序实际实现为唯一事实来源**，把 `docs/01-业务需求文档.md` 与
+`docs/02-系统设计文档.md` 逐项核对、修正。本次**零源码改动、零数据改动**，只改文档。
+
+### 核查方法（4 条自动化 + 抽检）
+
+1. **引用存在性**：扫出两份文档中出现的全部 `*.py/.md/.txt/.bat` 文件名，逐个回到工程核对
+   （`temp/_verify_docs_refs_20261011.py`）。
+2. **交叉引用**：扫出所有 `§X.Y[.Z]` 引用，核对是否指向文中真实存在的标题。
+3. **标题层级 / 编号自洽**：校验「标题级别 = 编号深度 + 1」，并检测同级编号重复
+   （`temp/_verify_doc_headings_20261011.py`）。
+4. **硬事实抽检**：把文档里所有可验证的事实（方法名、参数签名、默认值、阈值、版本号、
+   字段数、路由、指标口径、文案）逐个回源码 grep 核对。
+
+### 修正清单 · `docs/01-业务需求文档.md`
+
+| 位置 | 原表述 | 修正为（依据） |
+|------|--------|----------------|
+| §2.1.3 应答句 5 模式 | `before_heading` 写成「章节前插入」 | 「**标题之后、正文之前**」（`_insert_before_headings` 先 append 标题再插应答句） |
+| §2.1.3 copy_chapter | 「章节末尾插应答句 + 附原文副本」 | 结构改为「标题 → 提示语（如启用）→ **原文正文（未转换）** → 应答句 → **应答原文副本（已转换）**」（`_insert_with_copy_chapter` docstring） |
+| §2.1.3 配置项 / UI | 含「原文目标样式 / 应答原文目标样式」两个下拉 | 删除（`answer_source_style` / `answer_copy_style` 仅留兼容签名） |
+| §2.1.6 警告信息 | 统计「合并单元格表格 + OLE」 | 只统计**无法自动提取预览图的 OLE 对象**；合并单元格不再产生警告（`views/conversion.py` 按字符串 `无法自动提取预览图` 计数） |
+| §2.2.1 编号 | 2.2.1 缺失（直接从 2.2.3 起） | 补齐 §2.2.1（用户数据顺延为 §2.2.3） |
+| §2.2.3 用户数据 | users 表 **13** 字段 | **15** 字段，补 `conversion_history` / `last_claim_date`（`backend/app/models.py`） |
+| §2.2.1 兜底分支 | 「指纹退化为 md5(f"fallback_...")」 | 改为实际实现：`fallback_id = md5("temp_{id(session_state)}_{时间戳}")[:12]`，`device_fingerprint` 置空、`is_active=False` |
+| §2.3.4 维护模式 | Logo `wh.png`；「重定向到 maintenance_page」 | `resource/wh.jpg`；改为「`app.py` 内联渲染 + `st.stop()`」 |
+| §2.6 提示语配置 | 位置 / 适用模式含糊 | 明确「标题**之后**插入、仅 copy_chapter 可操作、图片按版心宽 + 原比例缩放、读取失败回退文本」 |
+| §2.7.2 列表兜底配置项 | 「符号 / 样式」表述不清 | 「列表段落（未映射）」复选框 + 原文 / 应答原文各一组「符号 / 样式」单选 |
+| §2.8 OLE | 单一「占位提示」 | 两级策略：优先提取 VML 预览图 → 失败才占位；独立 VML 形状跳过其 XML |
+| §4.3 充值流程 | 引用不存在的《订单功能清理记录.md》 | 改为直接说明数据库仅 6 张表 |
+| §5.1 数据模型 | `style_mappings` 未说明结构 | 补「文件级映射 + `_default_*` 默认集」，`_default_style_map` 为有序候选列表 |
+| §8.1 验收 | 警告「折叠展示」 | 改为「汇总单行展示」 |
+
+### 修正清单 · `docs/02-系统设计文档.md`
+
+| 位置 | 原表述 | 修正为（依据） |
+|------|--------|----------------|
+| §1.1 架构图 | 画了 `orders 表` | 改为实际 6 张表（users / conversion_tasks / system_config / comments / feedbacks / style_mappings） |
+| §1.2 技术栈 | Streamlit 1.57 | 「本地开发环境 **1.63**；`requirements.txt` 约束 **>=1.28**」 |
+| §2.1.1 目录结构 | 含不存在的 `components/config_panel.py` | 删除；补齐根目录模块（data_manager / state / config / utils / file_manager / task_manager / user_manager / comments_manager / account_manager / admin_web / ui_theme） |
+| §2.1 编号 | `## 2.4`、`## 3.3` 层级错误；`### 1.4` / `### 1.5` 与 `### 2.1` 同级；末尾重复 `## 4.` | `2.4` / `3.3` 降为 H3 并同步其子标题；API安全/初始化降级/持久化方案顺延为 `2.1.5` / `2.1.6` / `2.1.4`，其后各节顺延至 `2.1.12`；文件清理章改为 `## 9.`，子标题 `4.x→9.x` |
+| §2.1.7 账号绑定 | 方法名与 UI 位置过时 | `bind_account` / `login_account` / `unbind_account` / `is_username_taken` / `get_user_id_for_username` / `create_account_manager`；UI 在 `components/sidebar.py` |
+| §2.1.10 OLE | 单一占位描述 | 两级策略（同 01 §2.8） |
+| §2.1.12 维护模式 | 引用不存在的 `maintenance_page.py` | `app.py` 内联渲染 + `wh.jpg` + 「我会回来的！」动效 + `st.stop()` |
+| §2.2.1 后端目录 / 路由表 | 目录与端点表过时（`/api/users` 等） | 按 `backend/app/main.py` + 各 `api/*.py` 实际路由重写；注明 `users` 路由**未注册**；补 `/` 与 `/api/admin/config/init-defaults` |
+| §2.3.1 转换流程 | 三阶段描述 | 改为实际一次性流水线（含 HintInsert、copy_chapter 顺序分支）；补输出重名处理与 `actual_file` |
+| §2.3.2 特殊元素 | 「Visio 对象：完整复制到目标文档」 | OLE 两级策略 + 独立 VML 形状跳过 XML（与 §2.1.10 一致） |
+| §2.3.3 应答句引擎 | `before_heading` 伪代码、copy_chapter 伪代码、语义分组阈值 50、重试 3 次 | 标题之后插入；copy_chapter 伪代码重写（元素对象计划表）；阈值 **20**（`_is_short_paragraph`）；重试 **10** 次（`save_with_retry`） |
+| §2.4.3 样式精简 | 缺唯一实现说明与指标口径 | 补 `common.collect_template_style_names` 唯一实现、指标口径表、恒等式、`pStyle` 悬空引用风险 |
+| §3.2.1 users 表 | 13 字段 | 15 字段 |
+| §3.2.3 维护模式配置 | `wh.png` | `wh.jpg` |
+| §4.10 测试引用 | `docs/文件管理功能测试指南.md`（不存在） | `temp/test_file_management_modes.py` |
+| §9.12 警告信息 | 含 `copy_special_element` 与合并单元格统计 | 重写为只统计 OLE 预览图提取失败；单元格警告文案去掉多余的 `[WARNING] ` 前缀（源码无该前缀） |
+| §6.3.3 流水线 | 链路缺 HintInsert 与顺序分支 | 补齐链路；代码位置改为方法名，不写死行号 |
+
+### 验证结果
+
+- **文件引用**：无缺失（`comments_data.json` 是 `config.COMMENTS_FILE` 的真实数据文件；
+  `response.json` 是脚本把 `response.json()` 误当文件名的误报）。
+- **交叉引用**：全部命中真实标题（唯一「未命中」是 §2.1.4 里指向
+  `docs/01-业务需求文档.md` §6.4 的**跨文档**引用，属正常）。
+- **标题层级 / 编号自洽**：01 全通过；02 仅 §2.1.4、§2.1.6 内嵌「设计方案」子块的 1..8
+  内部编号保留原样 —— 那两块本身就是**自成一体的嵌入文档**（设计目标 / 核心原理 / 技术实现…），
+  不影响归类，故不强改。
+- **字节级**：`01-业务需求文档.md` bareLF=0 / CRLF=1477 / 无 BOM / 69629 字节；
+  `02-系统设计文档.md` bareLF=0 / CRLF=2771 / 无 BOM / 122956 字节。
+
+### 影响面与回滚
+
+- 影响面：**仅文档**。零源码改动、零数据改动、无数据库迁移需求。
+- 回滚：`git checkout -- docs/01-业务需求文档.md docs/02-系统设计文档.md`
+
+**变更时间**: 2026-10-11
+**变更人员**: AI Assistant
+**涉及文件**: `docs\01-业务需求文档.md`、`docs\02-系统设计文档.md`、`docs\03-Bug修复记录文档.md`
+**文档状态**: 待用户确认
+**部署状态**: 未提交，同步到 pub 由用户手动执行

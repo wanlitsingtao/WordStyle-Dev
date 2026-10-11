@@ -697,6 +697,7 @@ class AppState:
             'file_styles_map',
             'file_style_mappings',
             'file_paragraph_counts',
+            'file_special_styles_map',
             'conversion_summary',
             'conversion_file_results',
             'recent_results',

@@ -263,7 +263,8 @@ def render_conversion_page():
 
     if not current_source_files:
         # 已清空全部上传文件，清理源文档解析缓存，确保内存不残留旧文件的解析内容
-        for key in ('file_styles_map', 'file_paragraph_counts', 'source_styles'):
+        for key in ('file_styles_map', 'file_paragraph_counts', 'source_styles',
+                    'file_special_styles_map'):
             app_state.delete_key(key)
 
     if current_source_files:
@@ -271,6 +272,10 @@ def render_conversion_page():
         current_file_names = [sf.name for sf in current_source_files]
         analyzed_file_names = list(st.session_state.get('file_styles_map', {}).keys())
         if not analyzed_file_names or set(current_file_names) != set(analyzed_file_names):
+            need_analyze = True
+        # [2026-10-11] 缺「表格/图片专属样式」分析结果（旧会话缓存）时也重新分析，
+        # 保证第3区「不配置表格格式 / 不配置图片样式」两个复选框有数据可用。
+        if not st.session_state.get('file_special_styles_map'):
             need_analyze = True
 
         progress_bar = st.progress(0)
@@ -283,6 +288,7 @@ def render_conversion_page():
             start_time = time.time()
 
             file_styles_map = {}
+            file_special_styles_map = {}  # {文件名: {'table_only': [...], 'image_only': [...]}}
             file_paragraph_counts = {}
             total_paragraphs = 0
             total_files = len(current_source_files)
@@ -305,15 +311,24 @@ def render_conversion_page():
                 list_virtual_styles = converter_temp.get_list_virtual_styles(doc)
                 styles.update(list_virtual_styles)
 
+                # [2026-10-11] 区分纯文本段落 / 图片段落样式（供第3区「不配置图片样式」过滤）
+                from docx.oxml.ns import qn as _qn
+                text_styles = set()
+                image_styles = set()
+
                 status_text.text(f"🔍 正在分析文件 {idx}/{total_files}: {source_file.name}...")
 
                 for para_idx, para in enumerate(doc.paragraphs):
                     if para.style and para.style.name:
                         styles.add(para.style.name)
                         para_style_lower = para.style.name.lower()
+                        # [2026-10-11] 图片段落（drawing/pict）样式单列，用于「不配置图片样式」
+                        _elem = para._element
+                        _has_img = (_elem.find('.//' + _qn('w:drawing')) is not None or
+                                    _elem.find('.//' + _qn('w:pict')) is not None)
+                        (image_styles if _has_img else text_styles).add(para.style.name)
                         if not (para_style_lower.startswith('heading') or para_style_lower.startswith('head')):
-                            elem = para._element
-                            pPr = elem.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr')
+                            pPr = _elem.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr')
                             if pPr is not None:
                                 outline = pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}outlineLvl')
                                 if outline is not None:
@@ -335,6 +350,33 @@ def render_conversion_page():
                             _last_progress_ts[0] = _now
                             progress_bar.progress(min(total_progress / 100, 1.0))
 
+                # [2026-10-11] 表格内段落样式：纳入第3区可映射范围
+                #（「不配置表格格式」未勾选时这些样式行会显示出来）。
+                table_styles = set()
+
+                def _collect_table_styles(tbl, acc):
+                    for _row in tbl.rows:
+                        for _cell in _row.cells:
+                            for _p in _cell.paragraphs:
+                                if _p.style and _p.style.name:
+                                    acc.add(_p.style.name)
+                            for _nt in _cell.tables:
+                                _collect_table_styles(_nt, acc)
+
+                for _t in doc.tables:
+                    _collect_table_styles(_t, table_styles)
+
+                # 「仅表格内出现」的样式 = 表格样式 - 顶层段落样式（正文/图片段落都算顶层）
+                top_level_styles = text_styles | image_styles
+                table_only = table_styles - top_level_styles
+                # 「仅图片段落使用」的样式 = 图片段落样式 - 纯文本段落样式
+                image_only = image_styles - text_styles
+                styles.update(table_only)
+
+                file_special_styles_map[source_file.name] = {
+                    'table_only': sorted(table_only),
+                    'image_only': sorted(image_only),
+                }
                 file_styles_map[source_file.name] = sorted(list(styles))
                 if current_file_total == 0:
                     progress_bar.progress(min(idx * (100 / total_files) / 100, 1.0))
@@ -345,6 +387,7 @@ def render_conversion_page():
 
             app_state.set_file_styles_map(file_styles_map)
             app_state.set_file_paragraph_counts(file_paragraph_counts)
+            st.session_state.file_special_styles_map = file_special_styles_map
 
             all_styles = set()
             for styles in file_styles_map.values():
@@ -681,8 +724,18 @@ def render_conversion_page():
                     _file_answer_text = _file_answer_cfg['answer_text']
                     _file_answer_style = _file_answer_cfg['answer_style']
                     _file_answer_mode = _file_answer_cfg['answer_mode']
-                    _file_answer_source_style = _file_answer_cfg['answer_source_style']
-                    _file_answer_copy_style = _file_answer_cfg['answer_copy_style']
+                    # [2026-10-11] answer_source_style / answer_copy_style 已随
+                    # 第 2 区两个下拉删除而废弃，不再传给转换引擎。
+
+                    # [2026-10-11] 「不配置表格格式 / 不配置图片样式」：文件级 → 默认集 → 默认勾选
+                    _file_skip_table = file_mapping_data.get('_skip_table_mapping')
+                    if _file_skip_table is None:
+                        _file_skip_table = st.session_state.file_style_mappings.get(
+                            '_default_skip_table_mapping', True)
+                    _file_skip_image = file_mapping_data.get('_skip_image_mapping')
+                    if _file_skip_image is None:
+                        _file_skip_image = st.session_state.file_style_mappings.get(
+                            '_default_skip_image_mapping', True)
 
                     _file_do_mood = bool(file_mood_config.get('do_mood',
                                         st.session_state.get('do_mood_config', True)))
@@ -734,8 +787,6 @@ def render_conversion_page():
                         do_mood=_file_do_mood,
                         answer_text=_file_answer_text,
                         answer_style=_file_answer_style,
-                        answer_source_style=_file_answer_source_style,
-                        answer_copy_style=_file_answer_copy_style,
                         table_answer_style=file_table_answer_style,
                         list_bullet=_list_bullet,
                         list_method=_list_method,
@@ -760,6 +811,8 @@ def render_conversion_page():
                         remove_chapter_label=file_remove_chapter_label,
                         enable_list_style=_enable_list_style,
                         clean_numbering_map=file_clean_numbering,
+                        skip_table_mapping=_file_skip_table,
+                        skip_image_mapping=_file_skip_image,
                     )
 
                     if success:

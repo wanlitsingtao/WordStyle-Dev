@@ -1921,7 +1921,48 @@ class DocumentConverter:
         if resolved:
             return resolved
         return DEFAULT_TARGET
-    
+
+    # ==================== 第3区映射工具（2026-10-11） ====================
+    # copy_chapter 模式下副本样式完全由样式映射对话框第 3 区决定：
+    # 「已映射」= 该段落在第 3 区有对应键（真实样式名 / 列表虚拟名），
+    # 已映射则兜底（列表/表格/图片）不介入；未映射才走第 4 区兜底。
+    def _region3_lookup(self, key, template_doc):
+        """按第3区映射解析 key 的目标样式名；未配置返回 None。
+
+        值兼容旧字符串与候选列表；候选含格式快照名时原样返回
+        （与 get_target_style 第一阶段同口径）。
+        """
+        region3 = getattr(self, '_region3_map', None)
+        if not isinstance(region3, dict) or key not in region3:
+            return None
+        cands = as_style_candidates(region3.get(key))
+        if not cands:
+            return None
+        for cand in cands:
+            if self.is_format_snapshot(cand):
+                return cand
+            resolved = self.resolve_template_style(cand, template_doc)
+            if resolved:
+                return resolved
+        return cands[0]
+
+    def _region3_mapped(self, keys):
+        """keys 中任一键在第3区映射里即视为已映射。"""
+        region3 = getattr(self, '_region3_map', None)
+        if not isinstance(region3, dict) or not region3:
+            return False
+        return any(k in region3 for k in keys if k)
+
+    def _region3_answer_target(self, keys, template_doc):
+        """按顺序查 `answer_<键>`，返回第一个命中的目标样式名；都没有返回 None。"""
+        for k in keys:
+            if not k:
+                continue
+            target = self._region3_lookup(f"answer_{k}", template_doc)
+            if target:
+                return target
+        return None
+
     def get_image_size(self, image_bytes):
         """获取图片尺寸"""
         if not PIL_AVAILABLE:
@@ -2252,7 +2293,8 @@ class DocumentConverter:
                                    warning_callback=None, image_style_override=None, enable_image_style=False,
                                    remove_chapter_label=False,
                                    list_method='bullet', list_style='Body Text',
-                                   enable_list_style=True, resolved_numbering_text=None):
+                                   enable_list_style=True, resolved_numbering_text=None,
+                                   region3_mapped=False):
         """复制段落（包含图片、Visio图、OLE对象等）
         :param warning_callback: 警告回调函数 callback(message)
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
@@ -2261,6 +2303,8 @@ class DocumentConverter:
         :param list_method: 列表段落处理方式 'bullet'（符号）或 'style'（样式）
         :param list_style: 列表段落兜底样式名（当list_method='style'时使用）
         :param enable_list_style: 是否启用列表样式处理
+        :param region3_mapped: 该段落样式已在第3区映射（图片兜底仅对未映射段落生效，
+                               除非勾选了「不配置图片样式」——历史行为：图片强制走兜底）
         """
         # 调试：检查大纲级别
         # [修复] 必须传入 doc，才能读取「样式定义里的 outlineLvl」——
@@ -2326,8 +2370,11 @@ class DocumentConverter:
         # 文本内容保持原位置。不 deepcopy OLE 的 XML（rId 在新文档中无效，会导致文档损坏）。
         if has_ole_objects or has_vml_shapes:
             # 创建新段落，设置目标样式（OLE 图片段落使用图片兜底样式）
+            # [2026-10-11] 图片兜底降级：仅当「不配置图片样式」勾选（历史行为）
+            # 或该段落样式未在第3区映射时才覆盖。
             ole_para_style = target_style_name
-            if enable_image_style and image_style_override:
+            if enable_image_style and image_style_override and (
+                    getattr(self, '_r3_skip_image', True) or not region3_mapped):
                 try:
                     target_doc.styles[image_style_override]
                     ole_para_style = image_style_override
@@ -2466,10 +2513,12 @@ class DocumentConverter:
                         final_style = DEFAULT_TARGET
         else:
             if has_image:
-                # 图片段落样式：不受样式映射影响，只按单独的图片样式定义处理
-                # 1. enable_image_style=True → 使用image_style_override指定的样式
-                # 2. 未启用 → 保留源样式名（模板中存在则用，否则DEFAULT_TARGET）
-                if enable_image_style and image_style_override:
+                # 图片段落样式 [2026-10-11] 第3区优先：
+                # - 「不配置图片样式」勾选（默认，历史行为）或该段落样式未在第3区映射
+                #   → 走第4区图片兜底样式（enable_image_style + image_style_override）；
+                # - 已在第3区映射 → 直接用第3区映射结果（target_style_name）。
+                if enable_image_style and image_style_override and (
+                        getattr(self, '_r3_skip_image', True) or not region3_mapped):
                     # 级别1：复选框选中，使用覆盖样式
                     # （命中格式快照时跳过存在性检查：快照名不是文档里真实存在的样式）
                     final_style = image_style_override
@@ -2479,12 +2528,8 @@ class DocumentConverter:
                         except KeyError:
                             final_style = DEFAULT_TARGET
                 else:
-                    # 级别2：保留源样式名
-                    try:
-                        target_doc.styles[src_style_name]
-                        final_style = src_style_name
-                    except KeyError:
-                        final_style = DEFAULT_TARGET
+                    # 第3区映射结果（未映射时 get_target_style 已回退到模板同名/DEFAULT_TARGET）
+                    final_style = target_style_name
             else:
                 final_style = target_style_name
         
@@ -2766,10 +2811,22 @@ class DocumentConverter:
                            available_width_emu, warning_callback=None,
                            table_style_override=None, enable_table_style=False):
         """复制单个单元格内容（段落文本、图片、OLE/VML 对象）。
-        
-        样式决策保持与原来一致：表格内段落只按表格样式定义处理，不参与正文样式映射。
+
+        样式决策 [2026-10-11] 第3区优先：
+        - 「不配置表格格式」未勾选 且 该段落样式在第3区已映射 → 用第3区映射目标；
+        - 否则保持与原来一致：表格内段落只按表格样式定义处理，不参与正文样式映射
+          （enable_table_style + table_style_override → 模板同名 → DEFAULT_TARGET）。
+        同时按 w:p 元素记录应答副本计划（self._tbl_para_plans[table_idx]，键为元素
+        对象本身，Python 侧持强引用以保证身份稳定），
+        供 copy_chapter 模式生成表格的应答原文副本时使用。
         """
         def _get_table_para_style(src_style_name):
+            # [2026-10-11] 第3区映射优先（「不配置表格格式」未勾选且已映射时）
+            if not getattr(self, '_r3_skip_table', True):
+                if self._region3_mapped([src_style_name]):
+                    mapped = self._region3_lookup(src_style_name, target_doc)
+                    if mapped:
+                        return mapped
             if enable_table_style and table_style_override:
                 if self.is_format_snapshot(table_style_override):
                     return table_style_override   # 格式快照：真实样式与直接格式稍后统一落地
@@ -2784,14 +2841,28 @@ class DocumentConverter:
                     return src_style_name
                 except KeyError:
                     return DEFAULT_TARGET
-        
+
         # 清空单元格内容
         new_cell._element.clear_content()
-        
+
+        # [2026-10-11] 本表格的逐段应答计划容器（copy_chapter 模式用）
+        _tbl_plans = (self._tbl_para_plans[table_idx]
+                      if table_idx < len(getattr(self, '_tbl_para_plans', [])) else None)
+
         for para in source_cell.paragraphs:
             new_para = new_cell.add_paragraph()
             src_para_style = para.style.name
             self.set_paragraph_style(new_para, _get_table_para_style(src_para_style), target_doc)
+            if _tbl_plans is not None:
+                _mapped = self._region3_mapped([src_para_style])
+                # ⚠️ 键必须是**元素对象本身**，不能用 id()：
+                # lxml 的 Python 代理对象在无强引用时会被回收，之后 iter() 会生成
+                # 新代理、id 变化，导致查找失效（实测踩坑）。用元素作键既保持身份
+                # 稳定（dict 键持强引用），又天然免疫代理回收。
+                _tbl_plans[new_para._element] = {
+                    'mapped': _mapped,
+                    'answer': self._region3_answer_target([src_para_style], target_doc),
+                }
             
             if self.has_numbering(para):
                 new_para.add_run(self.list_bullet)
@@ -3757,44 +3828,71 @@ class DocumentConverter:
         :return: (insert_count, total_heading_count)
         """
         from copy import deepcopy as deep_copy
-        
+
         insert_count = 0
         total_heading_count = 0
         bookmark_id = 0  # 书签 ID 计数器
-        
-        # 创建 source_template（原文样式模板）
-        source_template = deep_copy(answer_template)
-        if answer_source_style:
-            try:
-                src_style = doc.styles[answer_source_style]
-                source_pPr = source_template.find(qn('w:pPr'))
-                if source_pPr is None:
-                    source_pPr = OxmlElement('w:pPr')
-                    source_template.insert(0, source_pPr)
-                source_pStyle = source_pPr.find(qn('w:pStyle'))
-                if source_pStyle is None:
-                    source_pStyle = OxmlElement('w:pStyle')
-                    source_pPr.append(source_pStyle)
-                source_pStyle.set(qn('w:val'), src_style.style_id)
-            except Exception:
-                pass
-        
-        # 创建 copy_template（应答原文副本样式模板）
-        copy_template = deep_copy(answer_template)
-        if answer_copy_style:
-            try:
-                copy_style = doc.styles[answer_copy_style]
-                copy_pPr = copy_template.find(qn('w:pPr'))
-                if copy_pPr is None:
-                    copy_pPr = OxmlElement('w:pPr')
-                    copy_template.insert(0, copy_pPr)
-                copy_pStyle = copy_pPr.find(qn('w:pStyle'))
-                if copy_pStyle is None:
-                    copy_pStyle = OxmlElement('w:pStyle')
-                    copy_pPr.append(copy_pStyle)
-                copy_pStyle.set(qn('w:val'), copy_style.style_id)
-            except Exception:
-                pass
+
+        # [2026-10-11] 第3区成为副本样式的唯一权威（原 source_template / copy_template
+        # 统一模板已删除，answer_source_style / answer_copy_style 参数仅保留兼容签名）：
+        # - 原文副本：deep_copy 转换后的段落，保留第3区「原文目标样式」列映射结果；
+        # - 应答原文副本：deep_copy 后查第3区「应答目标样式」（answer_ 键）改样式；
+        # - 列表/表格/图片兜底仅在「未映射」或对应 skip 复选框勾选时生效。
+        # ⚠️ 计划一律**按元素对象键控**，绝不用「出现顺序计数」：
+        # 模板清空后残留一个空段落、提示语插入也会新增元素，任何位置计数都会整体错位
+        # （实测踩坑：图片段落被误判为「未映射」而错误套上图片兜底）。
+        # 元素对象作键 = 与真实元素一一对应，且 dict 键持强引用，lxml 代理身份稳定。
+        _para_plans_by_elem = getattr(self, '_region3_para_plans', {})
+        _tbl_plans_by_elem = getattr(self, '_region3_tbl_plans', {})
+        _r3_skip_image = getattr(self, '_r3_skip_image', True)
+        _r3_skip_table = getattr(self, '_r3_skip_table', True)
+
+        def _para_plan_of(elem):
+            """取顶层段落的第3区计划；未记录（模板残留 / 新增元素）→ (False, None)。"""
+            plan = _para_plans_by_elem.get(elem)
+            if not plan:
+                return False, None
+            return bool(plan.get('mapped')), plan.get('answer')
+
+        def _elem_has_img(elem):
+            return (elem.find('.//' + qn('w:drawing')) is not None or
+                    elem.find('.//' + qn('w:pict')) is not None or
+                    elem.find('.//' + qn('pic:pic')) is not None or
+                    elem.find('.//' + qn('wp:inline')) is not None or
+                    elem.find('.//' + qn('wp:anchor')) is not None)
+
+        def _table_answer_copy(orig_tbl, tbl_plans):
+            """生成表格的应答原文副本：第3区逐单元格优先，未映射才落表格应答兜底。
+
+            tbl_plans = 转换阶段记录的本表格逐段计划 {w:p元素: {'mapped','answer'}}
+            （已按元素对象键控，直接查表即可，不依赖任何顺序假设）。
+            """
+            source_elem = deep_copy(orig_tbl)
+            tbl_plans = tbl_plans if isinstance(tbl_plans, dict) else {}
+            if _r3_skip_table:
+                # 历史行为（「不配置表格格式」勾选）：统一表格应答目标样式
+                tbl_style_id = (self.get_style_id_by_name(doc, table_answer_style)
+                                if table_answer_style else None)
+                if tbl_style_id:
+                    for p_elem in source_elem.iter(qn('w:p')):
+                        _apply_paragraph_style(p_elem, tbl_style_id)
+            else:
+                fallback_sid = (self.get_style_id_by_name(doc, table_answer_style)
+                                if table_answer_style else None)
+                for orig_p, new_p in zip(orig_tbl.iter(qn('w:p')),
+                                         source_elem.iter(qn('w:p'))):
+                    plan = tbl_plans.get(orig_p)
+                    if plan is not None:
+                        if plan.get('answer'):
+                            sid = self.get_style_id_by_name(doc, plan['answer'])
+                            if sid:
+                                _apply_paragraph_style(new_p, sid)
+                                continue
+                        if plan.get('mapped'):
+                            continue  # 已映射：保持第3区映射后的样式
+                    if fallback_sid:
+                        _apply_paragraph_style(new_p, fallback_sid)
+            return source_elem
         
         def is_heading(elem):
             """判断元素是否为标题段落"""
@@ -3842,16 +3940,28 @@ class DocumentConverter:
         current_chapter_heading = None
         # 章节内容缓冲区：保存当前章节内的非提示语元素，用于生成第二份副本
         chapter_buffer = []
-        
+        # [2026-10-11] 与 chapter_buffer 对齐的第3区计划：
+        #   段落 → (mapped, answer_target)；表格 → ('__table__', 表格序号)；其他 → None
+        chapter_plans = []
+
         i = 0
         while i < len(children):
             child = children[i]
-            
+
             # 安全检查：非 XML 元素直接输出
             if not hasattr(child, 'tag'):
                 new_children.append(child)
                 i += 1
                 continue
+
+            # [2026-10-11] 顶层段落/表格的第3区计划：按元素对象查表。
+            # 提示语段落是插入应答句阶段新加的，不在转换阶段记录的计划内。
+            _child_plan = None
+            if child.tag == qn('w:p'):
+                if not self._is_hint_paragraph(child):
+                    _child_plan = _para_plan_of(child)
+            elif child.tag == qn('w:tbl'):
+                _child_plan = ('__table__', _tbl_plans_by_elem.get(child))
             
             # 遇到标题：先刷新前一个章节，再输出当前标题
             if is_heading(child):
@@ -3864,86 +3974,61 @@ class DocumentConverter:
                         answer_elem = deep_copy(answer_template)
                         new_children.append(answer_elem)
                         insert_count += 1
-                        
-                        # 复制应答原文副本（用 copy_template 样式，对应应答原文格式），跳过提示语
-                        for elem in chapter_buffer:
+
+                        # 复制应答原文副本（第3区「应答目标样式」列决定样式），跳过提示语
+                        for _bi, elem in enumerate(chapter_buffer):
                             if self._is_hint_paragraph(elem):
                                 continue
-                            # 表格元素：深拷贝原始表格，并将所有段落的样式改为 table_answer_style（优先）或 answer_copy_style
+                            _plan = chapter_plans[_bi] if _bi < len(chapter_plans) else None
+                            # 表格元素：deep_copy + 第3区逐单元格优先 / 表格应答兜底
                             if elem.tag == qn('w:tbl'):
-                                source_elem = deep_copy(elem)
-                                tbl_style_id = None
-                                if table_answer_style:
-                                    tbl_style_id = self.get_style_id_by_name(doc, table_answer_style)
-                                if not tbl_style_id:
-                                    _copy_sid = self.get_style_id_by_name(doc, answer_copy_style) if answer_copy_style else None
-                                    if not _copy_sid:
-                                        _copy_sid = self.get_style_id(copy_template) if hasattr(self, 'get_style_id') else None
-                                    tbl_style_id = _copy_sid
-                                if tbl_style_id:
-                                    for p_elem in source_elem.iter(qn('w:p')):
-                                        pPr = p_elem.find(qn('w:pPr'))
-                                        if pPr is None:
-                                            pPr = OxmlElement('w:pPr')
-                                            p_elem.insert(0, pPr)
-                                        pStyle = pPr.find(qn('w:pStyle'))
-                                        if pStyle is None:
-                                            pStyle = OxmlElement('w:pStyle')
-                                            pPr.append(pStyle)
-                                        pStyle.set(qn('w:val'), tbl_style_id)
-                                new_children.append(source_elem)
+                                _tplans = (_plan[1] if (isinstance(_plan, tuple)
+                                                        and _plan[0] == '__table__') else None)
+                                new_children.append(_table_answer_copy(elem, _tplans))
                                 continue
-                            # 列表段落用 deepcopy(elem) 保留原始列表结构
+                            _mapped, _ans = (_plan if isinstance(_plan, tuple) else (False, None))
+                            # 列表段落：deep_copy 保留列表结构
                             if DocumentConverter._elem_has_numbering(elem, doc):
                                 source_elem = deep_copy(elem)
                                 remove_keep_original_from_element(source_elem)
-                                if list_answer_method == 'style' and list_answer_style:
+                                if _mapped:
+                                    # 已映射：应答列有配置则改样式，否则保持第3区映射结果
+                                    if _ans:
+                                        _sid = self.get_style_id_by_name(doc, _ans)
+                                        if _sid:
+                                            _apply_paragraph_style(source_elem, _sid)
+                                elif list_answer_method == 'style' and list_answer_style:
+                                    # 未映射：走列表应答兜底
                                     list_sid = self.get_style_id_by_name(doc, list_answer_style)
                                     if list_sid:
                                         _apply_paragraph_style(source_elem, list_sid)
                                 new_children.append(source_elem)
                             else:
-                                # ★ 修复：OLE占位段落应用图片兜底样式
+                                # 普通段落 / OLE占位：deep_copy + 第3区应答列；
+                                # 图片兜底仅在未映射或勾选「不配置图片样式」时生效
                                 is_ole_placeholder = self._is_ole_placeholder_paragraph(elem)
-                                if is_ole_placeholder and enable_image_style and image_style_override:
+                                source_elem = deep_copy(elem)
+                                remove_keep_original_from_element(source_elem)
+                                if is_ole_placeholder and enable_image_style and image_style_override and (
+                                        _r3_skip_image or not _mapped):
                                     img_sid = self.get_style_id_by_name(doc, image_style_override)
                                     if img_sid:
-                                        source_elem = deep_copy(elem)
                                         _apply_paragraph_style(source_elem, img_sid)
-                                        remove_keep_original_from_element(source_elem)
-                                    else:
-                                        source_elem = deep_copy(copy_template)
-                                        source_runs = source_elem.findall('.//' + qn('w:r'))
-                                        orig_runs = elem.findall('.//' + qn('w:r'))
-                                        for r in source_runs:
-                                            source_elem.remove(r)
-                                        for r in orig_runs:
-                                            source_elem.append(deep_copy(r))
-                                        remove_keep_original_from_element(source_elem)
                                 else:
-                                    # 用 copy_template 替换内容，保持应答原文副本样式（answer_copy_style）
-                                    source_elem = deep_copy(copy_template)
-                                    source_runs = source_elem.findall('.//' + qn('w:r'))
-                                    orig_runs = elem.findall('.//' + qn('w:r'))
-                                    for r in source_runs:
-                                        source_elem.remove(r)
-                                    for r in orig_runs:
-                                        source_elem.append(deep_copy(r))
-                                    remove_keep_original_from_element(source_elem)
-                                    # 应答原文副本图片段落应用图片兜底样式
-                                    if enable_image_style and image_style_override:
-                                        has_img = (elem.find('.//' + qn('w:drawing')) is not None or
-                                                   elem.find('.//' + qn('w:pict')) is not None or
-                                                   elem.find('.//' + qn('pic:pic')) is not None or
-                                                   elem.find('.//' + qn('wp:inline')) is not None or
-                                                   elem.find('.//' + qn('wp:anchor')) is not None)
-                                        if has_img:
+                                    if _ans:
+                                        _sid = self.get_style_id_by_name(doc, _ans)
+                                        if _sid:
+                                            _apply_paragraph_style(source_elem, _sid)
+                                    if enable_image_style and image_style_override and (
+                                            _r3_skip_image or not _mapped):
+                                        if _elem_has_img(elem):
                                             img_sid = self.get_style_id_by_name(doc, image_style_override)
                                             if img_sid:
                                                 _apply_paragraph_style(source_elem, img_sid)
                                 new_children.append(source_elem)
-                
+
                 chapter_buffer.clear()
+                chapter_plans.clear()
                 new_children.append(child)
                 current_chapter_heading = i
                 total_heading_count += 1
@@ -3956,17 +4041,16 @@ class DocumentConverter:
                 if self._is_hint_paragraph(child):
                     new_children.append(child)
                 else:
-                    # 用 source_template 替换内容，应用原文格式（answer_source_style）
+                    _mapped, _ans = (_child_plan if isinstance(_child_plan, tuple) else (False, None))
+                    # [2026-10-11] 原文副本：deep_copy 保留第3区映射结果，不再套统一模板
                     if child.tag == qn('w:p'):
-                        child_pPr = child.find(qn('w:pPr'))
-                        child_numPr = child_pPr.find(qn('w:numPr')) if child_pPr is not None else None
-                        
                         _pStyle_val = None
+                        child_pPr = child.find(qn('w:pPr'))
                         if child_pPr is not None:
                             _pStyle_elem = child_pPr.find(qn('w:pStyle'))
                             if _pStyle_elem is not None:
                                 _pStyle_val = _pStyle_elem.get(qn('w:val'))
-                        
+
                         # 标题段落（包括带编号的标题）不视为列表段落
                         if _pStyle_val and self.is_heading_paragraph(child, doc):
                             _is_list_para = False
@@ -3980,18 +4064,21 @@ class DocumentConverter:
                                         _list_sid = self.get_style_id_by_name(doc, list_style)
                                         if _list_sid and _pStyle_val == _list_sid:
                                             _is_list_para = True
-                        
+
+                        source_elem = deep_copy(child)
+                        bookmark_start = OxmlElement('w:bookmarkStart')
+                        bookmark_start.set(qn('w:id'), str(bookmark_id))
+                        bookmark_start.set(qn('w:name'), '_keepOriginal_')
+                        source_elem.insert(0, bookmark_start)
+                        bookmark_end = OxmlElement('w:bookmarkEnd')
+                        bookmark_end.set(qn('w:id'), str(bookmark_id))
+                        source_elem.append(bookmark_end)
+                        bookmark_id += 1
+
                         if _is_list_para and enable_list_style:
-                            source_elem = deep_copy(child)
-                            bookmark_start = OxmlElement('w:bookmarkStart')
-                            bookmark_start.set(qn('w:id'), str(bookmark_id))
-                            bookmark_start.set(qn('w:name'), '_keepOriginal_')
-                            source_elem.insert(0, bookmark_start)
-                            bookmark_end = OxmlElement('w:bookmarkEnd')
-                            bookmark_end.set(qn('w:id'), str(bookmark_id))
-                            source_elem.append(bookmark_end)
-                            bookmark_id += 1
-                            if list_method == 'style' and list_style:
+                            # 列表段落：已映射则保留第3区映射结果（兜底不介入）；
+                            # 未映射才应用列表兜底样式
+                            if (not _mapped) and list_method == 'style' and list_style:
                                 list_sid = self.get_style_id_by_name(doc, list_style)
                                 if list_sid:
                                     _apply_paragraph_style(source_elem, list_sid)
@@ -4001,93 +4088,26 @@ class DocumentConverter:
                                         self.remove_auto_numbering(source_elem)
                                 except Exception:
                                     pass
-                            if enable_image_style and image_style_override:
-                                has_img = (child.find('.//' + qn('w:drawing')) is not None or
-                                           child.find('.//' + qn('w:pict')) is not None or
-                                           child.find('.//' + qn('pic:pic')) is not None or
-                                           child.find('.//' + qn('wp:inline')) is not None or
-                                           child.find('.//' + qn('wp:anchor')) is not None)
-                                if has_img:
-                                    img_sid = self.get_style_id_by_name(doc, image_style_override)
-                                    if img_sid:
-                                        _apply_paragraph_style(source_elem, img_sid)
-                            new_children.append(source_elem)
-                            chapter_buffer.append(source_elem)
-                            i += 1
-                            continue
-                        
-                        # ★ 修复：OLE占位段落使用图片兜底样式，而非source_template样式
-                        is_ole_ph = self._is_ole_placeholder_paragraph(child)
-                        if is_ole_ph and enable_image_style and image_style_override:
-                            img_sid = self.get_style_id_by_name(doc, image_style_override)
-                            if img_sid:
-                                source_elem = deep_copy(child)
-                                _apply_paragraph_style(source_elem, img_sid)
-                            else:
-                                source_elem = deep_copy(source_template)
-                                source_runs = source_elem.findall('.//' + qn('w:r'))
-                                orig_runs = child.findall('.//' + qn('w:r'))
-                                for r in source_runs:
-                                    source_elem.remove(r)
-                                for r in orig_runs:
-                                    source_elem.append(deep_copy(r))
-                        else:
-                            source_elem = deep_copy(source_template)
-                            source_runs = source_elem.findall('.//' + qn('w:r'))
-                            orig_runs = child.findall('.//' + qn('w:r'))
-                            for r in source_runs:
-                                source_elem.remove(r)
-                            for r in orig_runs:
-                                source_elem.append(deep_copy(r))
-                        bookmark_start = OxmlElement('w:bookmarkStart')
-                        bookmark_start.set(qn('w:id'), str(bookmark_id))
-                        bookmark_start.set(qn('w:name'), '_keepOriginal_')
-                        source_elem.insert(0, bookmark_start)
-                        bookmark_end = OxmlElement('w:bookmarkEnd')
-                        bookmark_end.set(qn('w:id'), str(bookmark_id))
-                        source_elem.append(bookmark_end)
-                        bookmark_id += 1
-                        # 检查是否有 numPr（列表编号），如果有则在 source_elem 中处理
-                        if child_numPr is not None:
-                            _style_has_numPr = False
-                            if list_method == 'style' and list_style:
-                                try:
-                                    _style_xml = doc.styles[list_style]._element.xml
-                                    if '<w:numPr>' in _style_xml or '<w:numPr ' in _style_xml:
-                                        _style_has_numPr = True
-                                except Exception:
-                                    pass
-                            if not _style_has_numPr:
-                                src_pPr2 = source_elem.find(qn('w:pPr'))
-                                if src_pPr2 is not None:
-                                    old_numPr = src_pPr2.find(qn('w:numPr'))
-                                    if old_numPr is not None:
-                                        src_pPr2.remove(old_numPr)
-                            else:
-                                src_pPr = source_elem.find(qn('w:pPr'))
-                                if src_pPr is None:
-                                    src_pPr = OxmlElement('w:pPr')
-                                    source_elem.insert(0, src_pPr)
-                                src_numPr = src_pPr.find(qn('w:numPr'))
-                                if src_numPr is None:
-                                    src_numPr = deep_copy(child_numPr)
-                                    src_pPr.append(src_numPr)
-                        if child_numPr is not None and list_method == 'style' and list_style and _is_list_para:
-                            list_sid = self.get_style_id_by_name(doc, list_style)
-                            if list_sid:
-                                _apply_paragraph_style(source_elem, list_sid)
-                        if enable_image_style and image_style_override:
-                            has_img = (child.find('.//' + qn('w:drawing')) is not None or
-                                       child.find('.//' + qn('w:pict')) is not None or
-                                       child.find('.//' + qn('pic:pic')) is not None or
-                                       child.find('.//' + qn('wp:inline')) is not None or
-                                       child.find('.//' + qn('wp:anchor')) is not None)
-                            if has_img:
+                        elif not _is_list_para:
+                            # OLE占位段落：图片兜底降级（未映射或勾选「不配置图片样式」才覆盖）
+                            is_ole_ph = self._is_ole_placeholder_paragraph(child)
+                            if is_ole_ph and enable_image_style and image_style_override and (
+                                    _r3_skip_image or not _mapped):
                                 img_sid = self.get_style_id_by_name(doc, image_style_override)
                                 if img_sid:
                                     _apply_paragraph_style(source_elem, img_sid)
+
+                        # 图片段落：同上降级规则（已映射且未勾选 skip → 保留第3区映射结果）
+                        if enable_image_style and image_style_override and (
+                                _r3_skip_image or not _mapped):
+                            if _elem_has_img(child):
+                                img_sid = self.get_style_id_by_name(doc, image_style_override)
+                                if img_sid:
+                                    _apply_paragraph_style(source_elem, img_sid)
+
                         new_children.append(source_elem)
                         chapter_buffer.append(source_elem)
+                        chapter_plans.append(_child_plan)
                     else:
                         # 表格等非段落元素：需要给原文副本的表格添加 keepOriginal 保护，
                         # 避免语气转换时把表格中的"投标人"转为"本投标人"
@@ -4099,6 +4119,7 @@ class DocumentConverter:
                         else:
                             new_children.append(child)
                             chapter_buffer.append(child)
+                        chapter_plans.append(_child_plan)
             else:
                 # 不在任何章节内（文档开头无标题），直接输出
                 new_children.append(child)
@@ -4113,98 +4134,57 @@ class DocumentConverter:
                 answer_elem = deep_copy(answer_template)
                 new_children.append(answer_elem)
                 insert_count += 1
-                
-                # 复制第二份副本（应答原文，用 copy_template 样式），跳过提示语
-                for elem in chapter_buffer:
+
+                # 复制第二份副本（应答原文，第3区「应答目标样式」列决定样式），跳过提示语
+                # [2026-10-11] 与章节中段的刷新逻辑保持一致（deep_copy 保留结构与编号）。
+                for _bi, elem in enumerate(chapter_buffer):
                     if self._is_hint_paragraph(elem):
                         continue
+                    _plan = chapter_plans[_bi] if _bi < len(chapter_plans) else None
                     if elem.tag == qn('w:tbl'):
-                        source_elem = deep_copy(elem)
-                        tbl_style_id = None
-                        if table_answer_style:
-                            tbl_style_id = self.get_style_id_by_name(doc, table_answer_style)
-                        if not tbl_style_id:
-                            _sid = self.get_style_id_by_name(doc, answer_copy_style) if answer_copy_style else None
-                            tbl_style_id = _sid
-                        if tbl_style_id:
-                            for p_elem in source_elem.iter(qn('w:p')):
-                                pPr = p_elem.find(qn('w:pPr'))
-                                if pPr is None:
-                                    pPr = OxmlElement('w:pPr')
-                                    p_elem.insert(0, pPr)
-                                pStyle = pPr.find(qn('w:pStyle'))
-                                if pStyle is None:
-                                    pStyle = OxmlElement('w:pStyle')
-                                    pPr.append(pStyle)
-                                pStyle.set(qn('w:val'), tbl_style_id)
-                        new_children.append(source_elem)
+                        _tplans = (_plan[1] if (isinstance(_plan, tuple)
+                                                and _plan[0] == '__table__') else None)
+                        new_children.append(_table_answer_copy(elem, _tplans))
                         continue
-                    _has_numpr = DocumentConverter._elem_has_numbering(elem, doc)
-                    _has_list_style = False
-                    _is_style_match = False
-                    if not _has_numpr:
-                        _pPr_el = elem.find(qn('w:pPr'))
-                        if _pPr_el is not None:
-                            _pS_el = _pPr_el.find(qn('w:pStyle'))
-                            if _pS_el is not None:
-                                _ps_val = _pS_el.get(qn('w:val'))
-                                if _ps_val and '列表段落' in str(_ps_val):
-                                    _has_list_style = True
-                                if not _has_list_style and _ps_val and list_answer_method == 'style' and list_answer_style:
-                                    _ans_sid = self.get_style_id_by_name(doc, list_answer_style)
-                                    if _ans_sid and _ps_val == _ans_sid:
-                                        _is_style_match = True
-                    is_list_para = ((_has_numpr or _has_list_style or _is_style_match) and 
-                                    list_answer_method == 'style' and 
-                                    list_answer_style)
-                    if is_list_para:
-                        list_sid = self.get_style_id_by_name(doc, list_answer_style)
-                        if list_sid:
-                            source_elem = deep_copy(elem)
-                            _apply_paragraph_style(source_elem, list_sid)
-                            remove_keep_original_from_element(source_elem)
-                            new_children.append(source_elem)
+                    _mapped, _ans = (_plan if isinstance(_plan, tuple) else (False, None))
+                    if DocumentConverter._elem_has_numbering(elem, doc):
+                        # 列表段落：deep_copy 保留列表结构；已映射则不用兜底
+                        source_elem = deep_copy(elem)
+                        remove_keep_original_from_element(source_elem)
+                        if _mapped:
+                            if _ans:
+                                _sid = self.get_style_id_by_name(doc, _ans)
+                                if _sid:
+                                    _apply_paragraph_style(source_elem, _sid)
+                        elif list_answer_method == 'style' and list_answer_style:
+                            list_sid = self.get_style_id_by_name(doc, list_answer_style)
+                            if list_sid:
+                                _apply_paragraph_style(source_elem, list_sid)
+                        new_children.append(source_elem)
+                    else:
+                        # 普通段落 / OLE占位：deep_copy + 第3区应答列；
+                        # 图片兜底仅在未映射或勾选「不配置图片样式」时生效
+                        is_ole_placeholder = self._is_ole_placeholder_paragraph(elem)
+                        source_elem = deep_copy(elem)
+                        remove_keep_original_from_element(source_elem)
+                        if is_ole_placeholder and enable_image_style and image_style_override and (
+                                _r3_skip_image or not _mapped):
+                            img_sid = self.get_style_id_by_name(doc, image_style_override)
+                            if img_sid:
+                                _apply_paragraph_style(source_elem, img_sid)
                         else:
-                            source_elem = deep_copy(copy_template)
-                            source_runs = source_elem.findall('.//' + qn('w:r'))
-                            orig_runs = elem.findall('.//' + qn('w:r'))
-                            for r in source_runs:
-                                source_elem.remove(r)
-                            for r in orig_runs:
-                                source_elem.append(deep_copy(r))
-                            remove_keep_original_from_element(source_elem)
-                            if enable_image_style and image_style_override:
-                                has_img = (elem.find('.//' + qn('w:drawing')) is not None or
-                                           elem.find('.//' + qn('w:pict')) is not None or
-                                           elem.find('.//' + qn('pic:pic')) is not None or
-                                           elem.find('.//' + qn('wp:inline')) is not None or
-                                           elem.find('.//' + qn('wp:anchor')) is not None)
-                                if has_img:
+                            if _ans:
+                                _sid = self.get_style_id_by_name(doc, _ans)
+                                if _sid:
+                                    _apply_paragraph_style(source_elem, _sid)
+                            if enable_image_style and image_style_override and (
+                                    _r3_skip_image or not _mapped):
+                                if _elem_has_img(elem):
                                     img_sid = self.get_style_id_by_name(doc, image_style_override)
                                     if img_sid:
                                         _apply_paragraph_style(source_elem, img_sid)
-                            new_children.append(source_elem)
-                    else:
-                        source_elem = deep_copy(copy_template)
-                        source_runs = source_elem.findall('.//' + qn('w:r'))
-                        orig_runs = elem.findall('.//' + qn('w:r'))
-                        for r in source_runs:
-                            source_elem.remove(r)
-                        for r in orig_runs:
-                            source_elem.append(deep_copy(r))
-                        remove_keep_original_from_element(source_elem)
-                        if enable_image_style and image_style_override:
-                            has_img = (elem.find('.//' + qn('w:drawing')) is not None or
-                                       elem.find('.//' + qn('w:pict')) is not None or
-                                       elem.find('.//' + qn('pic:pic')) is not None or
-                                       elem.find('.//' + qn('wp:inline')) is not None or
-                                       elem.find('.//' + qn('wp:anchor')) is not None)
-                            if has_img:
-                                img_sid = self.get_style_id_by_name(doc, image_style_override)
-                                if img_sid:
-                                    _apply_paragraph_style(source_elem, img_sid)
                         new_children.append(source_elem)
-        
+
         return insert_count, total_heading_count
     
     def _insert_before_paragraphs(self, children, new_children, answer_template, doc):
@@ -4604,8 +4584,8 @@ class DocumentConverter:
         
         return insert_count, total_heading_count
     
-    def full_convert(self, source_file, template_file, output_file, 
-                     custom_style_map=None, do_mood=True, 
+    def full_convert(self, source_file, template_file, output_file,
+                     custom_style_map=None, do_mood=True,
                      answer_text=None, answer_style=None,
                      answer_source_style=None,
                      answer_copy_style=None,
@@ -4624,7 +4604,9 @@ class DocumentConverter:
                      list_answer_method='bullet', list_answer_style='Body Text',
                      list_answer_bullet='● ',
                      enable_list_style=True,
-                     clean_numbering_map=None):
+                     clean_numbering_map=None,
+                     skip_table_mapping=True,
+                     skip_image_mapping=True):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
         [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
@@ -4665,6 +4647,8 @@ class DocumentConverter:
         # 使第一份副本保留原文（祈使语气），第二份副本完成语气转换。
         
         # 步骤1：样式转换（返回Document对象，不保存）
+        # [2026-10-11] skip_table_mapping / skip_image_mapping 来自第3区
+        # 「不配置表格格式 / 不配置图片样式」复选框（默认 True = 历史行为）。
         doc = self._convert_styles_in_memory(source_file, template_file, custom_style_map, list_bullet,
                                               warning_callback, source_styles_cache,
                                               table_style_override, enable_table_style,
@@ -4673,7 +4657,9 @@ class DocumentConverter:
                                               list_method=list_method,
                                               list_style=list_style,
                                               enable_list_style=enable_list_style,
-                                              clean_numbering_map=clean_numbering_map)
+                                              clean_numbering_map=clean_numbering_map,
+                                              skip_table_mapping=skip_table_mapping,
+                                              skip_image_mapping=skip_image_mapping)
         if doc is None:
             elapsed = time.time() - start_time
             return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
@@ -4876,7 +4862,9 @@ class DocumentConverter:
                                    remove_chapter_label=False,
                                    list_method='bullet', list_style='Body Text',
                                    enable_list_style=True,
-                                   clean_numbering_map=None):
+                                   clean_numbering_map=None,
+                                   skip_table_mapping=True,
+                                   skip_image_mapping=True):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
         :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
@@ -4884,12 +4872,33 @@ class DocumentConverter:
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
         :param clean_numbering_map: 标题编号清理开关 {源样式名: 是否清理编号}（可选）
+        :param skip_table_mapping: 第3区「不配置表格格式」勾选状态（True=表格不参与第3区映射，历史行为）
+        :param skip_image_mapping: 第3区「不配置图片样式」勾选状态（True=图片段落不参与第3区映射，历史行为）
         :return: Document对象或None（失败时）
+
+        [2026-10-11] 第3区成为副本样式的唯一权威：
+        - copy_chapter 模式下两份副本的段落样式由第3区双列决定（应答副本查 answer_ 键），
+          第2区的统一「原文/应答原文目标样式」已删除；
+        - 列表/表格/图片兜底降级为「未映射才生效」；
+        - 本函数记录逐元素的第3区映射计划（self._region3_para_plans /
+          self._region3_tbl_plans，均按元素对象键控），
+          供后续 _insert_with_copy_chapter 生成应答原文副本时使用。
         """
         # [2026-09-19] 编号相关缓存按文档实例键控，换文档必须清掉，
         # 防止上一份文档的样式/编号定义串味。
         self._style_numpr_cache = {}
         self._eff_numpr_cache = None
+        # [2026-10-11] 第3区映射上下文与逐段计划（按顶层段落/表格顺序对齐）
+        self._region3_map = custom_style_map if isinstance(custom_style_map, dict) else {}
+        self._r3_skip_table = bool(skip_table_mapping)
+        self._r3_skip_image = bool(skip_image_mapping)
+        # [2026-10-11] 逐元素第3区计划（**按元素对象键控**，不用位置序号）：
+        #   模板清空后会残留一个空段落、提示语插入还会新增元素，任何「按出现顺序计数」
+        #   都会整体错位；元素对象作键既与真实元素一一对应，又靠 dict 强引用保证
+        #   lxml 代理对象身份稳定（无强引用时 iter() 会生成新代理，id() 不可靠）。
+        self._region3_para_plans = {}   # {w:p元素: {'mapped': bool, 'answer': 名或None}}
+        self._region3_tbl_plans = {}    # {w:tbl元素: {w:p元素: {'mapped':…, 'answer':…}}}
+        self._tbl_para_plans = []       # 临时：按 table_idx 存放当前表格的逐段计划
         try:
             from docx import Document
             from copy import deepcopy
@@ -4979,8 +4988,20 @@ class DocumentConverter:
                             _list_style = list_style
                             _resolve_num_text = None
                         
+                        # [2026-10-11] 记录该段落在第3区的映射键（真实样式名 / 列表虚拟名），
+                        # 以及「已映射」标志与应答副本目标样式（answer_ 键），供
+                        # _insert_with_copy_chapter 与图片/列表兜底降级判定使用。
+                        if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
+                            _r3_keys = [src_style]
+                        elif self.has_numbering(para):
+                            _r3_keys = [self._detect_numbering_format(para), src_style]
+                        else:
+                            _r3_keys = [src_style]
+                        _r3_mapped = self._region3_mapped(_r3_keys)
+                        _r3_answer = self._region3_answer_target(_r3_keys, new_doc)
+
                         # 使用copy_paragraph_with_images方法复制段落
-                        self.copy_paragraph_with_images(
+                        _new_para_obj = self.copy_paragraph_with_images(
                             para, new_doc, target_style,
                             page_width, available_width,
                             para_idx, source_file,
@@ -4991,18 +5012,29 @@ class DocumentConverter:
                             list_method=list_method,
                             list_style=_list_style,
                             enable_list_style=_enable_list_fallback,
-                            resolved_numbering_text=_resolve_num_text
+                            resolved_numbering_text=_resolve_num_text,
+                            region3_mapped=_r3_mapped
                         )
+                        # 计划键 = 转换后段落元素本身（同一棵 doc 树，身份稳定）
+                        _new_el = getattr(_new_para_obj, '_element', None)
+                        if _new_el is not None:
+                            self._region3_para_plans[_new_el] = {
+                                'mapped': _r3_mapped, 'answer': _r3_answer}
                         para_idx += 1
                 elif child.tag == qn('w:tbl'):
                     if table_idx < len(source_doc.tables):
                         table = source_doc.tables[table_idx]
-                        self.copy_table_with_images(
+                        self._tbl_para_plans.append({})
+                        _new_tbl_obj = self.copy_table_with_images(
                             table, new_doc, table_idx, available_width,
                             source_file, warning_callback,
                             table_style_override=table_style_override,
                             enable_table_style=enable_table_style
                         )
+                        # 计划键 = 转换后表格元素本身（与单元格段落计划同一 dict）
+                        _new_tbl_el = getattr(_new_tbl_obj, '_element', None)
+                        if _new_tbl_el is not None:
+                            self._region3_tbl_plans[_new_tbl_el] = self._tbl_para_plans[-1]
                         table_idx += 1
             
             return new_doc
