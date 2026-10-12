@@ -6,7 +6,7 @@
 - 文档转换      → views/conversion.py   (render_conversion_page)
 - 工具箱        → views/toolbox.py      (render_toolbox_page)
 - 祈使语气配置  → views/tone_config.py  (render_tone_config_page)
-- 用户评价      → views/comments.py     (render_comments_page)
+- 发表评论      → views/comments.py     (render_comments_page)
 
 本文件仅负责：全局页面配置、后台服务、用户初始化、维护模式、导航注册。
 """
@@ -540,7 +540,7 @@ st.navigation(
         st.Page(render_conversion_page, title="文档转换", url_path="conversion", default=True),
         st.Page(render_toolbox_page, title="工具箱", url_path="toolbox"),
         st.Page(render_tone_config_page, title="祈使语气配置", url_path="tone_config"),
-        st.Page(render_comments_page, title="用户评价", url_path="comments"),
+        st.Page(render_comments_page, title="发表评论", url_path="comments"),
     ],
     position="hidden",
 )
