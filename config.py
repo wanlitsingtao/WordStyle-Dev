@@ -228,6 +228,36 @@ CONVERTER_STEPS = 7  # 转换器步骤数
 PROGRESS_BASE = 10  # 进度基数
 PROGRESS_MAX = 80  # 进度最大值
 
+# ==================== 身份标识配置（Identity v2）====================
+# 背景：原"设备指纹"= md5(User-Agent)，导致同版本浏览器的不同用户共用同一 user_id，
+# 且同一用户浏览器升级后会新建账号（额度/历史丢失）。详见 identity.py 模块说明。
+#
+# IDENTITY_MODE 三档：
+#   "dual" —— 默认。有 cookie 走 v2 身份；无 cookie 先用 UA 身份跑完本次会话
+#             （保证老用户本次不丢数据），同时写入 cookie，下次访问即切换到 v2
+#             并自动认领该历史账号。
+#   "v2"   —— 只认 cookie（灰度观察结束后的收口档）。
+#   "v1"   —— 完全回到旧行为（**紧急回滚用**，其余两档出问题时改回此值即可）。
+#
+# 可用环境变量覆盖；云端可用 Streamlit Secrets 顶层键 IDENTITY_MODE（无需改代码即可回滚）
+def _resolve_identity_mode() -> str:
+    raw = os.getenv("IDENTITY_MODE")
+    if not raw:
+        try:
+            import streamlit as st
+            raw = st.secrets.get("IDENTITY_MODE", None)
+        except Exception:
+            raw = None
+    mode = str(raw or "dual").strip().lower()
+    if mode not in ("v1", "dual", "v2"):
+        print(f"[WARN] IDENTITY_MODE 值非法（{raw}），已回退为 dual")
+        mode = "dual"
+    return mode
+
+
+IDENTITY_MODE = _resolve_identity_mode()
+print(f"  [诊断] IDENTITY_MODE={IDENTITY_MODE}")
+
 # ==================== 安全配置 ====================
 FILENAME_MAX_LENGTH = 200  # 文件名最大长度
 LOCK_TIMEOUT_SECONDS = 10  # 文件锁超时时间

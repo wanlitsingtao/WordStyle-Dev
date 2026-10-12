@@ -69,6 +69,15 @@ st.markdown(
         [data-testid="stHeader"] {
             background: rgba(245, 247, 251, 0.86);
         }
+        /* 隐藏 Streamlit Cloud 宿主动态注入的「✏️编辑应用 / 🐙GitHub 源码」按钮。
+           它们不是 app 代码渲染的，而是宿主通过 hostToolbarItems 推给前端、
+           渲染进 [data-testid="stToolbarActions"] 容器，因此只能从 CSS 层面隐藏。
+           注：不要整块隐藏 [data-testid="stToolbar"] —— 侧边栏折叠后的
+           「展开侧边栏」按钮（stExpandSidebarButton）也在其中，会被一并隐藏。 */
+        [data-testid="stToolbarActions"],
+        [data-testid="stToolbarActionButton"] {
+            display: none !important;
+        }
         div.block-container {
             max-width: 1440px;
             padding-top: 2.6rem;
@@ -295,6 +304,7 @@ _start_background_services()
 from config import DATA_SOURCE
 from data_manager import load_user_data, claim_free_paragraphs
 from data_manager import generate_device_fingerprint, get_or_create_user_by_device
+from identity import resolve_identity, write_identity_cookie, renew_identity_cookie
 
 import hashlib
 
@@ -302,15 +312,31 @@ import hashlib
 user_init_success = False
 
 try:
-    # 第一步：获取客户端User-Agent并生成设备指纹
-    try:
-        headers = st.context.headers if hasattr(st, 'context') and hasattr(st.context, 'headers') else {}
-        user_agent = headers.get('User-Agent', 'unknown')
-        device_fingerprint = generate_device_fingerprint(user_agent)
-        logger.info(f"设备指纹生成成功: {device_fingerprint[:16]}...")
-    except Exception as e:
-        logger.warning(f"[WARN] User-Agent获取失败，使用备用方案: {e}")
-        device_fingerprint = generate_device_fingerprint(f"fallback_{id(st.session_state)}")
+    # 第一步：解析身份（Identity v2 —— 浏览器持久化 cookie 优先，UA 仅作过渡/辅助）
+    #
+    # [IDENTITY v2] 原实现直接用 md5(User-Agent) 当"设备指纹"，导致两个方向的缺陷：
+    #   ① 不同电脑但同版本浏览器 → 同一个指纹 → 命中同一行 users 记录
+    #      → 互相看到对方的额度/转换历史/样式映射，并能访问对方按 user_id 命名的临时文件；
+    #   ② 同一台电脑但浏览器自动升级 → UA 变了 → 新建账号，老账号额度与历史"凭空消失"。
+    # 现改为浏览器端持久化随机 ID（cookie `ws_bid`）派生身份，与浏览器版本完全解耦。
+    # 完整背景与灰度开关见 identity.py 与 config.IDENTITY_MODE。
+    identity = resolve_identity()
+    device_fingerprint = identity.fingerprint
+    user_agent = identity.user_agent
+    _legacy_fingerprint = identity.legacy_fingerprint
+    logger.info(f"[IDENTITY] {identity.describe()}")
+
+    # 首次访问（尚无 cookie）→ 写入浏览器持久化 ID。
+    # 本次会话仍沿用旧身份（保证老用户本次不丢数据），下次访问即切换到稳定身份，
+    # 并由服务端"恰好一次"地认领该浏览器的历史账号。
+    if identity.should_write_cookie and identity.bid:
+        if write_identity_cookie(identity.bid):
+            logger.info(f"[IDENTITY] 已写入浏览器身份 cookie（bid={identity.bid[:8]}…），下次访问生效")
+    elif identity.should_renew_cookie:
+        # 滑动续期：浏览器对 cookie 有效期有 400 天上限，且不会因"访问"自动延长。
+        # 每次新会话顺带重写一次，保证"只要 400 天内来过，身份就一直续下去"。
+        if renew_identity_cookie(identity.bid):
+            logger.info(f"[IDENTITY] 已续期浏览器身份 cookie（bid={identity.bid[:8]}…）")
 
     # 第二步：通过设备指纹从数据库获取或创建用户（带会话级缓存守卫）
     # 但是如果用户已通过账号登录，则保持登录身份不变
@@ -334,10 +360,12 @@ try:
             app_state.set_device_fingerprint(device_fingerprint)
             user_data = load_user_data(_logged_in_uid)
             if not user_data:
-                user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+                user_data = get_or_create_user_by_device(
+                    device_fingerprint, user_agent, legacy_fingerprint=_legacy_fingerprint)
             logger.info(f"[OK] 已登录用户 - ID: {_logged_in_uid}, 额度: {user_data.get('paragraphs_remaining', 0)}")
         else:
-            user_data = get_or_create_user_by_device(device_fingerprint, user_agent)
+            user_data = get_or_create_user_by_device(
+                device_fingerprint, user_agent, legacy_fingerprint=_legacy_fingerprint)
             app_state.set_user_id(user_data['user_id'])
             app_state.set_device_fingerprint(device_fingerprint)
             logger.info(f"[OK] 用户初始化成功 - ID: {app_state.get_user_id()}")

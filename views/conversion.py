@@ -837,13 +837,6 @@ def render_conversion_page():
 
                 if success_count > 0:
                     progress_bar.progress(100)
-                    if user_data.get('paragraphs_remaining', 0) >= total_success_paragraphs:
-                        user_data['paragraphs_remaining'] -= total_success_paragraphs
-                    else:
-                        user_data['paragraphs_remaining'] = 0
-                    user_data['total_converted'] = user_data.get('total_converted', 0) + success_count
-                    user_data['total_paragraphs_used'] = user_data.get('total_paragraphs_used', 0) + total_success_paragraphs
-
                     conversion_record = {
                         'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         'files': len(current_source_files),
@@ -852,11 +845,9 @@ def render_conversion_page():
                         'paragraphs_charged': total_success_paragraphs,
                         'mode': 'foreground',
                     }
-                    if 'conversion_history' not in user_data:
-                        user_data['conversion_history'] = []
-                    user_data['conversion_history'].append(conversion_record)
 
-                    from data_manager import add_conversion_record, save_user_data
+                    # 1) 任务日志（保持原有行为：supabase 模式下为空实现，api 模式写 ConversionTask）
+                    from data_manager import add_conversion_record, apply_conversion_result
                     add_conversion_record(
                         files_count=len(current_source_files),
                         success_count=success_count,
@@ -864,7 +855,28 @@ def render_conversion_page():
                         user_id=user_id,
                         paragraphs=total_success_paragraphs,
                     )
-                    save_user_data(user_data, user_id)
+
+                    # 2) [FIX 计数非原子] 计费与转换历史改为**数据库侧原子落账**。
+                    #    原写法是"先在内存改 user_data，再由 save_user_data 整行覆盖写回"，
+                    #    同一账号在两个标签页/两个会话并发时会互相回滚（丢失更新）。
+                    #    现在计数字段由一条 UPDATE 完成，历史只追加该列。
+                    fresh_user_data = apply_conversion_result(
+                        user_id,
+                        paragraphs_charged=total_success_paragraphs,
+                        success_count=success_count,
+                        record=conversion_record,
+                    )
+                    if fresh_user_data:
+                        user_data = fresh_user_data
+                        st.session_state.user_data = fresh_user_data
+                        st.session_state.user_data_stale = False
+                    else:
+                        # 落账失败：不伪造界面数字，标记缓存失效让下次 rerun 重新拉取真实值
+                        logger.error(
+                            f"[FIX] 转换结果落账失败，额度可能未正确扣减: "
+                            f"user={user_id}, paragraphs={total_success_paragraphs}"
+                        )
+                        st.session_state.user_data_stale = True
 
                     if 'recent_results' not in st.session_state:
                         st.session_state.recent_results = []

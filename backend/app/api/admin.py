@@ -4,6 +4,7 @@
 """
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Body
+from sqlalchemy import case, func, update as sa_update
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import SystemConfig, User, ConversionTask
@@ -14,6 +15,55 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ==================== [IDENTITY v2] 历史账号认领 ====================
+# 说明：后端（backend/）是独立部署单元，不引入仓库根目录的 identity.py，
+# 因此这里内联同一套最小逻辑，与 data_manager._claim_legacy_identity 保持一致。
+# 背景：原"设备指纹"= md5(User-Agent)，导致同版本浏览器的不同用户共用同一账号。
+# v2 改用浏览器持久化 cookie 派生指纹，老账号通过"改写身份键"完成一次认领。
+_UNTRUSTED_V1_FINGERPRINTS = frozenset(
+    __import__("hashlib").md5(x.encode("utf-8")).hexdigest()
+    for x in ("", "unknown", "none", "null", "fallback")
+)
+
+
+def _is_claimable_legacy_fingerprint(fingerprint) -> bool:
+    """仅放行形态合法且不属于"多人共用桶"的 v1 指纹。"""
+    import re
+    if not isinstance(fingerprint, str):
+        return False
+    fp = fingerprint.strip().lower()
+    if not re.match(r"^[0-9a-f]{32}$", fp):
+        return False
+    return fp not in _UNTRUSTED_V1_FINGERPRINTS
+
+
+def _claim_legacy_identity(db: Session, v2_fingerprint: str, legacy_fingerprint: str):
+    """把历史（v1）账号的 device_fingerprint 原子改写为 v2 指纹。
+
+    不新建表/列、不复制数据；改写后 v1 指纹不复存在 → 恰好一次。
+    返回被认领的 User；未命中或不满足条件返回 None（调用方照常建新号）。
+    """
+    if not v2_fingerprint or v2_fingerprint == legacy_fingerprint:
+        return None
+    if not _is_claimable_legacy_fingerprint(legacy_fingerprint):
+        return None
+    try:
+        updated = db.query(User).filter(
+            User.device_fingerprint == legacy_fingerprint
+        ).update(
+            {User.device_fingerprint: v2_fingerprint, User.last_login: datetime.now()},
+            synchronize_session=False,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[IDENTITY] 认领历史账号失败（不影响建号）: {e}")
+        return None
+    if updated != 1:
+        return None
+    return db.query(User).filter(User.device_fingerprint == v2_fingerprint).first()
+
 
 class ConfigUpdate(BaseModel):
     """配置更新请求"""
@@ -208,6 +258,7 @@ def get_user_by_id(
 def get_or_create_user_by_device_api(
     device_fingerprint: str = Body(..., embed=False),
     user_agent: Optional[str] = Body(None),
+    legacy_fingerprint: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     request = None  # [OK] 新增：获取请求对象以记录IP
 ):
@@ -215,8 +266,11 @@ def get_or_create_user_by_device_api(
     通过设备指纹获取或创建用户
     
     Args:
-        device_fingerprint: 设备指纹（32位MD5哈希）
+        device_fingerprint: 身份指纹（32位MD5哈希）。
+            [IDENTITY v2] = md5("ws2|" + 浏览器持久化ID)
         user_agent: User-Agent字符串（可选，用于日志）
+        legacy_fingerprint: [IDENTITY v2] 可选。v1（= md5(User-Agent)）指纹，
+            仅用于"恰好一次"认领历史账号，不参与身份判定。
     
     Returns:
         用户信息字典
@@ -243,6 +297,16 @@ def get_or_create_user_by_device_api(
         
         # 1. 优先通过device_fingerprint查询
         user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
+
+        # 1.5) [IDENTITY v2] 未命中 v2 指纹 → 尝试"恰好一次"认领该浏览器的历史(v1)账号。
+        #      只改写身份键，user_id / 额度 / 历史 / 样式映射全部原地保留，不复制数据。
+        #      改写后 v1 指纹在库中不复存在 → 天然恰好一次，也天然终结了
+        #      "同版本浏览器多人共用一个账号"的问题（先到者认领，其余人各建新号）。
+        if not user and legacy_fingerprint:
+            user = _claim_legacy_identity(db, device_fingerprint, legacy_fingerprint)
+            if user:
+                logger.info(f"[IDENTITY] 已认领历史账号 → user_id={user.id} "
+                            f"(v1={str(legacy_fingerprint)[:12]}… → v2={device_fingerprint[:12]}…)")
         
         if user:
             # 用户已存在，更新last_login
@@ -266,7 +330,10 @@ def get_or_create_user_by_device_api(
         
         # 2. 用户不存在，创建新用户
         # 生成用户ID
-        user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+        # [IDENTITY v2] 改为随机生成，不再用 md5("wordstyle_device_"+指纹)[:12]：
+        # 旧写法使任何知道某人 UA 的人都能推算其 user_id，且让 ID 可被外部预测。
+        import uuid as _uuid
+        user_id = _uuid.uuid4().hex[:12]
         
         # [OK] 新增：检测是否为测试用户
         is_test_user = device_fingerprint.startswith('test_') or (user_agent and 'test' in user_agent.lower())
@@ -521,23 +588,96 @@ def claim_free_paragraphs(user_id: str, db: Session = Depends(get_db)):
 
 @router.post("/users/{user_id}/deduct")
 def deduct_paragraphs(user_id: str, paragraphs: int, db: Session = Depends(get_db)):
-    """扣除段落（供 API 模式调用）"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return {'success': False, 'error': '用户不存在'}
-    
-    if user.paragraphs_remaining < paragraphs:
-        return {'success': False, 'error': '段落数不足'}
-    
-    user.paragraphs_remaining -= paragraphs
-    user.total_paragraphs_used += paragraphs
+    """扣除段落（供 API 模式调用）
+
+    [FIX 计数非原子] 改为数据库侧原子扣减：把"校验 + 扣减 + 累加"放进同一条 UPDATE，
+    避免原先"先 SELECT 再改属性再 commit"在并发时读到同一个旧值而互相覆盖。
+    """
+    if paragraphs is None or paragraphs < 0:
+        return {'success': False, 'error': '段落数非法'}
+
+    result = db.execute(
+        sa_update(User)
+        .where(User.id == user_id, func.coalesce(User.paragraphs_remaining, 0) >= paragraphs)
+        .values({
+            User.paragraphs_remaining: User.paragraphs_remaining - paragraphs,
+            User.total_paragraphs_used: func.coalesce(User.total_paragraphs_used, 0) + paragraphs,
+        })
+    )
     db.commit()
-    
+
+    if result.rowcount != 1:
+        exists = db.query(User.id).filter(User.id == user_id).first()
+        return {'success': False, 'error': '用户不存在' if not exists else '段落数不足'}
+
+    remaining = db.query(User.paragraphs_remaining).filter(User.id == user_id).scalar()
     return {
         'success': True,
-        'remaining': user.paragraphs_remaining,
+        'remaining': int(remaining or 0),
         'message': f'已扣除 {paragraphs} 个段落'
     }
+
+
+@router.post("/users/{user_id}/apply-conversion")
+def apply_conversion_result_api(user_id: str, payload: dict = Body(...), db: Session = Depends(get_db)):
+    """转换完成后一次性落账（供 API 模式调用）。
+
+    [FIX 计数非原子] 替代原先"内存改 + save_user_data 整行覆盖"的两段写：
+    计数字段由一条 UPDATE 在数据库侧完成，conversion_history 只追加该列。
+    请求体：{"paragraphs": int, "converted": int, "record": dict|None}
+    """
+    try:
+        paragraphs = max(0, int(payload.get('paragraphs') or 0))
+        converted = max(0, int(payload.get('converted') or 0))
+        record = payload.get('record')
+
+        if not db.query(User.id).filter(User.id == user_id).first():
+            return {'success': False, 'error': '用户不存在'}
+
+        db.execute(
+            sa_update(User)
+            .where(User.id == user_id)
+            .values({
+                # 额度不足时归零，不允许出现负数（与客户端原有语义一致）
+                User.paragraphs_remaining: case(
+                    (func.coalesce(User.paragraphs_remaining, 0) >= paragraphs,
+                     func.coalesce(User.paragraphs_remaining, 0) - paragraphs),
+                    else_=0,
+                ),
+                User.total_paragraphs_used: func.coalesce(User.total_paragraphs_used, 0) + paragraphs,
+                User.total_converted: func.coalesce(User.total_converted, 0) + converted,
+                User.updated_at: datetime.now(),
+            })
+        )
+
+        if record:
+            db.flush()
+            row = db.query(User).filter(User.id == user_id).first()
+            hist = row.conversion_history
+            if not isinstance(hist, list):
+                hist = []
+            hist.append(record)
+            row.conversion_history = hist
+
+        db.commit()
+        db.expire_all()
+        fresh = db.query(User).filter(User.id == user_id).first()
+
+        return {
+            'success': True,
+            'user_id': fresh.id,
+            'balance': float(fresh.balance or 0),
+            'paragraphs_remaining': int(fresh.paragraphs_remaining or 0),
+            'total_paragraphs_used': int(fresh.total_paragraphs_used or 0),
+            'total_converted': int(fresh.total_converted or 0),
+            'conversion_history': fresh.conversion_history if isinstance(fresh.conversion_history, list) else [],
+            'created_at': fresh.created_at.isoformat() if fresh.created_at else '',
+            'last_login': fresh.last_login.isoformat() if fresh.last_login else '',
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[FIX] apply-conversion 失败: {e}")
+        return {'success': False, 'error': str(e)}
 
 
 # ==================== 文件管理 API ====================

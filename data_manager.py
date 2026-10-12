@@ -11,6 +11,7 @@
 import os
 import sys
 import json
+import uuid
 import logging
 import hashlib
 import requests
@@ -810,13 +811,15 @@ elif DATA_SOURCE == "api":
             import uuid
             return str(uuid.uuid4())
         
-        def _get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
+        def _get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None,
+                                          legacy_fingerprint: str = None) -> Dict[str, Any]:
             """
             通过设备指纹获取或创建用户（API模式）
             
             Args:
-                device_fingerprint: 设备指纹（32位MD5）
+                device_fingerprint: 身份指纹（32位MD5）
                 user_agent: User-Agent字符串（可选，用于日志）
+                legacy_fingerprint: [IDENTITY v2] 可选的 v1（UA）指纹，用于后端认领历史账号
             
             Returns:
                 用户数据字典
@@ -826,7 +829,8 @@ elif DATA_SOURCE == "api":
                 method="post", 
                 json={
                     "device_fingerprint": device_fingerprint,
-                    "user_agent": user_agent
+                    "user_agent": user_agent,
+                    "legacy_fingerprint": legacy_fingerprint,
                 }
             )
             
@@ -1047,20 +1051,58 @@ def get_data_source():
     """获取当前数据源类型"""
     return DATA_SOURCE
 
-def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None) -> Dict[str, Any]:
+def _claim_legacy_identity(db, v2_fingerprint: str, legacy_fingerprint: str):
+    """把历史（v1 = md5(UA)）账号的 device_fingerprint 原子改写为 v2 指纹。
+
+    [IDENTITY v2] 这是"老用户不丢额度/历史"的关键一步，也是**零结构变更**的实现方式：
+    不新建表、不新建列、不复制数据，只把老记录的身份键换成新的浏览器持久化键。
+    改写后 v1 指纹在库中即不复存在 → 天然**恰好一次**，无需额外的标记列，
+    也天然阻止了"多人共用一个 UA 桶"（第一个到的人认领，其余人各建新号）。
+
+    Returns: 认领成功后的 User 对象；未命中/不满足条件时返回 None。
+    """
+    try:
+        from identity import is_trusted_legacy_fingerprint
+    except Exception:
+        return None
+    if not v2_fingerprint or v2_fingerprint == legacy_fingerprint:
+        return None
+    if not is_trusted_legacy_fingerprint(legacy_fingerprint):
+        return None
+    try:
+        updated = db.query(User).filter(
+            User.device_fingerprint == legacy_fingerprint
+        ).update(
+            {User.device_fingerprint: v2_fingerprint, User.last_login: datetime.now()},
+            synchronize_session=False,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[IDENTITY] 认领历史账号失败（不影响建号）: {e}")
+        return None
+    if updated != 1:
+        return None
+    return db.query(User).filter(User.device_fingerprint == v2_fingerprint).first()
+
+
+def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None,
+                                 legacy_fingerprint: str = None) -> Dict[str, Any]:
     """
     通过设备指纹获取或创建用户（统一接口）
-    
+
     Args:
-        device_fingerprint: 设备指纹（32位MD5）
+        device_fingerprint: 身份指纹（32位MD5）。v2 模式下 = md5("ws2|" + 浏览器持久化ID)
         user_agent: User-Agent字符串（可选，用于日志）
-    
+        legacy_fingerprint: [IDENTITY v2] 可选。本次同时可推算出的 v1（UA）指纹，
+            仅用于"恰好一次"认领历史账号，不参与身份判定。
+
     Returns:
         用户数据字典
     """
     # 根据不同数据源调用对应的实现
     if DATA_SOURCE == "api":
-        user_data = _get_or_create_user_by_device(device_fingerprint, user_agent)
+        user_data = _get_or_create_user_by_device(device_fingerprint, user_agent, legacy_fingerprint)
         return _ensure_default_tone_rules(user_data, user_data.get('user_id'))
     elif DATA_SOURCE == "supabase":
         # Supabase模式直接使用已有的实现
@@ -1083,7 +1125,15 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
         try:
             # 优先通过device_fingerprint查询
             user = db.query(User).filter(User.device_fingerprint == device_fingerprint).first()
-            
+
+            # [IDENTITY v2] 未命中 v2 指纹时，尝试"恰好一次"认领该浏览器的历史(v1)账号，
+            # 使老用户在切换到 cookie 身份的首次访问就把额度/历史/样式映射带过来。
+            if not user and legacy_fingerprint:
+                user = _claim_legacy_identity(db, device_fingerprint, legacy_fingerprint)
+                if user:
+                    logger.info(f"[IDENTITY] 已认领历史账号 → user_id={user.id} "
+                                f"(v1={legacy_fingerprint[:12]}… → v2={device_fingerprint[:12]}…)")
+
             if user:
                 # 用户已存在，更新last_login
                 user.last_login = datetime.now()
@@ -1109,7 +1159,14 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                 return _ensure_default_tone_rules(user_data, user_data.get('user_id'))
             
             # 用户不存在，创建新用户
-            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+            # [IDENTITY v2] user_id 改为**随机生成**，不再用 md5("wordstyle_device_"+指纹)[:12]：
+            # 旧写法使任何知道某人 UA 的人都能推算出其 user_id（信息泄露），
+            # 且让"身份 → ID"可外部预测。改为随机后二者解耦。
+            try:
+                from identity import new_user_id as _new_user_id
+                user_id = _new_user_id()
+            except Exception:
+                user_id = uuid.uuid4().hex[:12]
             
             new_user = User(
                 id=user_id,
@@ -1172,8 +1229,36 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
                     _save_user(_user, _uid)
                     return _ensure_default_tone_rules(_user, _uid)
 
-            # 3) 未命中 → 创建新用户
-            user_id = hashlib.md5(f"wordstyle_device_{device_fingerprint}".encode()).hexdigest()[:12]
+            # 2.5) [IDENTITY v2] 未命中 v2 指纹 → 尝试认领该浏览器的历史(v1)账号映射。
+            #      与 supabase 分支同理：改写映射键，user_id 与数据完全不变，天然恰好一次。
+            if legacy_fingerprint and legacy_fingerprint != device_fingerprint:
+                try:
+                    from identity import is_trusted_legacy_fingerprint
+                    _claimable = is_trusted_legacy_fingerprint(legacy_fingerprint)
+                except Exception:
+                    _claimable = False
+                if _claimable and legacy_fingerprint in user_mapping:
+                    _claim_uid = user_mapping[legacy_fingerprint]
+                    _claimed_user = _load_user(_claim_uid)
+                    # ⚠️ 必须先校验 user_id 真实匹配再改写映射：
+                    # user_manager.load_user_data 对「不存在的用户」会返回默认模板（非空），
+                    # 只看真值会把不存在的账号也"认领"掉、并污染映射文件。
+                    if _claimed_user and str(_claimed_user.get('user_id') or '') == str(_claim_uid):
+                        user_mapping.pop(legacy_fingerprint, None)
+                        user_mapping[device_fingerprint] = _claim_uid
+                        with open(mapping_file, 'w', encoding='utf-8') as f:
+                            json.dump(user_mapping, f, ensure_ascii=False, indent=2)
+                        _claimed_user['last_login'] = datetime.now().isoformat()
+                        _save_user(_claimed_user, _claim_uid)
+                        logger.info(f"[IDENTITY] 已认领历史账号(本地映射) → user_id={_claim_uid}")
+                        return _ensure_default_tone_rules(_claimed_user, _claim_uid)
+
+            # 3) 未命中 → 创建新用户（[IDENTITY v2] 随机 user_id，不再由指纹派生）
+            try:
+                from identity import new_user_id as _new_user_id
+                user_id = _new_user_id()
+            except Exception:
+                user_id = uuid.uuid4().hex[:12]
 
             new_user_data = {
                 'user_id': user_id,
@@ -1202,19 +1287,156 @@ def get_or_create_user_by_device(device_fingerprint: str, user_agent: str = None
     else:
         raise ValueError(f"未知的数据源模式: {DATA_SOURCE}")
 
+# ==================== 转换结果原子落账 ====================
+
+def _append_conversion_record_supabase(user_id: str, record: Dict[str, Any]) -> None:
+    """仅追加一条 conversion_history（不触碰任何计数字段）。"""
+    try:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return
+            hist = user.conversion_history
+            if not isinstance(hist, list):
+                hist = []
+            hist.append(record)
+            user.conversion_history = hist
+            user.updated_at = datetime.now()
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"[FIX] 追加转换历史失败（不影响计费）: {e}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[FIX] 追加转换历史异常（不影响计费）: {e}")
+
+
+def apply_conversion_result(user_id: str, paragraphs_charged: int = 0, success_count: int = 0,
+                            record: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """转换完成后，用**数据库侧原子写入**更新计费字段与转换历史。
+
+    [FIX 计数非原子 / 丢失更新]
+    原实现（views/conversion.py）的写法是：
+        1) 在内存里改 user_data：paragraphs_remaining -= n、total_converted += k、total_paragraphs_used += n；
+        2) add_conversion_record(...)  —— 一次读改写
+        3) save_user_data(user_data, uid) —— 再次**整行覆盖**写回
+    两次写、且都是"用调用方内存里的旧值整体覆盖"，因此同一账号在两个会话/两个标签页
+    并发时会互相回滚（后写的把先写的计数抹掉）。这也是"界面显示 3、库里是 6"那类
+    对不上账的成因之一。
+
+    本函数把计数字段收敛为**一条 UPDATE 在数据库侧完成**（读取即最新值），
+    conversion_history 用第二次、只动该列的小范围写入追加。
+
+    Args:
+        user_id: 用户 ID
+        paragraphs_charged: 本次消耗段落数（会做下限保护，不足时归零而不是负数）
+        success_count: 本次成功转换的文件数（累加进 total_converted）
+        record: 可选的转换历史记录（追加到 conversion_history）
+
+    Returns:
+        刷新后的用户数据字典；失败返回 None（调用方保留原数据即可，不要吞掉额度）
+    """
+    if not user_id:
+        return None
+    paragraphs_charged = max(0, int(paragraphs_charged or 0))
+    success_count = max(0, int(success_count or 0))
+
+    # ---------- Supabase 直连 ----------
+    if DATA_SOURCE == "supabase":
+        try:
+            from sqlalchemy import text
+            sql = (
+                "UPDATE users SET "
+                "  paragraphs_remaining = CASE WHEN COALESCE(paragraphs_remaining, 0) >= :n "
+                "      THEN COALESCE(paragraphs_remaining, 0) - :n ELSE 0 END, "
+                "  total_paragraphs_used = COALESCE(total_paragraphs_used, 0) + :n, "
+                "  total_converted = COALESCE(total_converted, 0) + :c, "
+                "  updated_at = now() "
+                "WHERE id = :uid"
+            )
+            db = SessionLocal()
+            try:
+                db.execute(text(sql), {"n": paragraphs_charged, "c": success_count, "uid": user_id})
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(f"[FIX] 原子更新计费字段失败: {e}")
+                return None
+            finally:
+                db.close()
+
+            if record:
+                _append_conversion_record_supabase(user_id, record)
+            return load_user_data(user_id)
+        except Exception as e:
+            logger.error(f"[FIX] apply_conversion_result(supabase) 异常: {e}")
+            return None
+
+    # ---------- 后端 API ----------
+    if DATA_SOURCE == "api":
+        try:
+            result = _make_api_request(
+                f"/users/{user_id}/apply-conversion",
+                method="post",
+                json={
+                    "paragraphs": paragraphs_charged,
+                    "converted": success_count,
+                    "record": record,
+                },
+            )
+            if not result or not result.get('success'):
+                logger.error(f"[FIX] apply-conversion API 失败: {result}")
+                return None
+            return {
+                'user_id': result.get('user_id', user_id),
+                'balance': result.get('balance', 0.0),
+                'paragraphs_remaining': result.get('paragraphs_remaining', 0),
+                'total_paragraphs_used': result.get('total_paragraphs_used', 0),
+                'total_converted': result.get('total_converted', 0),
+                'conversion_history': result.get('conversion_history', []),
+                'is_active': True,
+                'created_at': result.get('created_at', ''),
+                'last_login': result.get('last_login', ''),
+            }
+        except Exception as e:
+            logger.error(f"[FIX] apply_conversion_result(api) 异常: {e}")
+            return None
+
+    # ---------- 本地 JSON（单机开发用，无并发压力）----------
+    try:
+        data = _load_user(user_id) or {}
+        data['paragraphs_remaining'] = max(
+            0, int(data.get('paragraphs_remaining', 0) or 0) - paragraphs_charged
+        )
+        data['total_paragraphs_used'] = int(data.get('total_paragraphs_used', 0) or 0) + paragraphs_charged
+        data['total_converted'] = int(data.get('total_converted', 0) or 0) + success_count
+        if record:
+            hist = data.get('conversion_history')
+            if not isinstance(hist, list):
+                hist = []
+            hist.append(record)
+            data['conversion_history'] = hist
+        _save_user(data, user_id)
+        return data
+    except Exception as e:
+        logger.error(f"[FIX] apply_conversion_result(local) 异常: {e}")
+        return None
+
+
 # ==================== 设备指纹相关辅助函数 ====================
 
 def generate_device_fingerprint(user_agent: str) -> str:
+    """生成 v1 指纹：md5(User-Agent)[:32]。
+
+    [DEPRECATED — 不再作为身份来源]
+    该函数的输入只有 UA，而 UA 不含任何设备唯一信息，因此：
+      · 同版本浏览器的不同用户会得到同一指纹（共用账号、互相看到数据）；
+      · 同一用户浏览器升级后指纹改变（被当成新用户，额度"消失"）。
+    新身份由 `identity.resolve_identity()` 提供（浏览器持久化 cookie 派生）。
+    本函数保留仅为兼容历史数据与"历史账号认领"逻辑的对比校验，请勿在新代码中调用。
     """
-    生成设备指纹
-    
-    Args:
-        user_agent: 浏览器的User-Agent字符串
-    
-    Returns:
-        32位MD5哈希字符串
-    """
-    import hashlib
     return hashlib.md5(user_agent.encode('utf-8')).hexdigest()[:32]
 
 
