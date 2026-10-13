@@ -256,6 +256,31 @@ def _resolve_identity_mode() -> str:
 
 
 IDENTITY_MODE = _resolve_identity_mode()
+
+# ==================== 社区云署名徽章（实验性）====================
+# 社区云访问时会返回它自己的「外壳页面」，并在外壳文档里渲染右下角徽章
+# （Created by <你> / Hosted with Streamlit）。该徽章不在本应用文档内——应用被
+# 装在同源 iframe 里，徽章是那个 iframe 的兄弟节点，所以应用内 CSS 无法隐藏，
+# 只能由 cloud_badge.py 注入脚本跨到父文档处理。
+# 该做法依赖社区云内部实现（对方随时可能改），且隐藏的是免费托管的「署名」，
+# 请自行评估是否合规；出问题时按下述开关关掉即可，无需改代码：
+#   HIDE_CLOUD_BADGE=0          （环境变量）
+#   hide_cloud_badge = false    （Streamlit Secrets 顶层键）
+def _resolve_hide_cloud_badge() -> bool:
+    raw = os.getenv("HIDE_CLOUD_BADGE")
+    if raw is None or str(raw).strip() == "":
+        try:
+            import streamlit as st
+            raw = st.secrets.get("hide_cloud_badge", None)
+        except Exception:
+            raw = None
+    if raw is None:
+        return True  # 默认开启
+    return str(raw).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+HIDE_CLOUD_BADGE = _resolve_hide_cloud_badge()
+print(f"  [诊断] HIDE_CLOUD_BADGE={HIDE_CLOUD_BADGE}")
 print(f"  [诊断] IDENTITY_MODE={IDENTITY_MODE}")
 
 # ==================== 安全配置 ====================

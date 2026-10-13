@@ -228,6 +228,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ==================== 社区云署名徽章（实验性）====================
+# 与上面隐藏顶栏按钮是姊妹问题，但**手段必须不同**：那两个按钮渲染在应用自己的
+# [data-testid="stToolbarActions"] 容器里，CSS 就能隐藏；而右下角徽章由社区云外壳
+# 渲染在**应用文档之外**（应用被装在同源 iframe 里，徽章是 iframe 的兄弟节点），
+# CSS 跨不过去，只能注入脚本跨到父文档处理。详见 cloud_badge.py。
+# 关闭方式：环境变量 HIDE_CLOUD_BADGE=0 或 Secrets 里 hide_cloud_badge = false。
+try:
+    from config import HIDE_CLOUD_BADGE
+    if HIDE_CLOUD_BADGE:
+        from cloud_badge import hide_cloud_badge
+        hide_cloud_badge()
+except Exception as _badge_err:  # 绝不影响应用本体
+    import logging as _logging
+    _logging.getLogger("WordStyle").warning(f"[BADGE] 徽章隐藏脚本注入失败（可忽略）: {_badge_err}")
+
 import os
 import json
 import time

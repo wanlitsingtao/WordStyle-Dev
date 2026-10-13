@@ -548,7 +548,7 @@ def render_sidebar(active_page: str = "conversion"):
                 unsafe_allow_html=True
             )
             st.markdown(
-                '<p style="text-align: center; margin: 0.25rem 0 0 0; color: #666; font-size: var(--ws-font-small, 0.75rem); white-space: nowrap;">© 2026 文档转换工具 保留所有权利</p>',
+                '<p style="text-align: center; margin: 0.25rem 0 0 0; color: #666; font-size: var(--ws-font-small, 0.75rem); white-space: nowrap;">© 2026 标书编写工具 保留所有权利</p>',
                 unsafe_allow_html=True
             )
             st.markdown('</div>', unsafe_allow_html=True)

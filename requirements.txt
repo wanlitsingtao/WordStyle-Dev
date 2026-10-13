@@ -1,4 +1,6 @@
-streamlit>=1.28.0
+# streamlit 下限 >=1.52.0：st.html(unsafe_allow_javascript=) 是写入身份 cookie 的必需能力（1.52 引入）；
+# <2.0.0 防止下一个大版本引入不兼容
+streamlit>=1.52.0,<2.0.0
 requests>=2.31.0
 
 # 后端依赖（管理后台需要）
