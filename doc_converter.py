@@ -518,6 +518,35 @@ def iter_document_paragraphs(doc):
             continue
 
 
+# ==================== 修订（w:ins）感知的 run 遍历 ====================
+# [2026-10-14] python-docx 的 `paragraph.runs` 只返回 `w:p` 的**直接子级** `w:r`，
+# 被「修订-插入」(w:ins) 包裹的内容整段看不到 —— 这些段落里的图片会被静默丢弃。
+# 实测：test/test.docx 第 3 章「丢失的图片」的 Word 画布与两张 WMF 图片全部丢失，
+# 根因就是它们的 run 全在 w:ins 内，图片扫描循环执行了 0 次。
+# 这里补一条遍历入口：直接子级 w:r + w:ins 内部的 w:r（按文档顺序）。
+# 必须排除 w:del（修订-删除）——那是被删掉的内容，不应进入成稿。
+# 对不含 w:ins 的文档，本函数产出的元素序列与 `paragraph.runs` 完全一致。
+# 仅用于「扫描图片」；文本提取保持原样，避免影响编号/语气/标题判定。
+
+def iter_paragraph_run_elements(para_or_elem):
+    """按文档顺序产出段落内的 run 元素：直接子级 w:r，以及 w:ins 内部的 w:r。"""
+    p = para_or_elem._p if hasattr(para_or_elem, '_p') else para_or_elem
+    r_tag = qn('w:r')
+    ins_tag = qn('w:ins')
+    for child in p:
+        if child.tag == r_tag:
+            yield child
+        elif child.tag == ins_tag:
+            for r in child.iter(r_tag):
+                yield r
+
+
+def iter_paragraph_runs(para):
+    """与 `paragraph.runs` 用法一致的展开版：额外包含 w:ins 内部的 run。"""
+    from docx.text.run import Run
+    for r in iter_paragraph_run_elements(para):
+        yield Run(r, para)
+
 def extract_template_format_snapshots(doc):
     """扫描模板文档，提取「样式 + 直接格式」快照表。
 
@@ -2005,6 +2034,23 @@ class DocumentConverter:
         当图片宽度超出可用宽度时，缩放到页面宽度的 IMAGE_SCALE_RATIO，高度等比缩放。
         如果未提供尺寸，则使用图片的像素尺寸（96 DPI 计算）并做相同处理。
         """
+        # [2026-10-14] WMF/EMF 走原生矢量插入：python-docx 不认这两种格式
+        # （docx.image.Image.from_blob → UnrecognizedImageError），Pillow 在 Linux
+        # （Streamlit Cloud）上也栅格化不了它们 —— 直接把原始字节作为图片部件插入，
+        # Word 原生可渲染，无需引入 LibreOffice 等系统依赖。
+        # 这一步必须早于下面的 PIL / run.add_picture 分支：否则 WMF 会在 run.add_picture
+        # 处抛异常，并在各调用点的 `except Exception: pass` 下**静默丢失** ——
+        # 这正是第 3 章两张 CAD 图片丢失的直接原因。
+        _fmt = self._detect_image_format(img_bytes)
+        if _fmt in ('wmf', 'emf'):
+            w_emu, h_emu = emu_width, emu_height
+            if not w_emu or not h_emu:
+                w_emu, h_emu = self._metafile_extent(img_bytes, _fmt, available_width_emu)
+            if w_emu > available_width_emu:
+                _scale = int(page_width_emu * IMAGE_SCALE_RATIO) / w_emu
+                w_emu, h_emu = int(w_emu * _scale), int(h_emu * _scale)
+            self._insert_metafile_as_picture(run, img_bytes, _fmt, w_emu, h_emu)
+            return
         if not PIL_AVAILABLE:
             run.add_picture(io.BytesIO(img_bytes))
             return
@@ -2072,6 +2118,31 @@ class DocumentConverter:
             return 'tiff'
         return None
 
+    @staticmethod
+    def _metafile_extent(blob, fmt, available_width_emu):
+        """从 WMF/EMF 头部推算显示尺寸（EMU）；解析不出来就给保底尺寸。
+
+        WMF：Placeable 头（22 字节）偏移 6 起的 BoundingBox，单位 twips（1/1440 英寸）。
+        EMF：EMR_HEADER 偏移 24 起的 rclFrame，单位 0.01 毫米。
+        仅在没有 wp:extent（如浮动锚定对象）时才走到这里。
+        """
+        import struct
+        w_emu = h_emu = None
+        try:
+            if fmt == 'wmf' and blob[:4] == b'\xd7\xcd\xc6\x9a' and len(blob) >= 22:
+                left, top, right, bottom = struct.unpack('<hhhh', blob[6:14])
+                w_emu = int(abs(right - left) * 635)      # 1 twip = 635 EMU
+                h_emu = int(abs(bottom - top) * 635)
+            elif fmt == 'emf' and len(blob) >= 40:
+                left, top, right, bottom = struct.unpack('<iiii', blob[24:40])
+                w_emu = int(abs(right - left) * 360)      # 0.01mm = 360 EMU
+                h_emu = int(abs(bottom - top) * 360)
+        except Exception:
+            w_emu = h_emu = None
+        if not w_emu or not h_emu or w_emu <= 0 or h_emu <= 0:
+            w_emu = int(available_width_emu)              # 保底：占满可用宽度，按 4:3 给高度
+            h_emu = int(w_emu * 0.75)
+        return w_emu, h_emu
     def _insert_metafile_as_picture(self, run, blob, fmt, emu_w, emu_h):
         """把 WMF/EMF 原始字节作为图片直接插入（绕过 add_picture 的格式限制）。
 
@@ -2092,7 +2163,14 @@ class DocumentConverter:
         image_part = Part(partname, content_type, blob, run.part.package)
         rId = run.part.relate_to(image_part, RT.IMAGE)
 
-        docPr_id = counter + 1000
+        # [2026-10-14] docPr id 取「python-docx 自己的下一个可用 id」与「counter+1000」的较大值：
+        # 既保证不与 python-docx 分配的 id 撞车（实测：硬编码 1003 会与 python-docx 生成的
+        # "Picture 1003" 重复 —— 因为 python-docx 按 max(@id)+1 分配），又不改变既有文档里
+        # 原本就会拿到的那些 id（counter+1000 更大时仍用它），保持与改造前一致。
+        try:
+            docPr_id = max(run.part.next_id, counter + 1000)
+        except Exception:
+            docPr_id = counter + 1000
         drawing_xml = (
             '<w:drawing %s>'
             '<wp:inline distT="0" distB="0" distL="0" distR="0">'
@@ -2122,6 +2200,81 @@ class DocumentConverter:
         )
         run._element.append(parse_xml(drawing_xml))
 
+    # ---- Word 画布 / VML 图形组：无关系引用时可原样搬移 ----
+    # [2026-10-14] 段落里的「Word 画布（wpc:wpc）/ VML 图形组（v:group）/ 文本框」不含
+    # a:blip，普通图片通道处理不到；原实现又把「独立 VML 形状」直接 pass 丢掉。
+    # 实测：test/test.docx 第 3 章「轨旁天线安装」示意图（6 形状 + 12 文本框）就是这样丢的。
+    # 这里补一条**有守卫**的搬移通道：只在图形内部**不含任何关系引用**
+    # （r:embed / r:id / r:link）时才原样复制 —— 否则会把源文档的 rId 带进新文档导致
+    # Word 打开报错（这正是原注释不敢复制 XML 的原因）。含引用的一律维持原行为（丢弃）。
+    _GRAPHIC_REL_ATTRS = (
+        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed',
+        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id',
+        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}link',
+    )
+    _MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+
+    def _is_copyable_graphic(self, el):
+        """图形内部不含关系引用、且不是普通图片（pic:pic）→ 可原样复制。"""
+        if el.findall('.//' + qn('a:blip')):
+            return False          # 含图片 → 交给 a:blip 通道处理，避免重复插入
+        xml = etree.tostring(el, encoding='unicode')
+        if '<pic:pic' in xml:
+            return False          # 普通图片交给 a:blip 通道处理，避免重复插入
+        for node in el.iter():
+            for attr in self._GRAPHIC_REL_ATTRS:
+                if node.get(attr):
+                    return False  # 含 rId 引用 → 不能原样搬
+        return True
+
+    def _pick_copyable_graphic(self, para_elem):
+        """从段落里挑一个「可原样搬移」的图形元素；没有则返回 None。
+
+        优先级：mc:Choice 内的 w:drawing（DrawingML 画布）> 独立 w:drawing > w:pict（VML 组）。
+        Fallback 分支只在没有 Choice 时才考虑，避免画布被复制两遍。
+        """
+        w_drawing = qn('w:drawing')
+        w_pict = qn('w:pict')
+        ac_tag = '{%s}AlternateContent' % self._MC_NS
+        choice_tag = '{%s}Choice' % self._MC_NS
+        fallback_tag = '{%s}Fallback' % self._MC_NS
+
+        choice_candidates = []
+        fallback_candidates = []
+        for alt in para_elem.findall('.//' + ac_tag):
+            for br in alt:
+                if br.tag == choice_tag:
+                    choice_candidates.extend(br.findall('.//' + w_drawing))
+                elif br.tag == fallback_tag:
+                    fallback_candidates.extend(br.findall('.//' + w_pict))
+        # 有 Choice 就只看 Choice：同一图形在 Choice / Fallback 里各存一份，
+        # 都看会导致它被搬两次（重复渲染）。
+        candidates = choice_candidates or fallback_candidates
+        if not candidates:
+            candidates = (para_elem.findall('.//' + w_drawing)
+                          + para_elem.findall('.//' + w_pict))
+        for el in candidates:
+            if self._is_copyable_graphic(el):
+                return el
+        return None
+
+    def _copy_paragraph_graphics(self, source_para, new_para):
+        """把段落里「无关系引用」的图形（画布 / VML 图形组 / 文本框）原样搬进新段落。
+
+        找不到可搬移的图形时什么都不做（保持原行为）。成功返回 True。
+        搬移失败只记警告，不影响其余内容 —— 宁可少搬，也不产出无法打开的文档。
+        """
+        try:
+            el = self._pick_copyable_graphic(source_para._element)
+            if el is None:
+                return False
+            frag = etree.tostring(el, encoding='unicode')
+            new_run = new_para.add_run()
+            new_run._element.append(parse_xml(frag))
+            return True
+        except Exception as e:
+            print(f"[IMAGE-WARN] 图形（画布/VML组）搬移失败，已跳过: {e!r}")
+            return False
     def _add_ole_preview_image(self, run, blob, fmt, page_width_emu, available_width_emu, emu_w, emu_h):
         """插入 OLE 预览图：WMF/EMF 直接插入原始矢量字节，其他格式走 add_picture。"""
         # 超宽缩放（与 add_picture 保持一致）
@@ -2274,7 +2427,7 @@ class DocumentConverter:
     
     def extract_and_add_images(self, source_para, new_para, page_width_emu, available_width_emu):
         """从源段落提取图片并添加到新段落（DRY原则：避免代码重复）"""
-        for run in source_para.runs:
+        for run in iter_paragraph_runs(source_para):
             blips = run._element.findall('.//' + qn('a:blip'))
             for blip in blips:
                 rId = blip.get(qn('r:embed'))
@@ -2339,7 +2492,7 @@ class DocumentConverter:
             _set_style(new_para, target_style_name)
             
             # 复制内容但不修改
-            for run in source_para.runs:
+            for run in iter_paragraph_runs(source_para):
                 new_run = new_para.add_run(run.text)
                 # 复制格式
                 new_run.bold = run.bold
@@ -2384,7 +2537,7 @@ class DocumentConverter:
             _set_style(new_para, ole_para_style)
             
             ole_fallback = False
-            for run in source_para.runs:
+            for run in iter_paragraph_runs(source_para):
                 # 检查这个run是否包含OLE对象
                 run_has_ole = bool(run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}object'))
                 run_has_vml = bool(run._element.findall('.//{urn:schemas-microsoft-com:vml}shape'))
@@ -2405,7 +2558,8 @@ class DocumentConverter:
                         new_para.add_run("[OLE对象，请手动复制]")
                         ole_fallback = True
                 elif run_has_vml:
-                    # 独立 VML 形状（非 OLE 预览）：跳过其 XML，不复制
+                    # 独立 VML 形状（非 OLE 预览）：run 级不复制其 XML（rId 不可搬），
+                    # 段落级由 _copy_paragraph_graphics 兜底搬移「无关系引用」的图形
                     pass
                 elif run.text:
                     # 普通文本：复制文本及格式
@@ -2432,10 +2586,12 @@ class DocumentConverter:
                     except:
                         pass
             
+            self._copy_paragraph_graphics(source_para, new_para)
             return _finish(new_para)
         
         # 普通段落处理（原有逻辑）
-        has_image = any(run._element.findall('.//' + qn('a:blip')) for run in source_para.runs)
+        has_image = any(run._element.findall('.//' + qn('a:blip'))
+                         for run in iter_paragraph_runs(source_para))
         new_para = target_doc.add_paragraph()
         src_style_name = source_para.style.name
         
@@ -2640,7 +2796,7 @@ class DocumentConverter:
                 if list_full_text and len(list_full_text) > len(list_runs_text):
                     # 有超链接内部文本，使用完整文本
                     # 但仍需处理图片
-                    for run_idx, run in enumerate(source_para.runs):
+                    for run_idx, run in enumerate(iter_paragraph_runs(source_para)):
                         blips = run._element.findall('.//' + qn('a:blip'))
                         if blips:
                             for blip in blips:
@@ -2657,7 +2813,7 @@ class DocumentConverter:
                     if list_full_text.strip():
                         new_para.add_run(list_full_text.strip())
                 else:
-                    for run_idx, run in enumerate(source_para.runs):
+                    for run_idx, run in enumerate(iter_paragraph_runs(source_para)):
                         blips = run._element.findall('.//' + qn('a:blip'))
                         if blips:
                             for blip in blips:
@@ -2694,7 +2850,7 @@ class DocumentConverter:
                 cleaned_text = clean_list_numbering(full_text)
                 if cleaned_text:
                     new_para.add_run(cleaned_text)
-                for run_idx, run in enumerate(source_para.runs):
+                for run_idx, run in enumerate(iter_paragraph_runs(source_para)):
                     blips = run._element.findall('.//' + qn('a:blip'))
                     for blip in blips:
                         rId = blip.get(qn('r:embed'))
@@ -2722,7 +2878,7 @@ class DocumentConverter:
         if full_para_text and len(full_para_text) > len(runs_text):
             # 段落中有超链接内部的隐藏文本，使用完整文本
             # 但仍需处理图片（图片在直接子级run中）
-            for run_idx, run in enumerate(source_para.runs):
+            for run_idx, run in enumerate(iter_paragraph_runs(source_para)):
                 blips = run._element.findall('.//' + qn('a:blip'))
                 if blips:
                     for blip in blips:
@@ -2741,7 +2897,7 @@ class DocumentConverter:
             if cleaned_text:
                 new_para.add_run(cleaned_text)
         else:
-            for run_idx, run in enumerate(source_para.runs):
+            for run_idx, run in enumerate(iter_paragraph_runs(source_para)):
                 blips = run._element.findall('.//' + qn('a:blip'))
                 if blips:
                     for blip in blips:
@@ -2759,6 +2915,7 @@ class DocumentConverter:
                     if run.text:
                         new_para.add_run(run.text)
         
+        self._copy_paragraph_graphics(source_para, new_para)
         return _finish(new_para)
     
     def _copy_table_grid(self, new_table, source_table):
@@ -2925,7 +3082,7 @@ class DocumentConverter:
                 cleaned_text = clean_list_numbering(full_text)
                 if cleaned_text:
                     new_para.add_run(cleaned_text)
-                for run in para.runs:
+                for run in iter_paragraph_runs(para):
                     blips = run._element.findall('.//' + qn('a:blip'))
                     for blip in blips:
                         rId = blip.get(qn('r:embed'))
@@ -2965,7 +3122,7 @@ class DocumentConverter:
                         except Exception:
                             pass
             else:
-                for run in para.runs:
+                for run in iter_paragraph_runs(para):
                     blips = run._element.findall('.//' + qn('a:blip'))
                     if blips:
                         for blip in blips:
