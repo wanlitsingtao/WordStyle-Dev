@@ -274,8 +274,13 @@ def render_conversion_page():
         if not analyzed_file_names or set(current_file_names) != set(analyzed_file_names):
             need_analyze = True
         # [2026-10-11] 缺「表格/图片专属样式」分析结果（旧会话缓存）时也重新分析，
-        # 保证第3区「不配置表格格式 / 不配置图片样式」两个复选框有数据可用。
-        if not st.session_state.get('file_special_styles_map'):
+        # 保证第3区「不配置表格样式 / 不配置图片样式」两个复选框有数据可用。
+        # [2026-10-22] 同理：旧缓存缺 'list_only' 键时重新分析，
+        # 否则「不配置列表段落样式」复选框会因取不到列表虚拟样式而不显示。
+        _special_cache = st.session_state.get('file_special_styles_map') or {}
+        if not _special_cache or any(
+                isinstance(_v, dict) and 'list_only' not in _v
+                for _v in _special_cache.values()):
             need_analyze = True
 
         progress_bar = st.progress(0)
@@ -351,7 +356,7 @@ def render_conversion_page():
                             progress_bar.progress(min(total_progress / 100, 1.0))
 
                 # [2026-10-11] 表格内段落样式：纳入第3区可映射范围
-                #（「不配置表格格式」未勾选时这些样式行会显示出来）。
+                #（「不配置表格样式」未勾选时这些样式行会显示出来）。
                 table_styles = set()
 
                 def _collect_table_styles(tbl, acc):
@@ -376,6 +381,9 @@ def render_conversion_page():
                 file_special_styles_map[source_file.name] = {
                     'table_only': sorted(table_only),
                     'image_only': sorted(image_only),
+                    # [2026-10-22] 列表段落虚拟样式（'1 列表段落' / '● 列表段落'）：
+                    # 供第3区「不配置列表段落样式」复选框判断是否显示、并决定隐藏哪些样式行。
+                    'list_only': sorted(list_virtual_styles),
                 }
                 file_styles_map[source_file.name] = sorted(list(styles))
                 if current_file_total == 0:
@@ -542,9 +550,12 @@ def render_conversion_page():
         st.info("💡 转换完成后将自动恢复操作权限")
     else:
         if st.button("🚀 开始转换", type="primary", use_container_width=True):
-            st.session_state.conversion_file_results = []
-            st.session_state.recent_results = []
-            st.session_state.show_download_buttons = False
+            # [2026-10-22] 统一走 AppState.clear_conversion_results()。
+            #   原来这里只清了逐文件结果 / 最近结果 / 下载开关，**漏了 conversion_summary**：
+            #   若本次转换在早期分支就失败（还没走到写 summary 的地方），页面会继续挂着
+            #   上一次的「🎉 转换完成！成功 N 个，失败 M 个」和「处理 X 个段落」，
+            #   与本次的失败提示混在一起，容易误判。
+            app_state.clear_conversion_results()
 
             progress_placeholder = st.empty()
             status_placeholder = st.empty()
@@ -727,15 +738,20 @@ def render_conversion_page():
                     # [2026-10-11] answer_source_style / answer_copy_style 已随
                     # 第 2 区两个下拉删除而废弃，不再传给转换引擎。
 
-                    # [2026-10-11] 「不配置表格格式 / 不配置图片样式」：文件级 → 默认集 → 默认勾选
+                    # [2026-10-22] 复选框默认值改为「不勾选」：文件级 → 默认集 → 默认 False
                     _file_skip_table = file_mapping_data.get('_skip_table_mapping')
                     if _file_skip_table is None:
                         _file_skip_table = st.session_state.file_style_mappings.get(
-                            '_default_skip_table_mapping', True)
+                            '_default_skip_table_mapping', False)
                     _file_skip_image = file_mapping_data.get('_skip_image_mapping')
                     if _file_skip_image is None:
                         _file_skip_image = st.session_state.file_style_mappings.get(
-                            '_default_skip_image_mapping', True)
+                            '_default_skip_image_mapping', False)
+                    # [2026-10-22] 「不配置列表段落样式」：文件级 → 默认集 → 默认 False
+                    _file_skip_list = file_mapping_data.get('_skip_list_mapping')
+                    if _file_skip_list is None:
+                        _file_skip_list = st.session_state.file_style_mappings.get(
+                            '_default_skip_list_mapping', False)
 
                     _file_do_mood = bool(file_mood_config.get('do_mood',
                                         st.session_state.get('do_mood_config', True)))
@@ -813,6 +829,7 @@ def render_conversion_page():
                         clean_numbering_map=file_clean_numbering,
                         skip_table_mapping=_file_skip_table,
                         skip_image_mapping=_file_skip_image,
+                        skip_list_mapping=_file_skip_list,
                     )
 
                     if success:

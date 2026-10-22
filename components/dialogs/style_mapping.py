@@ -9,9 +9,11 @@
         [2026-10-11] 原「原文目标样式 / 应答原文目标样式」两个下拉已删除：
         copy_chapter 模式下两份副本样式完全由第 3 区双列决定。
 区域 3: 样式映射（正文+列表段落，根据应答模式动态切换单列/双列）
-        [2026-10-11] 标题后新增「不配置表格格式」「不配置图片样式」复选框（默认勾选）：
-        勾选 → 表格/图片专属样式行隐藏、直接走第 4 区兜底（历史行为）；
-        取消 → 专属样式行显示可逐样式映射，第 3 区优先、兜底只管未映射的。
+        [2026-10-11] 标题后新增「不配置表格样式」「不配置图片样式」复选框（默认不勾选）：
+        勾选 → 表格/图片专属样式行隐藏、直接走第 4 区兜底；
+        不勾选（默认）→ 专属样式行显示可逐样式映射，第 3 区优先、兜底只管未映射的。
+        [2026-10-22] 并列增加「不配置列表段落样式」（默认不勾选），语义同上：
+        勾选 → 列表虚拟样式行（'1 列表段落'/'● 列表段落'）隐藏，统一走第 4 区列表兜底。
 区域 4: 表格/图片/列表兜底配置（支持双列）
 
 功能：
@@ -25,6 +27,7 @@ import os
 import re
 import streamlit as st
 from data_manager import load_user_data, save_user_data
+from state import app_state
 from config import TEMP_DIR
 
 # [2026-09-18] 默认样式映射改为"一个源样式对应多个候选目标样式"（多对多）：
@@ -34,6 +37,20 @@ from doc_converter import (
     merge_style_candidates,
     resolve_default_target,
 )
+
+
+# [2026-10-22] 列表虚拟样式的 UI 显示名。
+# ⚠️ 只用于展示，内部键（style_map 的 key、file_special_styles_map 的 list_only 值、
+#    doc_converter 里 '列表段落' 子串判定）一律保持原样，否则已保存的映射配置会全部失效。
+_LIST_STYLE_DISPLAY_NAMES = {
+    '1 列表段落': '1……（数字列表段落）',
+    '● 列表段落': '● ……（符号列表段落）',
+}
+
+
+def _style_display_name(style_name):
+    """把内部样式名转成界面显示名；非列表虚拟样式原样返回。"""
+    return _LIST_STYLE_DISPLAY_NAMES.get(style_name, style_name)
 
 
 def get_answer_mode_options():
@@ -601,10 +618,12 @@ def show_style_mapping_dialog():
     # ====================================================================
     # Step 3: 样式映射（正文+列表段落）- 根据双列模式动态切换
     # [2026-10-10] 因应答句配置改为第 2 区，本区顺延为第 3 区
-    # [2026-10-11] 新增「不配置表格格式 / 不配置图片样式」复选框（默认勾选）：
-    #   勾选 → 表格/图片专属样式行不显示，表格与图片直接走第 4 区兜底（历史行为）；
-    #   取消 → 专属样式行显示并可逐样式映射，第 3 区映射优先、兜底只管未映射的。
+    # [2026-10-11] 新增「不配置表格样式 / 不配置图片样式」复选框（2026-10-22 起默认不勾选）：
+    #   勾选 → 表格/图片专属样式行不显示，表格与图片直接走第 4 区兜底；
+    #   不勾选（默认）→ 专属样式行显示并可逐样式映射，第 3 区映射优先、兜底只管未映射的。
     #   共享样式（正文+表格/图片都在用）不隐藏，始终显示。
+    # [2026-10-22] 并列增加「不配置列表段落样式」（默认不勾选），语义与上面两者一致：
+    #   勾选 → 列表虚拟样式行（'1 列表段落'/'● 列表段落'）隐藏，统一走第 4 区列表兜底。
     # ====================================================================
     st.markdown("---")
     if is_dual:
@@ -612,45 +631,70 @@ def show_style_mapping_dialog():
     else:
         st.markdown("**3. 样式映射（正文+列表段落）**")
 
-    # ---- 「不配置表格格式 / 不配置图片样式」复选框 ----
-    # [2026-10-11] 显示规则：仅在检出对应「专属样式」时显示该复选框（默认勾选）；
-    #   未检出的那一侧不渲染控件，改为就地说明「未检测到专属样式，直接走第 4 区兜底」，
-    #   避免给用户一个"勾了也看不到任何变化"的空控件。
+    # ---- 「不配置表格样式 / 不配置图片样式 / 不配置列表段落样式」复选框 ----
+    # [2026-10-11] 显示规则：仅在检出对应「专属样式」时渲染复选框；
+    #   未检出的那一侧不渲染控件（该列留空），说明文字统一放到三个复选框**之后**。
     _special_map = (st.session_state.get('file_special_styles_map', {})
                     .get(selected_file.name, {}))
     _table_only_set = set(_special_map.get('table_only', []))
     _image_only_set = set(_special_map.get('image_only', []))
     _default_skip_table = bool(st.session_state.file_style_mappings.get(
-        '_default_skip_table_mapping', True))
+        '_default_skip_table_mapping', False))
     _default_skip_image = bool(st.session_state.file_style_mappings.get(
-        '_default_skip_image_mapping', True))
-    _skip_ck_cols = st.columns(2)
+        '_default_skip_image_mapping', False))
+    # [2026-10-22] 列表段落虚拟样式（'1 列表段落'/'● 列表段落'），供第三个复选框判断是否显示
+    _list_only_set = set(_special_map.get('list_only', []))
+    _default_skip_list = bool(st.session_state.file_style_mappings.get(
+        '_default_skip_list_mapping', False))
+
+    # [2026-10-22] 布局：三个复选框始终在同一行优先渲染（未检出的那列留空），
+    #   「未检测到…」的提示统一收集到复选框**之后**整行展示 —— 长文案若留在列内
+    #   会把该列撑高，导致右侧复选框被挤歪（见 2026-10-22 截图）。
+    #   默认值改为「不勾选」：默认在第 3 区逐样式映射，兜底只管未映射的。
+    skip_table = True   # 未检出专属样式时无从映射 → 强制走第 4 区兜底
+    skip_image = True
+    skip_list = True
+    _skip_ck_cols = st.columns(3)
     with _skip_ck_cols[0]:
         if _table_only_set:
             skip_table = st.checkbox(
-                "不配置表格格式",
+                "不配置表格样式",
                 value=bool(current_file_mapping.get('_skip_table_mapping', _default_skip_table)),
                 key=f"skip_table_{fname}",
-                help="勾选（默认）：表格段落样式不在本区逐样式映射，表格直接走第4区表格兜底；"
-                     "取消勾选：表格段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+                help="勾选：表格段落样式不在本区逐样式映射，表格直接走第4区表格兜底；"
+                     "取消勾选（默认）：表格段落样式（含下列专属样式行）在本区显示并可逐样式映射"
                      "（未映射的才走兜底）。")
-        else:
-            # 没有「仅表格使用」的样式 → 表格无论勾不勾都无从映射，直接走第4区兜底
-            skip_table = True
-            st.caption("ℹ️ 未检测到源文档中**表格专属样式**，表格将直接按第 4 区兜底样式转换。")
     with _skip_ck_cols[1]:
         if _image_only_set:
             skip_image = st.checkbox(
                 "不配置图片样式",
                 value=bool(current_file_mapping.get('_skip_image_mapping', _default_skip_image)),
                 key=f"skip_image_{fname}",
-                help="勾选（默认）：图片段落样式不在本区逐样式映射，图片直接走第4区图片兜底；"
-                     "取消勾选：图片段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+                help="勾选：图片段落样式不在本区逐样式映射，图片直接走第4区图片兜底；"
+                     "取消勾选（默认）：图片段落样式（含下列专属样式行）在本区显示并可逐样式映射"
                      "（未映射的才走兜底）。")
-        else:
-            # 没有「仅图片段落使用」的样式 → 图片无论勾不勾都无从映射，直接走第4区兜底
-            skip_image = True
-            st.caption("ℹ️ 未检测到源文档中**图片专属样式**，图片将直接按第 4 区兜底样式转换。")
+    with _skip_ck_cols[2]:
+        # [2026-10-22] 与表格/图片并列的第三个开关：列表段落不参与第3区逐样式映射，
+        #   统一走第4区「列表段落（未映射）兜底」。
+        if _list_only_set:
+            skip_list = st.checkbox(
+                "不配置列表段落样式",
+                value=bool(current_file_mapping.get('_skip_list_mapping', _default_skip_list)),
+                key=f"skip_list_{fname}",
+                help="勾选：列表段落样式不在本区逐样式映射，列表段落直接走第4区列表兜底；"
+                     "取消勾选（默认）：列表段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+                     "（未映射的才走兜底）。")
+
+    # 「未检测到专属样式」的说明放到复选框之后（不占用列宽，避免挤压同行控件）
+    _skip_notes = []
+    if not _table_only_set:
+        _skip_notes.append("ℹ️ 未检测到源文档中**表格专属样式**，表格将直接按第 4 区兜底样式转换。")
+    if not _image_only_set:
+        _skip_notes.append("ℹ️ 未检测到源文档中**图片专属样式**，图片将直接按第 4 区兜底样式转换。")
+    if not _list_only_set:
+        _skip_notes.append("ℹ️ 未检测到源文档中**列表段落专属样式**，列表段落将直接按第 4 区兜底样式转换。")
+    for _note in _skip_notes:
+        st.caption(_note)
 
     # 被隐藏的样式行（已保存的映射值会在保存时原样保留，不丢数据）
     hidden_styles = set()
@@ -658,6 +702,8 @@ def show_style_mapping_dialog():
         hidden_styles |= _table_only_set
     if skip_image:
         hidden_styles |= _image_only_set
+    if skip_list:
+        hidden_styles |= _list_only_set
     # [2026-10-11] 样式名可能带首尾空格（Word 或 python-docx 偶发），用 strip 归一化后比较，
     # 确保隐藏/保留已存映射时不会因为空白差异而漏掉专属样式行。
     _hidden_norm = {h.strip() for h in hidden_styles}
@@ -669,7 +715,7 @@ def show_style_mapping_dialog():
     if not body_styles:
         st.warning("⚠️ 当前源文档未检测到正文样式")
     elif not visible_body_styles:
-        st.caption("（所有正文样式均为表格/图片专属且已按上方复选框隐藏，"
+        st.caption("（所有正文样式均为表格/图片/列表段落专属且已按上方复选框隐藏，"
                    "取消勾选即可在本区配置它们）")
     else:
         # 表头
@@ -690,7 +736,8 @@ def show_style_mapping_dialog():
             if is_dual:
                 cols = st.columns([2, 2, 2])
                 with cols[0]:
-                    st.text(source_style)
+                    # 显示名与内部键分离：列表虚拟样式显示中文说明，写回时仍用原名
+                    st.text(_style_display_name(source_style))
                 with cols[1]:
                     default_val = resolve_default_target(
                         source_style, current_file_mapping, default_style_map,
@@ -716,7 +763,7 @@ def show_style_mapping_dialog():
             else:
                 cols = st.columns([2, 2])
                 with cols[0]:
-                    st.text(source_style)
+                    st.text(_style_display_name(source_style))
                 with cols[1]:
                     default_val = resolve_default_target(
                         source_style, current_file_mapping, default_style_map,
@@ -794,9 +841,11 @@ def show_style_mapping_dialog():
     }
     updated_mapping['_answer_config'] = answer_config
 
-    # [2026-10-11] 保存「不配置表格格式 / 不配置图片样式」（文件级；复选框无条件存在，恒写入）
+    # [2026-10-11] 保存「不配置表格样式 / 不配置图片样式」（文件级；复选框无条件存在，恒写入）
+    # [2026-10-22] 增加「不配置列表段落样式」
     updated_mapping['_skip_table_mapping'] = bool(skip_table)
     updated_mapping['_skip_image_mapping'] = bool(skip_image)
+    updated_mapping['_skip_list_mapping'] = bool(skip_list)
 
     # 3. 保存表格/图片配置
     tbl_img_config_new = {
@@ -879,8 +928,8 @@ def show_style_mapping_dialog():
             for _k in (f"mood_{fname}", f"hint_enable_{fname}", f"hint_type_{fname}",
                        f"hint_style_{fname}", f"hint_text_{fname}", f"hint_image_{fname}"):
                 st.session_state.pop(_k, None)
-            # 「不配置表格格式 / 不配置图片样式」的控件状态一并复位
-            for _k in (f"skip_table_{fname}", f"skip_image_{fname}"):
+            # 「不配置表格样式 / 不配置图片样式 / 不配置列表段落样式」的控件状态一并复位
+            for _k in (f"skip_table_{fname}", f"skip_image_{fname}", f"skip_list_{fname}"):
                 st.session_state.pop(_k, None)
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
@@ -911,9 +960,11 @@ def show_style_mapping_dialog():
             # ★ 插入提示语 / 祈使语气转换也进默认集（2026-10-10 改为文件级）
             st.session_state.file_style_mappings['_default_hint_config'] = dict(hint_config_new)
             st.session_state.file_style_mappings['_default_mood_config'] = dict(updated_mapping['_mood_config'])
-            # ★ 「不配置表格格式 / 不配置图片样式」也进默认集（2026-10-11 文件级）
+            # ★ 「不配置表格样式 / 不配置图片样式」也进默认集（2026-10-11 文件级）
+            # ★ [2026-10-22] 「不配置列表段落样式」同样进默认集
             st.session_state.file_style_mappings['_default_skip_table_mapping'] = bool(skip_table)
             st.session_state.file_style_mappings['_default_skip_image_mapping'] = bool(skip_image)
+            st.session_state.file_style_mappings['_default_skip_list_mapping'] = bool(skip_list)
             user_data = load_user_data(st.session_state.user_id)
             if user_data is None:
                 st.error("❌ 用户数据加载失败，无法保存")
@@ -944,5 +995,11 @@ def show_style_mapping_dialog():
                 return
             user_data['style_mappings'] = st.session_state.file_style_mappings
             save_user_data(user_data, st.session_state.user_id)
+            # [2026-10-22] 点「确定」意味着「按新配置重新转换」：先清掉上一轮留在
+            #   主页面上的转换结果（"🎉 转换完成"摘要、"处理 N 个段落"、逐文件成功
+            #   提示、以及"📥 下载转换结果"整块），否则新旧结果同屏并存，用户分不清
+            #   界面上的成功提示属于哪一次转换，也无法判断新配置是否生效。
+            #   只清 UI 状态，磁盘结果文件不动。
+            app_state.clear_conversion_results()
             st.success(f"✅ 文件 '{selected_file.name}' 的样式映射已保存！")
             st.rerun()

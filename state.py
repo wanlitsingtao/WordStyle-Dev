@@ -499,6 +499,27 @@ class AppState:
     def set_show_download_buttons(show: bool):
         """设置下载按钮显示状态"""
         st.session_state.show_download_buttons = show
+
+    @staticmethod
+    def clear_conversion_results():
+        """清掉上一次转换遗留在页面上的全部结果（2026-10-22）。
+
+        使用场景：用户改完样式映射、在对话框里点「✅ 确定」，意味着要按新配置
+        再转一次。此时上一轮的「🎉 转换完成！成功 N 个」「处理 X 个段落」
+        「✅ xxx.docx 转换成功」以及「📥 下载转换结果」都必须消失，否则新旧结果
+        同屏并存，用户无法判断界面上的成功提示属于哪一次转换，也不知道新配置
+        到底有没有生效。
+
+        只清 UI 状态，**不动磁盘文件**：结果仍在 temp/conversion_results 下，
+        由既有过期清理机制回收；用户若还需旧结果，可在过期前从该目录取用。
+        """
+        # 转换摘要：驱动「🎉 转换完成！成功 N 个，失败 M 个」+「处理 X 个段落」
+        # 逐文件结果：驱动「✅ xxx.docx 转换成功 / ❌ 转换失败」
+        # 最近结果列表：驱动「📥 下载转换结果」下的下载按钮
+        for _key in ('conversion_summary', 'conversion_file_results', 'recent_results'):
+            st.session_state.pop(_key, None)
+        # 总开关：False 后整块「下载结果」区域不再渲染
+        st.session_state.show_download_buttons = False
     
     # ==================== 进度条相关 ====================
     

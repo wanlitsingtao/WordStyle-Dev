@@ -3015,7 +3015,7 @@ class DocumentConverter:
         """复制单个单元格内容（段落文本、图片、OLE/VML 对象）。
 
         样式决策 [2026-10-11] 第3区优先：
-        - 「不配置表格格式」未勾选 且 该段落样式在第3区已映射 → 用第3区映射目标；
+        - 「不配置表格样式」未勾选 且 该段落样式在第3区已映射 → 用第3区映射目标；
         - 否则保持与原来一致：表格内段落只按表格样式定义处理，不参与正文样式映射
           （enable_table_style + table_style_override → 模板同名 → DEFAULT_TARGET）。
         同时按 w:p 元素记录应答副本计划（self._tbl_para_plans[table_idx]，键为元素
@@ -3335,7 +3335,8 @@ class DocumentConverter:
                         virtual_style = self._detect_numbering_format(para)
                         target_style = self.get_target_style(virtual_style, new_doc, source_file)
                         _resolve_num_text = None
-                        if virtual_style in style_map:
+                        if (virtual_style in style_map
+                                and not getattr(self, '_r3_skip_list', True)):
                             # ★ 修复：虚拟样式已在 Step 3 映射
                             # 判断目标样式是否为列表段落样式（模板中自带 w:numPr 定义）
                             target_has_numPr = False
@@ -3356,6 +3357,10 @@ class DocumentConverter:
                                 _enable_list_fallback = False
                                 _resolve_num_text = self._resolve_auto_numbering_text(para)
                         else:
+                            if getattr(self, '_r3_skip_list', True):
+                                # [2026-10-22] 勾选「不配置列表段落样式」：虚拟样式不参与第3区映射，
+                                # 段落基础样式跟随真实样式，编号走第4区列表兜底。
+                                target_style = self.get_target_style(src_style, new_doc, source_file)
                             _enable_list_fallback = enable_list_style
                             _list_style = list_style
                     else:
@@ -4081,7 +4086,7 @@ class DocumentConverter:
             source_elem = deep_copy(orig_tbl)
             tbl_plans = tbl_plans if isinstance(tbl_plans, dict) else {}
             if _r3_skip_table:
-                # 历史行为（「不配置表格格式」勾选）：统一表格应答目标样式
+                # 历史行为（「不配置表格样式」勾选）：统一表格应答目标样式
                 tbl_style_id = (self.get_style_id_by_name(doc, table_answer_style)
                                 if table_answer_style else None)
                 if tbl_style_id:
@@ -4816,8 +4821,9 @@ class DocumentConverter:
                      list_answer_bullet='● ',
                      enable_list_style=True,
                      clean_numbering_map=None,
-                     skip_table_mapping=True,
-                     skip_image_mapping=True):
+                     skip_table_mapping=False,
+                     skip_image_mapping=False,
+                     skip_list_mapping=False):
         """
         完整转换流程：样式转换 -> 语气转换 -> 插入应答句
         [HIGH_VOLTAGE] 性能优化：合并为一次性流水线，避免多次加载/保存文档
@@ -4859,7 +4865,8 @@ class DocumentConverter:
         
         # 步骤1：样式转换（返回Document对象，不保存）
         # [2026-10-11] skip_table_mapping / skip_image_mapping 来自第3区
-        # 「不配置表格格式 / 不配置图片样式」复选框（默认 True = 历史行为）。
+        # 「不配置表格样式 / 不配置图片样式」复选框（默认不勾选 = 逐样式映射优先）。
+        # [2026-10-22] skip_list_mapping 同上：第3区「不配置列表段落样式」（默认不勾选）。
         doc = self._convert_styles_in_memory(source_file, template_file, custom_style_map, list_bullet,
                                               warning_callback, source_styles_cache,
                                               table_style_override, enable_table_style,
@@ -4870,7 +4877,8 @@ class DocumentConverter:
                                               enable_list_style=enable_list_style,
                                               clean_numbering_map=clean_numbering_map,
                                               skip_table_mapping=skip_table_mapping,
-                                              skip_image_mapping=skip_image_mapping)
+                                              skip_image_mapping=skip_image_mapping,
+                                              skip_list_mapping=skip_list_mapping)
         if doc is None:
             elapsed = time.time() - start_time
             return False, output_file, f"样式转换失败（耗时{elapsed:.1f}秒）"
@@ -5074,8 +5082,9 @@ class DocumentConverter:
                                    list_method='bullet', list_style='Body Text',
                                    enable_list_style=True,
                                    clean_numbering_map=None,
-                                   skip_table_mapping=True,
-                                   skip_image_mapping=True):
+                                   skip_table_mapping=False,
+                                   skip_image_mapping=False,
+                                   skip_list_mapping=False):
         """
         [HIGH_VOLTAGE] 性能优化：在内存中进行样式转换，不保存中间文件
         :param table_style_override: 表格样式覆盖（当enable_table_style=True时使用）
@@ -5083,8 +5092,10 @@ class DocumentConverter:
         :param image_style_override: 图片样式覆盖（当enable_image_style=True时使用）
         :param enable_image_style: 是否启用图片样式覆盖
         :param clean_numbering_map: 标题编号清理开关 {源样式名: 是否清理编号}（可选）
-        :param skip_table_mapping: 第3区「不配置表格格式」勾选状态（True=表格不参与第3区映射，历史行为）
-        :param skip_image_mapping: 第3区「不配置图片样式」勾选状态（True=图片段落不参与第3区映射，历史行为）
+        :param skip_table_mapping: 第3区「不配置表格样式」勾选状态（True=表格不参与第3区映射；默认 False）
+        :param skip_image_mapping: 第3区「不配置图片样式」勾选状态（True=图片段落不参与第3区映射；默认 False）
+        :param skip_list_mapping: 第3区「不配置列表段落样式」勾选状态（True=列表段落不参与第3区映射，
+                                  段落样式跟随真实样式、编号统一走第4区列表兜底；默认 False）
         :return: Document对象或None（失败时）
 
         [2026-10-11] 第3区成为副本样式的唯一权威：
@@ -5103,6 +5114,7 @@ class DocumentConverter:
         self._region3_map = custom_style_map if isinstance(custom_style_map, dict) else {}
         self._r3_skip_table = bool(skip_table_mapping)
         self._r3_skip_image = bool(skip_image_mapping)
+        self._r3_skip_list = bool(skip_list_mapping)
         # [2026-10-11] 逐元素第3区计划（**按元素对象键控**，不用位置序号）：
         #   模板清空后会残留一个空段落、提示语插入还会新增元素，任何「按出现顺序计数」
         #   都会整体错位；元素对象作键既与真实元素一一对应，又靠 dict 强引用保证
@@ -5179,26 +5191,34 @@ class DocumentConverter:
                         elif self.has_numbering(para):
                             # 非标题的列表段落：使用虚拟样式名进行映射
                             virtual_style = self._detect_numbering_format(para)
-                            target_style = self.get_target_style(virtual_style, new_doc, source_file)
                             _resolve_num_text = None
-                            if virtual_style in style_map:
-                                # ★ 修复：虚拟样式已在 Step 3 映射
-                                target_has_numPr = False
-                                try:
-                                    tpl_style_xml = new_doc.styles[target_style]._element.xml
-                                    if '<w:numPr>' in tpl_style_xml or '<w:numPr ' in tpl_style_xml:
-                                        target_has_numPr = True
-                                except KeyError:
-                                    pass
-                                if target_has_numPr:
-                                    _enable_list_fallback = True
-                                    _list_style = target_style
-                                else:
-                                    _enable_list_fallback = False
-                                    _resolve_num_text = self._resolve_auto_numbering_text(para)
-                            else:
+                            if getattr(self, '_r3_skip_list', True):
+                                # [2026-10-22] 勾选「不配置列表段落样式」：
+                                #   虚拟样式不参与第3区映射 —— 段落基础样式跟随该段落的真实样式，
+                                #   编号统一走第4区「列表段落兜底」（enable_list_style + list_style）。
+                                target_style = self.get_target_style(src_style, new_doc, source_file)
                                 _enable_list_fallback = enable_list_style
                                 _list_style = list_style
+                            else:
+                                target_style = self.get_target_style(virtual_style, new_doc, source_file)
+                                if virtual_style in style_map:
+                                    # ★ 修复：虚拟样式已在 Step 3 映射
+                                    target_has_numPr = False
+                                    try:
+                                        tpl_style_xml = new_doc.styles[target_style]._element.xml
+                                        if '<w:numPr>' in tpl_style_xml or '<w:numPr ' in tpl_style_xml:
+                                            target_has_numPr = True
+                                    except KeyError:
+                                        pass
+                                    if target_has_numPr:
+                                        _enable_list_fallback = True
+                                        _list_style = target_style
+                                    else:
+                                        _enable_list_fallback = False
+                                        _resolve_num_text = self._resolve_auto_numbering_text(para)
+                                else:
+                                    _enable_list_fallback = enable_list_style
+                                    _list_style = list_style
                         else:
                             target_style = self.get_target_style(src_style, new_doc, source_file)
                             _enable_list_fallback = enable_list_style
@@ -5211,7 +5231,10 @@ class DocumentConverter:
                         if is_heading_by_outline or is_heading_by_style or is_heading_by_mapped or is_custom_heading:
                             _r3_keys = [src_style]
                         elif self.has_numbering(para):
-                            _r3_keys = [self._detect_numbering_format(para), src_style]
+                            # [2026-10-22] 勾选「不配置列表段落样式」时视为未映射，
+                            # 让第4区列表兜底在 copy_chapter 副本上也生效。
+                            _r3_keys = ([] if getattr(self, '_r3_skip_list', True)
+                                        else [self._detect_numbering_format(para), src_style])
                         else:
                             _r3_keys = [src_style]
                         _r3_mapped = self._region3_mapped(_r3_keys)
