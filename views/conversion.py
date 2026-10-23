@@ -12,7 +12,7 @@ from pathlib import Path
 import streamlit as st
 
 from state import app_state
-from ui_theme import render_section_title
+from ui_theme import render_page_title, render_section_title
 
 logger = logging.getLogger('WordStyle')
 
@@ -242,6 +242,10 @@ def render_conversion_page():
 
     from components.sidebar import render_sidebar
     render_sidebar("conversion")
+
+    # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
+    # 必须紧跟 render_sidebar() 之后 —— 详见 ui_theme.PAGE_TITLE_MARGIN_TOP 的说明。
+    render_page_title("📄 文档转换")
 
     _render_header()
 

@@ -8,7 +8,7 @@ import logging
 import streamlit as st
 
 from state import app_state
-from ui_theme import render_section_title
+from ui_theme import render_page_title, render_section_title
 
 logger = logging.getLogger('WordStyle')
 
@@ -67,8 +67,9 @@ def render_tone_config_page():
     from components.sidebar import render_sidebar
     render_sidebar("tone_config")
 
-    # 页面一级标题：与「🧪 转换测试」同级别、同样式（共用 render_section_title）
-    render_section_title("祈使语气配置")
+    # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
+    # 必须紧跟 render_sidebar() 之后 —— 详见 ui_theme.PAGE_TITLE_MARGIN_TOP 的说明。
+    render_page_title("⚙️ 祈使语气配置")
 
     st.markdown(
         "管理文档转换时的祈使语气替换规则。修改后保存到您的账户，"

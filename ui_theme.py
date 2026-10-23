@@ -113,11 +113,79 @@ def render_section_title(text: str, *, margin_top: str = "1.05rem",
     )
 
 
+# ==================== 页面级标题（与侧边栏品牌顶对齐）====================
+# 每个功能页最上方的标题（文档转换 / 工具箱 / 祈使语气配置 / 用户评价），
+# 要求与侧边栏品牌「标书编写神器」的**文字顶**在同一水平线。
+#
+# 为什么 margin-top 是负值（实测标定，勿凭感觉改）：
+#   Streamlit 在渲染页面正文之前，会先往主内容 vertical block 里插入若干
+#   「空占位容器」——来源是各模块 st.markdown("<style>") / st.html 注入的
+#   样式与脚本（DOM 里表现为高度 0 的 stElementContainer）。它们本身不高，
+#   却被 vertical block 的 row-gap(16px) 逐个撑开，实测在 1440×900 视口下
+#   把主内容第一个真实元素从 padding-top 的 41.6px 推到了 137.6px（+96px）。
+#   而侧边栏品牌「标书编写神器」的文字顶在 91px。
+#   → 必须给页面标题一个负 margin-top 才能吃掉这段缺口。
+#     具体数值**不要自己推算**（行盒/字体度量会让推算与实际差好几像素），
+#     一律用 temp/_page_title_verify.mjs 实测标定：当前 -3.29rem 下实测差 0px。
+#
+# 稳定性前提（改动时务必保持）：
+#   页面标题必须**紧跟 render_sidebar() 之后**渲染，也就是成为页面里第一个
+#   真实内容元素。这样"标题前面的空占位容器数量"在四个页面上都是同一组
+#   （render_sidebar + app.py 全局样式注入），偏移量才是同一个常数。
+#   若把标题放到某个 st.markdown("<style>") 之后，前面会多出一个占位容器，
+#   对齐就会偏 16px —— 需要重新实测标定本常量。
+#
+# ⚠️ 这些值**不能写进行内 style**：Streamlit 渲染 markdown 前会过 DOMPurify，
+# 实测 inline style 里带 `!important` 的声明会被整条剥掉（只剩字号/字重/颜色），
+# 负 margin 与 padding 归零都会静默失效。因此真正的对齐样式由
+# root_style_tag() 里的 `.ws-page-title` 规则给出（外部 CSS + 高特异性 + !important）。
+PAGE_TITLE_MARGIN_TOP = "-3.29rem"    # ≈ -52.6px，实测标定值（浏览器实测对齐误差 0px）
+PAGE_TITLE_MARGIN_BOTTOM = "0.45rem"
+# 页面标题说明文字（工具箱等页在标题下方的补充文案）
+FONT_VAR_PAGE_SUBTITLE = "--ws-font-page-subtitle"
+FONT_SIZE_PAGE_SUBTITLE = "0.95rem"
+PAGE_SUBTITLE_COLOR = "#64748b"
+
+
+def page_title_html(text: str) -> str:
+    """生成页面级标题 HTML（与侧边栏品牌同字号，且顶对齐）。
+
+    与 :func:`section_title_html` 的区别只有 **多一个 ``ws-page-title`` 类**；
+    对齐所需的负 margin 与 padding 归零全部写在 :func:`root_style_tag` 的
+    CSS 规则里（行内 !important 会被 DOMPurify 剥掉，见 PAGE_TITLE_MARGIN_TOP 注释）。
+    """
+    return (
+        f'<h3 class="ws-section-title ws-page-title" '
+        f'style="{title_style(FONT_VAR_SECTION)}">{text}</h3>'
+    )
+
+
+def render_page_title(text: str) -> None:
+    """渲染页面级标题（页面第一个真实内容元素）。
+
+    用法：在 ``render_sidebar("<page>")`` 之后**立即**调用。
+    """
+    import streamlit as st  # 延迟导入：保持本模块可脱离 Streamlit 独立测试
+    st.markdown(page_title_html(text), unsafe_allow_html=True)
+
+
+def render_page_subtitle(text: str) -> None:
+    """页面标题下方的补充说明文字（如「工具箱所有功能不消耗段落额度」）。"""
+    import streamlit as st  # 延迟导入：保持本模块可脱离 Streamlit 独立测试
+    st.markdown(
+        f'<p style="font-size:var({FONT_VAR_PAGE_SUBTITLE}, {FONT_SIZE_PAGE_SUBTITLE});'
+        f'color:{PAGE_SUBTITLE_COLOR};margin:-0.25rem 0 0.7rem 0;line-height:1.5;">'
+        f'{text}</p>',
+        unsafe_allow_html=True,
+    )
+
+
 # ==================== CSS 变量映射 ====================
 # 变量名 → 字号值；改字号只需改上面的常量，这里自动同步。
 _CSS_VAR_MAP = {
     "--ws-font-app-title": FONT_SIZE_APP_TITLE,
     "--ws-font-section": FONT_SIZE_SECTION,
+    FONT_VAR_PAGE_SUBTITLE: FONT_SIZE_PAGE_SUBTITLE,
     "--ws-font-h1": FONT_SIZE_H1,
     "--ws-font-tab": FONT_SIZE_TAB,
     "--ws-font-body": FONT_SIZE_BODY,
@@ -161,5 +229,17 @@ def root_style_tag() -> str:
         "    /* 区块标题：字号/字重/颜色由 render_section_title() 的行内样式给出，\n"
         "       此处仅保证块级排版（避免被 markdown 渲染成行内元素）。 */\n"
         "    .ws-section-title { display: block; }\n"
+        "    /* 页面级标题：与侧边栏品牌「标书编写神器」文字顶对齐。\n"
+        "       两条声明都必须 !important —— app.py 对主内容 h3 写了\n"
+        "       `margin-top: 1.05rem !important`，而 Streamlit 主题又给 h3 加了\n"
+        "       12px/16px 的上下内边距；这里用「属性选择器 + 类」把特异性抬到\n"
+        "       (0,3,1)，高于 app.py 的 (0,2,1)，再叠加 !important 才能压过。\n"
+        "       负 margin 的来历与标定方法见 PAGE_TITLE_MARGIN_TOP 的注释。 */\n"
+        f"    [data-testid=\"stMain\"] h3.ws-page-title,\n"
+        f"    [data-testid=\"stMain\"] [data-testid=\"stMarkdownContainer\"] h3.ws-page-title,\n"
+        f"    [data-testid=\"stMain\"] [data-testid=\"stHeadingWithActionElements\"] h3.ws-page-title {{\n"
+        f"        padding: 0 !important;\n"
+        f"        margin: {PAGE_TITLE_MARGIN_TOP} 0 {PAGE_TITLE_MARGIN_BOTTOM} 0 !important;\n"
+        "    }\n"
         "</style>"
     )

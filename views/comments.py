@@ -140,6 +140,11 @@ def render_comments_page():
     from components.sidebar import render_sidebar
     render_sidebar("comments")
 
+    # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
+    # 必须紧跟 render_sidebar() 之后 —— 详见 ui_theme.PAGE_TITLE_MARGIN_TOP 的说明。
+    from ui_theme import render_page_title
+    render_page_title("💬 用户评价")
+
     if app_state.get_comment_refresh_needed():
         app_state.set_comment_refresh_needed(False)
         st.session_state.comments_dirty = True

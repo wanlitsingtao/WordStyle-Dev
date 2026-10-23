@@ -11,6 +11,14 @@ def render_toolbox_page():
     from components.sidebar import render_sidebar
     render_sidebar("toolbox")
 
+    # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
+    # 必须紧跟 render_sidebar() 之后，且要排在下面这段 <style>/<script> 注入之前 ——
+    # 否则标题前面会多出一个空占位容器，对齐会偏 16px。
+    # 详见 ui_theme.PAGE_TITLE_MARGIN_TOP 的说明。
+    from ui_theme import render_page_subtitle, render_page_title
+    render_page_title("🛠️ 工具箱")
+    render_page_subtitle("工具箱所有功能不消耗段落额度")
+
     st.markdown(
         """
         <style>
