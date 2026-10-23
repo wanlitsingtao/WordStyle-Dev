@@ -36,6 +36,11 @@ FONT_SIZE_TAB = FONT_SIZE_APP_TITLE
 FONT_SIZE_BODY = "1rem"
 # 辅助说明（caption / 上传提示）
 FONT_SIZE_CAPTION = "0.875rem"
+
+# 统计卡片（st.metric）：「新写入编号 154 个」这类数字要让用户一眼看到，
+# 因此比正文明显大一号、字重加粗（2026-10-23 用户要求）。
+FONT_SIZE_STAT_VALUE = "2rem"
+FONT_SIZE_STAT_LABEL = "1rem"
 # 表单标签
 FONT_SIZE_LABEL = "0.875rem"
 # 按钮文字
@@ -117,6 +122,8 @@ _CSS_VAR_MAP = {
     "--ws-font-tab": FONT_SIZE_TAB,
     "--ws-font-body": FONT_SIZE_BODY,
     "--ws-font-caption": FONT_SIZE_CAPTION,
+    "--ws-font-stat-value": FONT_SIZE_STAT_VALUE,
+    "--ws-font-stat-label": FONT_SIZE_STAT_LABEL,
     "--ws-font-label": FONT_SIZE_LABEL,
     "--ws-font-button": FONT_SIZE_BUTTON,
     "--ws-font-nav": FONT_SIZE_NAV,

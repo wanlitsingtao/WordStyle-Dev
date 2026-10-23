@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 工具箱页（T04）
-st.tabs 组合三个工具：源文档标题查漏 + 源文档标题预处理 + 模板样式精简。
+st.tabs 组合四个工具：源文档标题查漏 + 源文档标题预处理 + 补全标题编号 + 模板样式精简。
 """
 import streamlit as st
 
@@ -41,7 +41,7 @@ def render_toolbox_page():
             (function() {
                 // 注意：下面是"按文字内容定位标签节点"的兜底匹配词。
                 // 各标签正文中不要出现这些词的完整字样，否则那段正文会被误判成标签被一并放大。
-                var TARGET_TERMS = ['源文档标题查漏', '源文档标题预处理', '模板样式精简'];
+                var TARGET_TERMS = ['源文档标题查漏', '源文档标题预处理', '补全标题编号', '模板样式精简'];
 
                 // 从 ui_theme.py 注入的 :root 变量读取字号，保证全局统一。
                 function readTabFont() {
@@ -113,9 +113,10 @@ def render_toolbox_page():
         unsafe_allow_html=True,
     )
 
-    tab_leak, tab_title, tab_style = st.tabs([
+    tab_leak, tab_title, tab_number, tab_style = st.tabs([
         "🔍 源文档标题查漏",
         "📑 源文档标题预处理",
+        "🔢 补全标题编号",
         "🧹 模板样式精简",
     ])
 
@@ -126,6 +127,11 @@ def render_toolbox_page():
     with tab_title:
         from components.title_preprocess import render_title_preprocess
         render_title_preprocess()
+
+    with tab_number:
+        # 与「源文档标题预处理」互补：那边给编号标题补样式，这边给有样式的标题补编号
+        from components.title_numbering import render_title_numbering
+        render_title_numbering()
 
     with tab_style:
         from components.style_cleanup import render_style_cleanup

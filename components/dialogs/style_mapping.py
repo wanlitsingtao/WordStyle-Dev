@@ -361,34 +361,51 @@ def show_style_mapping_dialog():
         st.caption("「清理编号」勾选后，转换时会去掉该标题的手动编号及\"第X章/第X节\"字样；"
                    "取消勾选则该标题的编号原样保留。默认全部勾选。")
 
-        # [2026-09-19] 全选开关：放在所有「清理编号」复选框的最上面一个「全选」复选框，
-        #   勾选 = 下面所有复选框都选中；取消 = 都取消。用 on_change 回调统一改写
-        #   session_state（控件创建前/后都能正确落到每个复选框，不依赖控件创建顺序）。
-
-        def _apply_select_all():
-            val = st.session_state.get(_select_all_key(), True)
-            for src in heading_styles:
-                st.session_state[_clean_key(src)] = val
+        # [2026-09-19] 全选开关。
+        # [2026-10-23] 由表头上方独立的一行「全选」移到**列头「清理编号」本身**
+        #   （用户要求）：少占一行，而且它就在被控复选框的正上方，"点它 = 全选/取消全选"。
+        # 两个方向都要联动，否则列头会与实际状态不符：
+        #   点列头 → 回调把每一行都设成同一个值；
+        #   点某一行 → 回调回算列头（全勾才勾）。
+        # 回调都在"下一次 run 的脚本执行之前"触发，所以改写 session_state 不会撞上
+        # "控件已实例化后不能再改值"的限制。
 
         def _select_all_key():
             return f"clean_numbering_all_{fname}"
 
-        # 全选复选框的初始值 = 当前所有复选框是否已全部勾选（首渲默认全勾 → 选中）
-        _all_vals = [st.session_state.get(_clean_key(src), bool(saved_clean.get(src, True)))
-                     for src in heading_styles]
-        _all_on = all(_all_vals)
-        if _select_all_key() not in st.session_state:
-            st.session_state[_select_all_key()] = _all_on
-        st.checkbox(
-            "全选", key=_select_all_key(), value=_all_on,
-            on_change=_apply_select_all,
-            help="勾选：全部标题样式都清理编号；取消：全部标题样式都不清理编号",
+        def _apply_select_all():
+            """列头 → 所有行。"""
+            val = bool(st.session_state.get(_select_all_key(), True))
+            for src in heading_styles:
+                st.session_state[_clean_key(src)] = val
+
+        def _sync_select_all():
+            """任一行 → 列头（全部勾选时列头才勾）。"""
+            st.session_state[_select_all_key()] = all(
+                bool(st.session_state.get(_clean_key(src), True))
+                for src in heading_styles
+            )
+
+        # 列头初始值 = 当前是否已全部勾选（首渲默认全勾 → 选中）
+        _all_on = all(
+            bool(st.session_state.get(_clean_key(src), bool(saved_clean.get(src, True))))
+            for src in heading_styles
         )
 
         _h1, _h2, _h3 = st.columns([3, 3, 2])
         _h1.markdown("**源样式**")
         _h2.markdown("**目标样式**")
-        _h3.markdown("**清理编号**")
+        with _h3:
+            # 只在"还没有控件状态"时传 value：key 已在 session_state 里时再传默认值，
+            # Streamlit 会告警（default value + Session State 双份赋值）。
+            _init_kwargs = {} if _select_all_key() in st.session_state else {"value": _all_on}
+            st.checkbox(
+                "**清理编号**",
+                key=_select_all_key(),
+                on_change=_apply_select_all,
+                help="勾选：全部标题样式都清理编号；取消：全部标题样式都不清理编号",
+                **_init_kwargs,
+            )
 
         for source_style in heading_styles:
             ck = _clean_key(source_style)
@@ -412,6 +429,7 @@ def show_style_mapping_dialog():
             with col3:
                 clean_numbering[source_style] = st.checkbox(
                     "清理编号", key=ck, label_visibility="collapsed",
+                    on_change=_sync_select_all,
                     help="勾选：清理该标题的编号；取消：编号原样保留"
                 )
 
