@@ -880,6 +880,14 @@ def show_style_mapping_dialog():
     if is_dual:
         for src, val in answer_mapping.items():
             updated_mapping[f"answer_{src}"] = val
+    else:
+        # [2026-10-27] 非双列模式：应答列未展示、未被编辑，原样保留已保存的
+        # answer_* 映射（"应答列没动过就按用户选的来"）。
+        # 2026-10-22 复选框默认改为不勾选后，专属样式行默认可见，若不保留，
+        # 每次保存都会把历史 answer_* 映射静默清空（实测踩坑）。
+        for _k, _v in current_file_mapping.items():
+            if _k.startswith("answer_"):
+                updated_mapping[_k] = _v
     # [2026-10-11] 被复选框隐藏的表格/图片专属样式行：原样保留已保存的映射值
     #（切换勾选状态不丢数据；隐藏期间引擎按复选框直接走第 4 区兜底）。
     # 用 strip 归一化匹配，防止因样式名首尾空白差异导致已存映射丢失。

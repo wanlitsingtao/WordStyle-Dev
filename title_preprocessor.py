@@ -26,6 +26,13 @@ from docx.oxml import OxmlElement
 # 捕获组 1 = 纯数字编号（用于推断层级），组 2 = 标题正文。
 HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)[ \t\u3000\xa0]+([^\t]*)$')
 
+# 无分隔符的多级编号标题（如 "4.5.1非主体、非关键性部件采购"）：编号与标题文字之间
+# 没有任何空白。仅认三级及以上（至少两个点）的编号 —— 一/两级编号直接跟文字的场景
+# 多为"数值 + 单位"（如 "3.5万元/台"、"2.4G天线"）或目录行（"12.1质量管理\t127"），
+# 不匹配，避免误判（2026-10-27）。正文部分不允许再出现制表符（与主规则口径一致，
+# 排除 "5.1.10信息化管理\t175" 这类目录行）。
+HEADING_PATTERN_NOSEP = re.compile(r'^\s*(\d+(?:\.\d+){2,})([^\d\s\t].*)$')
+
 # 文本开头数字编号：用于已具有标题样式/大纲级别的段落统一按编号推断级别（如 "1.1 线路" / "1.1线路"）。
 NUMBER_PREFIX_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)')
 
@@ -102,7 +109,12 @@ class TitlePreprocessor:
             raw_text = para.text
             if not raw_text.strip():
                 continue
-            m = HEADING_PATTERN.match(raw_text)
+            # 软回车合并段（标题行与正文被 w:br 软回车合并在同一段，如
+            # "4.5.3.1 分供范围与备案\n卖方可将…"）：只取首行做标题匹配，
+            # 首行即标题行，正文行不参与编号判断（2026-10-27）。
+            first_line = raw_text.split('\n', 1)[0] if '\n' in raw_text else raw_text
+            m = (HEADING_PATTERN.match(first_line)
+                 or HEADING_PATTERN_NOSEP.match(first_line))
             if not m:
                 continue
             number_part = m.group(1)
@@ -110,12 +122,22 @@ class TitlePreprocessor:
             # 排除纯数字段落（如单纯的 "1" 后面无内容）
             if not content:
                 continue
-            # 排除以句号/分号结尾的正文条款（标题通常不以这些标点结尾）
-            if content.endswith('。') or content.endswith('；'):
+            # 正文部分不允许再出现制表符（与主规则口径一致，
+            # 排除 "5.1.10信息化管理\t175" 这类目录行）
+            if '\t' in content:
                 continue
-            # 排除过长的段落（标题通常较短）
-            text = raw_text.strip()
-            if len(text) > 60:
+            # 三级及以上编号（如 4.5.2.1）：招标文件里大量合同条款是
+            # "编号 + 整段正文（长、以句号结尾）"的条款段，按用户要求一并纳入
+            # 疑似标题；一/二级编号维持原严格规则（60 字、句号/分号结尾排除）。
+            deep_number = number_part.count('.') >= 2
+            text = first_line.strip()
+            max_len = 300 if deep_number else 60
+            # 排除过长的段落（标题通常较短；三级以上编号放宽到条款段长度）
+            if len(text) > max_len:
+                continue
+            # 排除以句号/分号结尾的正文条款（标题通常不以这些标点结尾；
+            # 三级及以上编号的条款段不受此限）
+            if not deep_number and (content.endswith('。') or content.endswith('；')):
                 continue
             candidates.append({
                 "index": idx,
@@ -183,7 +205,10 @@ class TitlePreprocessor:
             if not m:
                 continue
             content = m.group(2).strip()
-            # 排除章节号引用（如 "第二章 4.10.3 节 ..."）及句末标点结尾的正文
+            # 排除章节号引用（如 "第二章 4.10.3 节 ..."）及句末标点结尾的正文；
+            # 正文含制表符的多列行（目录行 "第一章  致投标人\t1"）同样排除
+            if '\t' in content:
+                continue
             if content and (
                 content[0].isdigit()
                 or content.endswith('。')
@@ -226,6 +251,66 @@ class TitlePreprocessor:
         return headings
 
     @staticmethod
+    def _count_page_breaks_in(p_el) -> tuple:
+        """统计段落元素内的分页事件，返回 (事件总数, 首个文字之前的事件数)。
+
+        统计两类标记：① 显式分页符 w:br type="page"；
+        ② Word 上次保存时的渲染分页标记 w:lastRenderedPageBreak（它标记的是
+        上次 Word 打开/保存时真实分页的位置，标在新页第一个字符之前）。
+        "首个文字之前的事件数"用于处理"段落恰好从新页开始"的情况：
+        此时标记在段落开头，段落起始页应 +1。
+        """
+        total = 0
+        before_text = 0
+        seen_text = False
+        for node in p_el.iter():
+            tag = node.tag
+            if tag == qn('w:t'):
+                if node.text and node.text.strip():
+                    seen_text = True
+            elif tag == qn('w:br'):
+                if node.get(qn('w:type')) == 'page':
+                    total += 1
+                    if not seen_text:
+                        before_text += 1
+            elif tag == qn('w:lastRenderedPageBreak'):
+                total += 1
+                if not seen_text:
+                    before_text += 1
+        return total, before_text
+
+    @staticmethod
+    def build_page_map(doc) -> List[int]:
+        """推算每个正文段落（与 doc.paragraphs 顺序一致）的起始页码（1-based）。
+
+        docx 格式本身不保存实时分页结果，页码只能依据文档内的分页标记推算：
+        ① 显式分页符（w:br type="page"）；② Word 上次保存时的渲染分页标记
+        （w:lastRenderedPageBreak）；③ "下一页"型分节符（w:sectPr 非 continuous）。
+        结果与 Word 当前实际分页可能相差 1 页左右（文档保存后又被编辑过的情况），
+        仅供定位参考。
+        """
+        page_map: List[int] = []
+        page = 1
+        body = doc.element.body
+        for p_el in body.iter(qn('w:p')):
+            total, before_text = TitlePreprocessor._count_page_breaks_in(p_el)
+            # 分节符（段落 pPr 内）：非 continuous 型分节符开启新页，
+            # 分节发生在该段落之后，不影响本段起始页
+            pPr = p_el.find(qn('w:pPr'))
+            if pPr is not None:
+                sectPr = pPr.find(qn('w:sectPr'))
+                if sectPr is not None:
+                    sect_type = sectPr.find(qn('w:type'))
+                    if sect_type is None or sect_type.get(qn('w:val')) != 'continuous':
+                        total += 1
+            # 只登记正文级段落（doc.paragraphs 的成员，父节点为 w:body）；
+            # 表格/文本框内的段落只参与分页事件累计，不进入页码表
+            if p_el.getparent() is body:
+                page_map.append(page + before_text)
+            page += total
+        return page_map
+
+    @staticmethod
     def check_heading_leaks(docx_file, progress_callback=None) -> List[Dict]:
         """查漏：检查"本应是标题、却既非标题格式也无大纲级别"的编号段落。
 
@@ -250,11 +335,13 @@ class TitlePreprocessor:
                     "is_heading": bool,         # 已是标题格式（标题样式或大纲级别任一成立）
                     "is_leak": bool,            # 格式异常：既非标题样式、也无大纲级别
                     "style_description": str,   # 当前样式说明，如 "Normal｜无大纲级别"
+                    "page": int,                # 估算起始页码（1-based，按分页标记推算）
                 }
         """
         doc = Document(docx_file)
         headings = TitlePreprocessor._detect_headings_in(doc, progress_callback=progress_callback)
         paragraphs = doc.paragraphs
+        page_map = TitlePreprocessor.build_page_map(doc)
         results = []
         for h in headings:
             idx = h["index"]
@@ -264,6 +351,7 @@ class TitlePreprocessor:
             item = dict(h)
             item.update(info)
             item["is_leak"] = not info["is_heading"]
+            item["page"] = page_map[idx] if 0 <= idx < len(page_map) else None
             results.append(item)
         return results
 
