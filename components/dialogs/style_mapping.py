@@ -665,54 +665,98 @@ def show_style_mapping_dialog():
     _default_skip_list = bool(st.session_state.file_style_mappings.get(
         '_default_skip_list_mapping', False))
 
-    # [2026-10-22] 布局：三个复选框始终在同一行优先渲染（未检出的那列留空），
-    #   「未检测到…」的提示统一收集到复选框**之后**整行展示 —— 长文案若留在列内
-    #   会把该列撑高，导致右侧复选框被挤歪（见 2026-10-22 截图）。
-    #   默认值改为「不勾选」：默认在第 3 区逐样式映射，兜底只管未映射的。
+    # [2026-10-27] 布局再调整（用户反馈截图：三个复选框固定等分三列，未检出的列留空，
+    #   只剩「列表段落」时复选框被推到最右侧，下方两条蓝色提示又垂直堆成两行，
+    #   视觉上又空又散）。改为：
+    #   ① 只把**检测到的**项排进复选框行，并从左侧起紧凑排列（不再留空列）；
+    #   ② 未检出的说明统一放到复选框**之后**，缩短为
+    #      「未检测到 X 专属样式，将按兜底样式转换。」，并用 flex 横向排布
+    #      （一行放不下时自动换行，不像 st.columns 那样等分留出大片空白）。
+    #   默认值「不勾选」：默认在第 3 区逐样式映射，兜底只管未映射的。
     skip_table = True   # 未检出专属样式时无从映射 → 强制走第 4 区兜底
     skip_image = True
     skip_list = True
-    _skip_ck_cols = st.columns(3)
-    with _skip_ck_cols[0]:
-        if _table_only_set:
-            skip_table = st.checkbox(
-                "不配置表格样式",
-                value=bool(current_file_mapping.get('_skip_table_mapping', _default_skip_table)),
-                key=f"skip_table_{fname}",
-                help="勾选：表格段落样式不在本区逐样式映射，表格直接走第4区表格兜底；"
-                     "取消勾选（默认）：表格段落样式（含下列专属样式行）在本区显示并可逐样式映射"
-                     "（未映射的才走兜底）。")
-    with _skip_ck_cols[1]:
-        if _image_only_set:
-            skip_image = st.checkbox(
-                "不配置图片样式",
-                value=bool(current_file_mapping.get('_skip_image_mapping', _default_skip_image)),
-                key=f"skip_image_{fname}",
-                help="勾选：图片段落样式不在本区逐样式映射，图片直接走第4区图片兜底；"
-                     "取消勾选（默认）：图片段落样式（含下列专属样式行）在本区显示并可逐样式映射"
-                     "（未映射的才走兜底）。")
-    with _skip_ck_cols[2]:
+
+    # (tag, label, 默认值, help) —— tag 只用来拼回 skip_table/skip_image/skip_list 与控件 key
+    _ck_specs = []
+    if _table_only_set:
+        _ck_specs.append((
+            'table', "不配置表格样式",
+            bool(current_file_mapping.get('_skip_table_mapping', _default_skip_table)),
+            "勾选：表格段落样式不在本区逐样式映射，表格直接走第4区表格兜底；"
+            "取消勾选（默认）：表格段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+            "（未映射的才走兜底）。",
+        ))
+    if _image_only_set:
+        _ck_specs.append((
+            'image', "不配置图片样式",
+            bool(current_file_mapping.get('_skip_image_mapping', _default_skip_image)),
+            "勾选：图片段落样式不在本区逐样式映射，图片直接走第4区图片兜底；"
+            "取消勾选（默认）：图片段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+            "（未映射的才走兜底）。",
+        ))
+    if _list_only_set:
         # [2026-10-22] 与表格/图片并列的第三个开关：列表段落不参与第3区逐样式映射，
         #   统一走第4区「列表段落（未映射）兜底」。
-        if _list_only_set:
-            skip_list = st.checkbox(
-                "不配置列表段落样式",
-                value=bool(current_file_mapping.get('_skip_list_mapping', _default_skip_list)),
-                key=f"skip_list_{fname}",
-                help="勾选：列表段落样式不在本区逐样式映射，列表段落直接走第4区列表兜底；"
-                     "取消勾选（默认）：列表段落样式（含下列专属样式行）在本区显示并可逐样式映射"
-                     "（未映射的才走兜底）。")
+        _ck_specs.append((
+            'list', "不配置列表段落样式",
+            bool(current_file_mapping.get('_skip_list_mapping', _default_skip_list)),
+            "勾选：列表段落样式不在本区逐样式映射，列表段落直接走第4区列表兜底；"
+            "取消勾选（默认）：列表段落样式（含下列专属样式行）在本区显示并可逐样式映射"
+            "（未映射的才走兜底）。",
+        ))
 
-    # 「未检测到专属样式」的说明放到复选框之后（不占用列宽，避免挤压同行控件）
+    # 「未检测到专属样式」的说明列表（先算出来，才能和复选框拼进同一行）
     _skip_notes = []
     if not _table_only_set:
-        _skip_notes.append("ℹ️ 未检测到源文档中**表格专属样式**，表格将直接按第 4 区兜底样式转换。")
+        _skip_notes.append("ℹ️ 未检测到表格专属样式，将按兜底样式转换。")
     if not _image_only_set:
-        _skip_notes.append("ℹ️ 未检测到源文档中**图片专属样式**，图片将直接按第 4 区兜底样式转换。")
+        _skip_notes.append("ℹ️ 未检测到图片专属样式，将按兜底样式转换。")
     if not _list_only_set:
-        _skip_notes.append("ℹ️ 未检测到源文档中**列表段落专属样式**，列表段落将直接按第 4 区兜底样式转换。")
-    for _note in _skip_notes:
-        st.caption(_note)
+        _skip_notes.append("ℹ️ 未检测到列表段落专属样式，将按兜底样式转换。")
+
+    # [2026-10-27] 说明与复选框**同一行**（用户追问：场景 A 只剩一个复选框时，
+    #   下方单独一行放两条说明仍然很散）。规则：
+    #   - 两者都有 → 复选框从左起紧凑排列，说明跟在其右侧同一行；
+    #     说明列内用 flex+wrap，放不下自动换行（不像 st.columns 那样等分留白）。
+    #   - 只有复选框 / 只有说明 → 各自占满整行。
+    if _ck_specs and _skip_notes:
+        # 复选框列权重压到 0.6：1.0 会被等分撑到 ~330px，"不配置列表段落样式"
+        # 只有 ~190px 宽，说明就会被推到 445px 处、中间空出一大块（实测）。
+        _row = st.columns([0.6] * len(_ck_specs) + [max(1.8, 1.35 * len(_skip_notes))])
+        _ck_cols = _row[:len(_ck_specs)]
+        _note_col = _row[len(_ck_specs)]
+    elif _ck_specs:
+        _ck_cols = st.columns([1.0] * len(_ck_specs))
+        _note_col = None
+    else:
+        _ck_cols = []
+        _note_col = None     # 说明独占整行
+
+    for _col, (_tag, _label, _val, _help) in zip(_ck_cols, _ck_specs):
+        with _col:
+            _checked = st.checkbox(
+                _label, value=_val, key=f"skip_{_tag}_{fname}", help=_help)
+        if _tag == 'table':
+            skip_table = _checked
+        elif _tag == 'image':
+            skip_image = _checked
+        else:
+            skip_list = _checked
+
+    if _skip_notes:
+        _note_html = (
+            '<div style="display:flex;flex-wrap:wrap;gap:0.15rem 1.25rem;'
+            'color:#64748b;font-size:0.875rem;line-height:1.5;'
+            'padding-top:0.3rem;margin-bottom:0.35rem;">'
+            + "".join(f"<span>{_n}</span>" for _n in _skip_notes)
+            + "</div>"
+        )
+        if _note_col is not None:
+            with _note_col:
+                st.markdown(_note_html, unsafe_allow_html=True)
+        else:
+            st.markdown(_note_html, unsafe_allow_html=True)
 
     # 被隐藏的样式行（已保存的映射值会在保存时原样保留，不丢数据）
     hidden_styles = set()
