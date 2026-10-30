@@ -4,8 +4,10 @@
 从 app.py 提取
 """
 import streamlit as st
-from datetime import datetime
 import logging
+
+# 默认标题里的日期按用户本地时区取（云端服务器是 UTC，直接用 datetime.now() 会差 8 小时）
+from user_tz import local_stamp
 
 logger = logging.getLogger('WordStyle')
 
@@ -30,7 +32,7 @@ def show_feedback_dialog():
     )
     
     # 标题（可选，有默认值）
-    default_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
+    default_title = f"{feedback_type} - {local_stamp('%Y-%m-%d')}"
     feedback_title = st.text_input(
         "标题（可选）",
         value=default_title,
@@ -72,7 +74,7 @@ def show_feedback_dialog():
                 
                 # 如果标题为空，使用默认标题
                 if not feedback_title or feedback_title.strip() == "":
-                    feedback_title = f"{feedback_type} - {datetime.now().strftime('%Y-%m-%d')}"
+                    feedback_title = f"{feedback_type} - {local_stamp('%Y-%m-%d')}"
                 
                 # [OK] 修复：使用 API 提交反馈（兼容多实例部署）
                 from config import BACKEND_URL, DATA_SOURCE

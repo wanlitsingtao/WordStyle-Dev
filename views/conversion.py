@@ -13,6 +13,9 @@ import streamlit as st
 
 from state import app_state
 from ui_theme import render_page_title, render_section_title
+# [TZ] 文件名/时间戳按用户所在时区生成，而不是服务器时间（云端是 UTC，会比用户早 8 小时）。
+# 时区由浏览器通过 cookie 提供，取不到时回退服务器本地时间，见 user_tz.py。
+from user_tz import local_stamp, now_local, get_user_tzinfo
 
 logger = logging.getLogger('WordStyle')
 
@@ -651,7 +654,9 @@ def render_conversion_page():
                 from data_manager import get_tone_rules
                 from doc_converter import DocumentConverter
                 user_tone_rules = get_tone_rules(user_id)
-                converter = DocumentConverter(tone_rules=user_tone_rules)
+                # [TZ] 传入用户时区：重名时的备用文件名后缀也要用用户本地时间
+                converter = DocumentConverter(tone_rules=user_tone_rules,
+                                              tzinfo=get_user_tzinfo())
                 progress_bar.progress(10)
 
                 output_files = []
@@ -664,7 +669,9 @@ def render_conversion_page():
 
                 for idx, source_file_obj in enumerate(current_source_files):
                     base_name = os.path.splitext(source_file_obj.name)[0]
-                    output_filename = f"result_{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                    # [TZ] 用用户本地时间，不用服务器时间（datetime.now()）。
+                    # 云端服务器是 UTC，直接 now() 会让文件名比用户手表早 8 小时。
+                    output_filename = f"result_{base_name}_{local_stamp()}.docx"
                     # [FIX 2026-09-15] 原来写的是相对路径 os.path.join("conversion_results", ...)，
                     # 落点取决于进程 cwd（项目根），与 FileManager 扫描的 temp/conversion_results 不一致。
                     # 现统一用 config.RESULTS_DIR（= temp/conversion_results）。
@@ -859,7 +866,8 @@ def render_conversion_page():
                 if success_count > 0:
                     progress_bar.progress(100)
                     conversion_record = {
-                        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        # [TZ] 转换历史里显示给用户看的时间，同样用用户本地时区
+                        'time': now_local().strftime('%Y-%m-%d %H:%M:%S'),
                         'files': len(current_source_files),
                         'success': success_count,
                         'failed': fail_count,
@@ -906,7 +914,8 @@ def render_conversion_page():
                             st.session_state.recent_results.append({
                                 'path': output_file,
                                 'name': os.path.basename(output_file),
-                                'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                # [TZ] 与文件名保持一致，用用户本地时间
+                                'time': now_local().strftime('%Y-%m-%d %H:%M:%S'),
                             })
 
                     st.session_state.is_converting = False

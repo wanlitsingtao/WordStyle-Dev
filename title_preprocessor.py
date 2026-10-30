@@ -10,7 +10,9 @@
 4. 判断文档是否已使用标题样式（供转换页引导提示）
 5. 查漏：找出"本应是标题、却既非标题格式也无大纲级别"的编号段落（只检查、不修改）
 """
+import os
 import re
+import tempfile
 from typing import List, Dict, Optional
 
 from docx import Document
@@ -311,7 +313,10 @@ class TitlePreprocessor:
         return page_map
 
     @staticmethod
-    def check_heading_leaks(docx_file, progress_callback=None) -> List[Dict]:
+    def check_heading_leaks(docx_file, progress_callback=None,
+                            prefer_word_pages: bool = True,
+                            stage_callback=None,
+                            word_progress_callback=None) -> List[Dict]:
         """查漏：检查"本应是标题、却既非标题格式也无大纲级别"的编号段落。
 
         识别对象与 detect_headings 完全一致（同一个 _detect_headings_in，同一套
@@ -319,8 +324,17 @@ class TitlePreprocessor:
 
         Args:
             docx_file: docx 文件路径，或可读的文件对象（如 io.BytesIO）。
-            progress_callback: 可选，段落扫描进度回调 progress_callback(done: int, total: int)，
-                用于非阻塞进度条（不影响识别结果）。
+            progress_callback: 可选，**段落扫描阶段**进度回调 (done, total)。
+                只用于扫描阶段，一定会推进到 (total, total)。
+            prefer_word_pages: 是否优先用本机 Word 取「物理页码」（默认 True）。
+                True 且环境可用时，页码为 Word 状态栏那个页号（准确）；
+                否则退回按分页标记估算（文档编辑过就可能差几页）。
+                两种情况在结果的 ``page_source`` 里区分：'word' / 'estimate'。
+            stage_callback: 可选，阶段切换提示回调 (msg: str)。
+            word_progress_callback: 可选，**Word 取页码阶段**进度回调 (done, total)。
+                刻意与 progress_callback 分开：两个阶段的分母不同（段落数 vs 标题数），
+                共用一个回调会让进度条在切换时倒退回 0（测试
+                test_check_heading_leaks_progress_monotonic_and_complete 就是这么发现的）。
 
         Returns:
             List[Dict]，每个元素在 detect_headings 结果的基础上增加：
@@ -335,25 +349,102 @@ class TitlePreprocessor:
                     "is_heading": bool,         # 已是标题格式（标题样式或大纲级别任一成立）
                     "is_leak": bool,            # 格式异常：既非标题样式、也无大纲级别
                     "style_description": str,   # 当前样式说明，如 "Normal｜无大纲级别"
-                    "page": int,                # 估算起始页码（1-based，按分页标记推算）
+                    "page": int,                # 起始页码（1-based）
+                    "page_source": str,         # 'word' = Word 物理页码；'estimate' = 标记估算
                 }
         """
-        doc = Document(docx_file)
-        headings = TitlePreprocessor._detect_headings_in(doc, progress_callback=progress_callback)
-        paragraphs = doc.paragraphs
-        page_map = TitlePreprocessor.build_page_map(doc)
-        results = []
-        for h in headings:
-            idx = h["index"]
-            if not 0 <= idx < len(paragraphs):
-                continue
-            info = TitlePreprocessor.describe_paragraph_style(paragraphs[idx])
-            item = dict(h)
-            item.update(info)
-            item["is_leak"] = not info["is_heading"]
-            item["page"] = page_map[idx] if 0 <= idx < len(page_map) else None
-            results.append(item)
-        return results
+        # Word 只能打开**文件路径**，而本函数允许传入内存流（Streamlit 上传的对象）。
+        # 需要精确页码时先落一份临时文件；不需要时（或流式调用）仍走原路径，零开销。
+        tmp_path = None
+        src = docx_file
+        if prefer_word_pages and not isinstance(docx_file, (str, os.PathLike)):
+            try:
+                from page_locator import is_available as _word_available
+                if _word_available():
+                    buf = docx_file.getbuffer() if hasattr(docx_file, 'getbuffer') else docx_file.read()
+                    fd, tmp_path = tempfile.mkstemp(suffix='.docx', prefix='ws_pages_')
+                    with os.fdopen(fd, 'wb') as f:
+                        f.write(bytes(buf))
+                    src = tmp_path
+            except Exception:
+                tmp_path = None          # 落盘失败不影响主流程，继续用原流
+                src = docx_file
+
+        try:
+            doc = Document(src)
+            headings = TitlePreprocessor._detect_headings_in(
+                doc, progress_callback=progress_callback)
+            paragraphs = doc.paragraphs
+            results = []
+            for h in headings:
+                idx = h["index"]
+                if not 0 <= idx < len(paragraphs):
+                    continue
+                info = TitlePreprocessor.describe_paragraph_style(paragraphs[idx])
+                item = dict(h)
+                item.update(info)
+                item["is_leak"] = not info["is_heading"]
+                item["page"] = None
+                item["page_source"] = 'estimate'
+                results.append(item)
+
+            # 顺序很重要：**先试 Word**，成功就完全跳过估算（估算本身要 15s，
+            # 414 页文档实测；先算再用 Word 覆盖等于白烧 15 秒）。
+            # Word 不可用 / 失败 / 有未命中的条目时，才算估算兜底。
+            need_estimate = True
+            if prefer_word_pages and results:
+                if stage_callback is not None:
+                    # Word 定位一段要 10 秒左右（414 页 / 314 条实测 12.6s），
+                    # 必须让用户看到「还在干活」，否则会以为界面卡死。
+                    try:
+                        stage_callback("📄 正在用 Word 计算物理页码…")
+                    except Exception:
+                        pass
+                pages = TitlePreprocessor._apply_word_pages(
+                    src, results, progress_callback=word_progress_callback)
+                # 全部命中 → 估算完全不需要；有缺口才补算。
+                need_estimate = any(it["page"] is None for it in results)
+
+            if need_estimate:
+                page_map = TitlePreprocessor.build_page_map(doc)
+                for it in results:
+                    if it["page"] is None:
+                        # 用 item 自己的 index，不要 zip(headings)——results 里
+                        # 有被 `continue` 跳过的异常段落，两个列表并不等长。
+                        idx = it.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(page_map):
+                            it["page"] = page_map[idx]
+                            it["page_source"] = 'estimate'
+            return results
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _apply_word_pages(src, results: List[Dict], progress_callback=None):
+        """用 Word 的物理页码覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
+
+        位置对应关系：results 已按文档顺序排列，locate_pages 也是单调向后查找，
+        因此可以直接按序 zip，不需要段落索引（python-docx 与 Word 的段落集合
+        口径不同：同一文档 python 侧 8297 段、Word 侧 8892 段，按索引对齐会错位）。
+        定位不到的条目保持 page=None，由调用方用分页标记估算兜底。
+        """
+        try:
+            from page_locator import locate_pages
+        except Exception:
+            return None
+        pages = locate_pages(src, [str(it.get("text") or "") for it in results],
+                             progress_callback=progress_callback)
+        if not pages:
+            return None
+        for it, pg in zip(results, pages):
+            if pg:
+                it["page"] = pg
+                it["page_source"] = 'word'
+        return pages
 
     @staticmethod
     def describe_paragraph_style(paragraph) -> Dict:

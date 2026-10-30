@@ -14,7 +14,7 @@ st.set_page_config(
 
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # [OK] 支持UptimeRobot健康检查：通过URL参数检测
@@ -102,13 +102,52 @@ st.markdown("""
 
 # ==================== 辅助函数 ====================
 
+# [FIX 2026-10-29] 时区口径统一（「今日新增」显示 2 但其实没人注册的根因之一）
+# 数据库（Supabase / PostgreSQL）里 created_at、last_login 都是带 +00:00 的 UTC，
+# 而管理后台此前用 datetime.now()（宿主机本地时间）去判断「今天」。宿主机是 GMT+8
+# 时，「今日」的窗口会整体错位 8 小时：
+#   - 本地 00:00-08:00 发生的注册/登录，UTC 日期还是前一天 -> 漏算
+#   - UTC 16:00 之后发生的记录会落到「明天」           -> 误算
+# 现在统一：带时区的时间一律换算成北京时间再显示、再比较日期；不带时区的
+# （本地 JSON 模式用 datetime.now().isoformat() 写入的历史数据）本来就等于本地
+# 时间，原样返回，绝不能再 +8。
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def to_beijing(dt_str):
+    """把时间字符串换算成北京时间；解析失败或本身无时区时，返回原解析值/None。
+
+    返回 None 表示「解析不了」，调用方需自行回退到原始字符串。
+    """
+    if not dt_str or dt_str == '-':
+        return None
+    try:
+        # PostgreSQL/Supabase 可能返回 Z 结尾，fromisoformat 在 3.11 前不认 Z
+        dt = datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(BEIJING_TZ)
+
+
+def beijing_date_str(dt_str):
+    """取该时刻在北京时间下的日期（YYYY-MM-DD）；解析失败返回空串。
+
+    看板「今日」统计与任务页日期筛选都必须走这里，
+    否则就会回到「UTC 日期 vs 本地日期」混比的老 bug。
+    """
+    dt = to_beijing(dt_str)
+    return dt.strftime('%Y-%m-%d') if dt else ''
+
+
 def format_datetime(dt_str):
-    """格式化日期时间字符串"""
+    """格式化日期时间字符串（统一显示为北京时间）"""
     if dt_str and dt_str != '-':
-        try:
-            return datetime.fromisoformat(dt_str).strftime('%Y-%m-%d %H:%M:%S')
-        except:
-            return dt_str
+        dt = to_beijing(dt_str)
+        if dt is None:
+            return dt_str          # 解析失败：原样返回，不要吞掉原始值
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
     return '-'
 
 def format_currency(amount):
@@ -281,8 +320,16 @@ def show_dashboard():
         total_users = len(all_users)
         
         # 计算今日新增用户
-        today = datetime.now().strftime('%Y-%m-%d')
-        today_users = sum(1 for u in all_users if u.get('last_login', '').startswith(today))
+        # [FIX 2026-10-29] 原来这两行有两个 bug，导致「今日新增」与用户列表对不上：
+        #   1) 取的是 last_login —— 数出来的是「今天登录过的老用户」，标签却叫新增。
+        #      实测线上库：今日新增显示 2，实际当天注册 0，那两个一个是 5 月注册、
+        #      一个是 10-27 注册，只是今天登录过。
+        #   2) today 用宿主机本地日期，与库里的 UTC 时间直接 startswith 比较，
+        #      跨时区每天会错 8 小时。
+        # 现在：口径改用 created_at（真正的注册时间），并把双方都换算成北京时间的
+        # 日期再比。想再看「今日活跃」请另加指标，不要复用这一格。
+        today = datetime.now(BEIJING_TZ).strftime('%Y-%m-%d')
+        today_users = sum(1 for u in all_users if beijing_date_str(u.get('created_at')) == today)
         
         # 显示关键指标
         col1, col2, col3 = st.columns(3)
@@ -419,6 +466,9 @@ def show_user_management():
                     "余额": user.get('balance', 0.0),
                     "状态": "✅ 活跃" if user.get('is_active', True) else "❌ 禁用",
                     "注册时间": format_datetime(user.get('created_at', '')),
+                    # [NEW 2026-10-29] 补「最后登录」列。此前列表只有注册时间，
+                    # 想核对看板「今日新增」却没处可看，只能把注册时间误当登录日期。
+                    "最后登录": format_datetime(user.get('last_login', '')),
                     "用户名": username if username else "未绑定"
                 })
 
@@ -536,10 +586,13 @@ def show_task_management():
         all_tasks = get_all_tasks(status_filter=status_filter, limit=1000)
         
         # 日期过滤
+        # [FIX 2026-10-29] 同样不能拿 UTC 字符串前缀去比本地日期：用户选北京时间的
+        # 10-29，命中的却是 UTC 的 10-29（= 北京时间 10-29 08:00 之后那一段），
+        # 当天的任务会凭空少掉 8 小时。统一按北京时间日期比较。
         if date_filter:
             filtered_tasks = [
                 t for t in all_tasks
-                if t.get('created_at', '').startswith(str(date_filter))
+                if beijing_date_str(t.get('created_at')) == str(date_filter)
             ]
         else:
             filtered_tasks = all_tasks
@@ -723,7 +776,9 @@ def show_feedback_management():
                     fb_id = fb_id[:8] + "..."
                 
                 # 时间字段：优先使用created_at，其次timestamp
-                submit_time = fb.get('created_at') or fb.get('timestamp') or ''
+                # [TZ] 后端现在返回带时区偏移的 ISO 串，统一按北京时间渲染；
+                # 历史裸串（无时区）format_datetime 会原样返回，不会被平移错。
+                submit_time = format_datetime(fb.get('created_at') or fb.get('timestamp') or '')
                 
                 # 类型字段：优先使用feedback_type，其次type
                 feedback_type = fb.get('feedback_type') or fb.get('type') or '-'
@@ -776,7 +831,8 @@ def show_feedback_management():
                         st.write(f"**标题:** {feedback_found.get('title', '-')}")  # [OK] 修复：使用title
                         st.write(f"**描述:** {feedback_found.get('description', '-')}")  # [OK] 修复：使用description
                         st.write(f"**联系方式:** {feedback_found.get('contact', '-')}")
-                        st.write(f"**提交时间:** {feedback_found.get('created_at', feedback_found.get('timestamp', ''))}")  # [OK] 修复：优先使用created_at
+                        # [OK] 修复：优先使用created_at（原写法在 created_at 存在但为空时不会回退到 timestamp）
+                        st.write(f"**提交时间:** {format_datetime(feedback_found.get('created_at') or feedback_found.get('timestamp') or '')}")
                         status_text = "✅ 已处理" if feedback_found.get('status') == 'resolved' else ("🔄 处理中" if feedback_found.get('status') == 'processing' else "⏳ 待处理")
                         st.write(f"**状态:** {status_text}")  # [OK] 修复：使用status字段
                     

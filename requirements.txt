@@ -15,5 +15,10 @@ python-docx>=0.8.11
 Pillow>=9.0.0
 lxml>=4.9.0
 
+# 标题查漏的「Word 物理页码」（可选能力）：仅 Windows + 已装 Word 时生效。
+# 环境变量确保 Linux 云端不会尝试安装（Streamlit Cloud 上没有 Word，装了也没用）；
+# 运行期由 page_locator.is_available() 判断，不可用则回退到分页标记估算。
+pywin32>=306; sys_platform == "win32"
+
 # 定时任务
 APScheduler>=3.10.0

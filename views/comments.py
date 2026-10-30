@@ -5,13 +5,14 @@
 """
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
 from state import app_state
 from utils import sanitize_html
+# 存储统一记 UTC（原始服务器时间），展示按用户本地时区渲染；排序用安全键（带偏移的 ISO 串不能直接比字符串）
+from user_tz import now_utc_iso, format_local, sort_key_ts
 
 logger = logging.getLogger('WordStyle')
 
@@ -102,7 +103,7 @@ def add_comment(username, content, rating=5):
         'username': username or f'用户{app_state.get_user_id()[:6]}',
         'content': content,
         'rating': rating,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': now_utc_iso(),
         'likes': 0,
         'user_id': app_state.get_user_id()
     }
@@ -204,14 +205,17 @@ def render_comments_page():
     if not comments:
         st.info("💭 暂无评论，快来发表第一条评论吧！")
     else:
-        comments_sorted = sorted(comments, key=lambda x: x['timestamp'], reverse=True)
+        # 用 sort_key_ts 而不是裸字符串比较：带时区偏移的 ISO 串（+08:00 / -05:00）
+        # 直接按字符串排会排错；统一折算成 UTC 时刻后比较才对。
+        comments_sorted = sorted(comments, key=lambda x: sort_key_ts(x.get('timestamp')), reverse=True)
         for comment in comments_sorted[:20]:
             with st.container():
                 col_header, col_like = st.columns([4, 1])
                 with col_header:
                     rating = comment.get('rating', 5)
                     stars = "⭐" * rating
-                    _ts = sanitize_html(comment.get('timestamp', ''))
+                    # 按查看者本地时区渲染；老数据（无时区裸串）原样显示，不做平移
+                    _ts = sanitize_html(format_local(comment.get('timestamp', '')))
                     _content = sanitize_html(comment.get('content', ''))
                     st.markdown(
                         f"<div style='padding: 10px; background-color: #f0f2f6; "

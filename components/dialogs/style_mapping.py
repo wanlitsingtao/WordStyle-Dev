@@ -464,33 +464,43 @@ def show_style_mapping_dialog():
     # copy_chapter 模式下两份副本的段落样式完全由第 3 区双列（原文目标样式 / 应答目标样式）决定，
     # 不再有本区的统一覆盖值。
 
-    # 第1行：启用 + 文本
-    ans_row1 = st.columns([1, 4])
-    with ans_row1[0]:
-        do_answer = st.checkbox("插入应答句", value=do_answer_val,
-                                help="在章节前/后或段落前/后插入应答句",
-                                key=f"ans_do_answer_{selected_file.name}")
-    with ans_row1[1]:
-        answer_text = st.text_input("文本", value=answer_text_val,
-                                    help="插入的应答句内容",
-                                    key=f"ans_text_{selected_file.name}",
+    # [2026-10-27] 布局按用户要求调整：
+    #   1) 应答句文本从「与复选框同一行」挪到复选框**之下** —— 同一行时
+    #      `columns([1,4])` 把文本框压得只剩 4/5 宽，且和复选框挤在一行不整齐；
+    #   2) 文本框补回可见 label「应答句」（原先 label_visibility="collapsed" 且写
+    #      的是"文本"，用户看不出这栏填什么）；
+    #   3) 「应答句样式 / 插入模式」两个 label 与两个下拉框**并到同一行**四列，
+    #      原先 label 压在下拉框上方，两栏各占一行高度，视觉上是两个方块。
+    #      下拉框自身 label 置 collapsed，改用前置 markdown 作为行内 label
+    #      （与下方「插入提示语」区的写法保持一致）。
+    do_answer = st.checkbox("插入应答句", value=do_answer_val,
+                            help="在章节前/后或段落前/后插入应答句",
+                            key=f"ans_do_answer_{selected_file.name}")
+    answer_text = st.text_input("应答句", value=answer_text_val,
+                                help="插入的应答句内容",
+                                key=f"ans_text_{selected_file.name}",
+                                disabled=not do_answer)
+
+    # 第2行：应答句样式 + 插入模式（原文/应答原文目标样式已移至第 3 区双列）
+    ans_row2 = st.columns([1.5, 3, 1.2, 3], vertical_alignment="center")
+    with ans_row2[0]:
+        st.markdown("**应答句样式**")
+    with ans_row2[1]:
+        style_idx = template_styles.index(answer_style_val) if answer_style_val in template_styles else 0
+        answer_style = st.selectbox("应答句样式", options=template_styles, index=style_idx,
+                                    key=f"ans_style_{selected_file.name}",
                                     label_visibility="collapsed",
                                     disabled=not do_answer)
-
-    # 第2行：应答样式 + 插入模式（原文/应答原文目标样式已移至第 3 区双列）
-    ans_row2 = st.columns(2)
-    with ans_row2[0]:
-        style_idx = template_styles.index(answer_style_val) if answer_style_val in template_styles else 0
-        answer_style = st.selectbox("应答样式", options=template_styles, index=style_idx,
-                                    key=f"ans_style_{selected_file.name}",
-                                    disabled=not do_answer)
-    with ans_row2[1]:
+    with ans_row2[2]:
+        st.markdown("**插入模式**")
+    with ans_row2[3]:
         mode_options = get_answer_mode_options()
         mode_keys = list(mode_options.keys())
         mode_idx = mode_keys.index(answer_mode_val) if answer_mode_val in mode_keys else 2
         answer_mode = st.selectbox("插入模式", options=mode_keys,
                                    format_func=lambda x: mode_options[x], index=mode_idx,
                                    key=f"ans_mode_{selected_file.name}",
+                                   label_visibility="collapsed",
                                    disabled=not do_answer)
 
     # 双列模式实时判定（本区控件变化后立即生效）

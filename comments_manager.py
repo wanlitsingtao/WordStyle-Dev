@@ -6,13 +6,34 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from config import COMMENTS_FILE, MAX_COMMENT_LENGTH, COMMENTS_PER_PAGE, LOCK_TIMEOUT_SECONDS
 from utils import sanitize_html
 import logging
 
 logger = logging.getLogger('WordStyle')
+
+
+def _now_stamp() -> str:
+    """业务时间戳：统一记 UTC（ISO 带偏移，如 2026-10-29T05:08:30+00:00）。
+
+    设计口径（用户 2026-10-29 拍板）：**存储记原始的服务器/UTC 时间，
+    展示时按用户本地时间渲染**（展示侧用 user_tz.format_local()）。
+    与后端 API 路径 DB 的 created_at（UTC）字面口径完全一致。
+
+    注意只用于**落库/落盘的时间**，文件锁超时那几处 `datetime.now()`
+    绝不能换成它——那是计算时间差的计时器，掺进别的时区会让锁提前/永不释放。
+
+    user_tz 模块不可用时的回退：同样记 UTC（不依赖 user_tz），
+    保证无论走哪条路径存储口径都一致；历史裸串由 format_local 原样显示。
+    """
+    try:
+        from user_tz import now_utc_iso
+        return now_utc_iso()
+    except Exception as e:  # 时区只是显示优化，绝不能因为它写不进评论
+        logger.debug(f"[TZ] 时间戳回退: {e}")
+        return datetime.now(timezone.utc).isoformat()
 
 
 # 文件锁机制（与user_manager中相同）
@@ -106,7 +127,7 @@ def add_comment(username, content, rating=5, user_id=None):
         'username': safe_username,
         'content': safe_content,
         'rating': rating,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': _now_stamp(),
         'likes': 0,
         'user_id': user_id
     }
@@ -264,7 +285,7 @@ def add_feedback(user_id, feedback_type, title, description, contact=''):
         'title': safe_title,
         'description': safe_description,
         'contact': safe_contact,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'timestamp': _now_stamp(),
         'status': 'pending'  # pending, processing, resolved
     }
     

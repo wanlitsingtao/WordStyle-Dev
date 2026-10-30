@@ -46,7 +46,9 @@ def render_title_leak_check():
     # 复选框切换、其他界面交互触发的整页重跑直接命中缓存，
     # 不重新解析文档（同一文件只在首次上传/换文件时解析一次）。
     # 引擎版本参与签名：识别规则升级后旧缓存自动失效，避免展示过时结果。
-    _ENGINE_VER = '2026-10-27'
+    # 引擎版本参与缓存签名：加了「Word 物理页码」后，旧缓存里的页码是估算值
+    # 且没有 page_source 字段，必须让它失效。
+    _ENGINE_VER = '2026-10-27-word'
     sig = (uploaded.name, uploaded.size, _ENGINE_VER)
     if st.session_state.get("_tlc_sig") != sig or "_tlc_items" not in st.session_state:
         # 直接读上传流（内存流，不落临时文件，本功能只读）
@@ -57,17 +59,35 @@ def render_title_leak_check():
         progress_bar = st.progress(0)
         status_text = st.empty()
         _last_ts = [0.0]
+        # [2026-10-27] 进度条按两个阶段连续推进，绝不倒退：
+        #   扫描段落 → 0~40%；Word 算页码 → 40~100%。
+        # 不这么做的话，Word 阶段要么进度条静止十几秒（像卡死），
+        # 要么重新从 0 开始（用户以为要重来一遍）。
+        _SCAN_SHARE = 0.4
 
         def _on_progress(done, total):
             frac = done / total if total else 0.0
             _now = time.time()
             if frac >= 1.0 or _now - _last_ts[0] >= 0.1:
                 _last_ts[0] = _now
-                progress_bar.progress(min(frac, 1.0))
+                progress_bar.progress(min(frac * _SCAN_SHARE, 1.0))
                 status_text.caption(f"🔍 正在检查… {done}/{total} 段")
 
+        def _on_word_progress(done, total):
+            frac = done / total if total else 0.0
+            _now = time.time()
+            if frac >= 1.0 or _now - _last_ts[0] >= 0.1:
+                _last_ts[0] = _now
+                progress_bar.progress(min(_SCAN_SHARE + frac * (1 - _SCAN_SHARE), 1.0))
+                status_text.caption(f"📄 正在用 Word 计算物理页码… {done}/{total} 条")
+
+        def _on_stage(msg):
+            status_text.caption(msg)
+
         try:
-            items = TitlePreprocessor.check_heading_leaks(data, progress_callback=_on_progress)
+            items = TitlePreprocessor.check_heading_leaks(
+                data, progress_callback=_on_progress, stage_callback=_on_stage,
+                word_progress_callback=_on_word_progress)
         except Exception as e:
             logger.exception("标题查漏解析失败")
             st.error(f"❌ 文档解析失败：{e}")
@@ -147,15 +167,30 @@ def _render_leak_results(items):
         return
 
     st.markdown(f"**识别结果（{len(rows)} 条）：**")
-    st.caption(
-        "页码为估算值：docx 不保存实时分页，页码按文档内分页标记"
-        "（显式分页符 / Word 上次保存的渲染分页 / 分节符）推算，仅供定位参考。"
-    )
+    # [2026-10-27] 页码来源分两种，必须在界面上说清楚，否则用户会拿估算值当准数：
+    #   word     = 本机 Word 算出的物理页码（= Word 窗口底部「第 X 页」，准确）
+    #   estimate = docx 分页标记推算（文档编辑过就可能差几页）
+    _srcs = {it.get("page_source", "estimate") for it in rows}
+    if _srcs == {"word"}:
+        st.caption("页码为 **Word 物理页码**（与 Word 窗口底部「第 X 页」一致）。")
+    elif "word" in _srcs:
+        st.caption(
+            "页码以 **Word 物理页码**为准；个别条目未能定位，退回分页标记估算值。"
+        )
+    else:
+        st.caption(
+            "页码为**估算值**：docx 不保存实时分页，只能按文档内分页标记"
+            "（显式分页符 / Word 上次渲染的分页 / 分节符）推算，"
+            "文档被编辑过可能相差数页。"
+        )
+    _mixed = len(_srcs) > 1
     st.dataframe(
         [
             {
                 "序号": i + 1,
-                "页码": it.get("page", "—"),
+                # 混合来源时逐行标记：估算值前面加 "~"，否则用户会把 20 当成准数。
+                "页码": (f"~{it['page']}" if _mixed and it.get("page_source") == "estimate"
+                         else it.get("page", "—")),
                 "编号": it["number"],
                 "标题文本": (
                     (it["text"][:60] + "…") if len(it["text"]) > 60

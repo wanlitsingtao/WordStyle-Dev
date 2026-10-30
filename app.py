@@ -353,6 +353,19 @@ try:
         if renew_identity_cookie(identity.bid):
             logger.info(f"[IDENTITY] 已续期浏览器身份 cookie（bid={identity.bid[:8]}…）")
 
+    # [TZ] 探测浏览器时区，写进 cookie `ws_tz`（与身份 cookie 同一套机制）。
+    # 为什么必须在入口就做：Python 跑在服务器（云端是 UTC），datetime.now() 比用户
+    # 手表早 8 小时，转换结果文件名会显示成"半夜生成"。时区只有浏览器知道，
+    # 必须提前探测好，等用户点转换时（经历多次 rerun）cookie 已经可读。
+    # 取不到时 user_tz 会回退服务器本地时间，不会让转换失败。
+    try:
+        from user_tz import ensure_timezone_cookie, describe_user_tz
+        ensure_timezone_cookie()
+        # 留一行痕迹：排查"文件名时间不对"时，直接看这里就知道后端拿到的时区是什么
+        logger.info(f"[TZ] {describe_user_tz()}")
+    except Exception as e:  # 时区只是显示优化，绝不能因为它拖垮启动
+        logger.warning(f"[TZ] 时区探测跳过: {e}")
+
     # 第二步：通过设备指纹从数据库获取或创建用户（带会话级缓存守卫）
     # 但是如果用户已通过账号登录，则保持登录身份不变
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)

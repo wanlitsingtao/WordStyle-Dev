@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from ..core.database import get_db
@@ -73,7 +73,9 @@ def submit_comment(
             username=new_comment.username,
             content=new_comment.content,
             rating=new_comment.rating,
-            timestamp=new_comment.created_at.strftime('%Y-%m-%d %H:%M:%S') if new_comment.created_at else datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            # [TZ] 用 isoformat 保留时区偏移，前端 user_tz.format_local() 再按查看者时区渲染。
+            # 以前 strftime 成裸串会丢掉时区，云端（UTC）返回的时间比用户手表早 8 小时。
+            timestamp=new_comment.created_at.isoformat() if new_comment.created_at else datetime.now(timezone.utc).isoformat(),
             likes=new_comment.likes,
             user_id=new_comment.user_id
         )
@@ -108,7 +110,7 @@ def get_comments(
                 username=c.username,
                 content=c.content,
                 rating=c.rating,
-                timestamp=c.created_at.strftime('%Y-%m-%d %H:%M:%S') if c.created_at else '',
+                timestamp=c.created_at.isoformat() if c.created_at else '',
                 likes=c.likes,
                 user_id=c.user_id
             )

@@ -310,6 +310,16 @@ def extract_paragraph_direct_format(para):
                 run_fmt["size_pt"] = int(sz.get(qn("w:val"))) / 2.0
             except (TypeError, ValueError):
                 pass
+        else:
+            # 只带 w:szCs、不带 w:sz 的段落真实存在（Word 从别处粘贴常见，
+            # test.docx 的「■先进性：…」整段就是这样）。不兜底的话，
+            # 模板快照会丢掉字号，该段就永远拿不到目标字号。
+            szcs = rPr.find(qn("w:szCs"))
+            if szcs is not None:
+                try:
+                    run_fmt["size_pt"] = int(szcs.get(qn("w:val"))) / 2.0
+                except (TypeError, ValueError):
+                    pass
         for tag, key in (("w:b", "bold"), ("w:i", "italic")):
             el = rPr.find(qn(tag))
             if el is not None:
@@ -573,6 +583,63 @@ def extract_template_format_snapshots(doc):
     return snapshots
 
 
+# w:szCs 之后允许出现的元素（WordprocessingML schema 的严格顺序）。
+# 插错位置 Word 会报「文档已损坏」，所以新增元素必须走 insert_element_before。
+_SZCS_SUCCESSORS = (
+    "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText",
+    "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout",
+    "w:specVanish", "w:oMath",
+)
+
+
+def set_rpr_size(rPr, size_pt):
+    """把字号同时写进 w:sz 与 w:szCs。成功返回 True。
+
+    【为什么必须一起写】（2026-10-30 修复「有些符号不能应用目标样式字号」）
+    python-docx 的 `font.size` / `style.font.size` **只写 w:sz**，完全不碰
+    w:szCs（复杂文种字号，Complex Script size）。而 Word 存中文文档时，
+    从别处粘贴过来的 run 经常只带 w:szCs、不带 w:sz（test.docx 里
+    「■先进性：…」整段就是 `<w:szCs w:val="24"/>` 而无 w:sz）。
+
+    转换时只写 w:sz 就会出现「w:sz=21（10.5pt）但 w:szCs 仍是 24（12pt）」。
+    Word 渲染 ■ ● 这类符号时走 szCs 档位，于是符号保持 12pt、正文 10.5pt，
+    表现为「符号不能应用目标样式字号、比正文大一圈」。
+    用户在 Word 里手动重新应用样式能修好，正是因为 Word 会重写整个 rPr
+    把 sz 与 szCs 同步 —— 这条现象就是定位本 bug 的关键线索。
+    """
+    if rPr is None or size_pt is None:
+        return False
+    try:
+        half = str(int(round(float(size_pt) * 2)))   # w:val 单位是半磅
+    except (TypeError, ValueError):
+        return False
+
+    sz = rPr.find(qn("w:sz"))
+    if sz is None:
+        sz = OxmlElement("w:sz")
+        rPr.insert_element_before(sz, "w:szCs", *_SZCS_SUCCESSORS)
+    sz.set(qn("w:val"), half)
+
+    szcs = rPr.find(qn("w:szCs"))
+    if szcs is None:
+        szcs = OxmlElement("w:szCs")
+        rPr.insert_element_before(szcs, *_SZCS_SUCCESSORS)
+    szcs.set(qn("w:val"), half)
+    return True
+
+
+def set_run_size(run, size_pt):
+    """设置 run 字号并同步 w:szCs（原因见 set_rpr_size）。"""
+    try:
+        run.font.size = Pt(size_pt)
+    except Exception:
+        return False
+    try:
+        return set_rpr_size(run._r.get_or_add_rPr(), size_pt)
+    except Exception:
+        return False
+
+
 def _ensure_ppr_child(pPr, tag, successors):
     """在 pPr 中取出（必要时新建）某个子元素，并保证符合 OOXML 的元素顺序。"""
     el = pPr.find(qn(tag))
@@ -652,10 +719,14 @@ def apply_format_snapshot(paragraph, snapshot):
         ol.set(qn("w:val"), str(int(para_fmt["outline_level"]) - 1))
 
     # ---------- 字体级 ----------
-    for run in paragraph.runs:
+    # 用 iter_paragraph_runs 而非 paragraph.runs：后者看不到 w:ins（修订插入）
+    # 内部的 run，那些 run 的字号会漏改（与图片扫描踩过的是同一个坑）。
+    for run in iter_paragraph_runs(paragraph):
         try:
             if "size_pt" in run_fmt:
-                run.font.size = Pt(run_fmt["size_pt"])
+                # 走 set_run_size 而不是直接 font.size：后者只写 w:sz，
+                # 源文档残留的 w:szCs 会让 ■ ● 这类符号保持旧字号（见函数注释）。
+                set_run_size(run, run_fmt["size_pt"])
             if "bold" in run_fmt:
                 run.font.bold = bool(run_fmt["bold"])
             if "italic" in run_fmt:
@@ -695,13 +766,18 @@ def clean_list_numbering(text):
 class DocumentConverter:
     """文档转换器主类"""
     
-    def __init__(self, tone_rules: dict = None):
+    def __init__(self, tone_rules: dict = None, tzinfo=None):
         """初始化文档转换器。
 
         Args:
             tone_rules: 从持久化用户配置注入的语气规则字典。
                 未传入时使用空规则，不在转换器内置默认映射。
+            tzinfo: [TZ] 重名时备用文件名时间戳所用的时区。
+                Web 端传入来访用户所在时区（由浏览器 cookie 提供），这样
+                `xxx_235959.docx` 这种后缀对应用户手表上的时间而不是服务器时间。
+                桌面版（desk/）不传，保持本机时间，行为与改动前完全一致。
         """
+        self.tzinfo = tzinfo
         self.logger = None
         self.stats = {"para": 0, "table": 0, "heading": 0}
         self.source_styles = set()  # 源文档中使用的样式
@@ -2570,7 +2646,8 @@ class DocumentConverter:
                         new_run.font.italic = run.font.italic
                         new_run.font.underline = run.font.underline
                         if run.font.size:
-                            new_run.font.size = run.font.size
+                            # 同步 w:szCs，否则 ■ ● 等符号会保留旧字号
+                            set_run_size(new_run, run.font.size.pt)
                         if run.font.color and run.font.color.rgb:
                             try:
                                 new_run.font.color.rgb = run.font.color.rgb
@@ -2649,6 +2726,12 @@ class DocumentConverter:
                             new_style.font.bold = True
                         if source_style.font.size:
                             new_style.font.size = source_style.font.size
+                            # 样式里同样要同步 szCs，否则继承该样式的符号字符字号不一致
+                            try:
+                                set_rpr_size(new_style.element.get_or_add_rPr(),
+                                             source_style.font.size.pt)
+                            except Exception:
+                                pass
                         if source_style.font.color and source_style.font.color.rgb:
                             new_style.font.color.rgb = source_style.font.color.rgb
                     print(f"[INFO] 已从源文档复制样式 '{final_style}'")
@@ -2662,7 +2745,12 @@ class DocumentConverter:
                         # 根据大纲级别设置字体大小
                         size_map = {1: 24, 2: 20, 3: 16, 4: 14, 5: 13, 6: 12, 7: 12, 8: 12, 9: 12}
                         from docx.shared import Pt
-                        new_style.font.size = Pt(size_map.get(outline_level, 12))
+                        _title_pt = size_map.get(outline_level, 12)
+                        new_style.font.size = Pt(_title_pt)
+                        try:
+                            set_rpr_size(new_style.element.get_or_add_rPr(), _title_pt)
+                        except Exception:
+                            pass
                         print(f"[INFO] 已创建基本样式 '{final_style}'")
                     except Exception as e2:
                         print(f"[ERROR] 无法创建样式 '{final_style}': {e2}，使用默认样式")
@@ -5008,7 +5096,8 @@ class DocumentConverter:
             return output_file
 
         base, ext = os.path.splitext(output_file)
-        time_suffix = datetime.now().strftime("_%H%M%S")
+        # [TZ] 用调用方传入的时区（Web=用户本地，桌面=None=本机时间）
+        time_suffix = datetime.now(self.tzinfo).strftime("_%H%M%S")
         candidate = f"{base}{time_suffix}{ext}"
 
         if not os.path.exists(candidate):
@@ -5054,7 +5143,8 @@ class DocumentConverter:
 
                 # 生成新的文件名
                 base, ext = os.path.splitext(output_file)
-                time_suffix = datetime.now().strftime("_%H%M%S")
+                # [TZ] 用调用方传入的时区（Web=用户本地，桌面=None=本机时间）
+                time_suffix = datetime.now(self.tzinfo).strftime("_%H%M%S")
                 current_file = f"{base}{time_suffix}{ext}"
 
                 # 如果新文件名仍冲突，追加序号避免覆盖

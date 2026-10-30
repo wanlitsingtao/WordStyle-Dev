@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from ..core.database import get_db
@@ -74,7 +74,8 @@ def submit_feedback(
             description=new_feedback.description,
             contact=new_feedback.contact,
             status=new_feedback.status,
-            created_at=new_feedback.created_at.strftime('%Y-%m-%d %H:%M:%S') if new_feedback.created_at else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # [TZ] 同 comments.py：保留时区偏移，交给前端按查看者时区渲染
+            created_at=new_feedback.created_at.isoformat() if new_feedback.created_at else datetime.now(timezone.utc).isoformat()
         )
     
     except Exception as e:
@@ -117,7 +118,7 @@ def get_feedback_list(
                 description=f.description,
                 contact=f.contact,
                 status=f.status,
-                created_at=f.created_at.strftime('%Y-%m-%d %H:%M:%S') if f.created_at else ''
+                created_at=f.created_at.isoformat() if f.created_at else ''
             )
             for f in feedbacks
         ]

@@ -88,58 +88,139 @@ def _get_ds_image_bytes():
     return _read_ds_image_bytes(_ds_image_path.stat().st_mtime, str(_ds_image_path))
 
 
-def _render_login_dialog(device_fingerprint):
-    """在账号登录按钮下方渲染登录面板。"""
-    if not st.session_state.get('show_login_dialog', False):
-        return
+def _clear_bind_dialog():
+    """关闭绑定弹窗并清空输入。
 
+    只置标志位、不在这里 rerun：它同时被「取消」按钮和「弹窗外点击/ESC 关闭」
+    两条路径调用，rerun 由调用方决定。
+    """
+    st.session_state.show_bind_dialog = False
+    for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
+        st.session_state.pop(k, None)
+
+
+@st.dialog("🔗 绑定账号", on_dismiss=_clear_bind_dialog)
+def _render_bind_dialog(device_fingerprint):
+    """绑定账号弹窗（dialog = fragment，内部交互不牵动主界面）。
+
+    [2026-10-27] 用户反馈的三个问题，根因都是"用 expander 塞在侧边栏里"：
+      1. 面板出现在「功能菜单」**下方**而不是按钮下方 —— 因为这段代码渲染在
+         `_render_feature_menu()` 之后，位置由代码顺序决定，不在按钮下面；
+      2. 侧边栏只有 ~250px，两个提交按钮各占一半，「✅ 确定」被省略成「…」；
+      3. expander 里的控件属于主脚本，任何交互都整页重跑，右侧主界面
+         （文档转换页带上传/进度条）跟着反复刷新。
+    st.dialog 一次解决三条：居中弹窗、宽度充足、且 dialog 本身就是 fragment
+    —— 弹窗内输入/提交只重跑弹窗自己，右侧主界面不动。
+    """
     from account_manager import create_account_manager
 
-    with st.expander("🔑 账号登录", expanded=True):
-        st.markdown("使用已绑定的用户名和密码登录。")
-        with st.form("login_account_form"):
-            login_username = st.text_input(
-                "用户名",
-                placeholder="输入已绑定的用户名",
-                key="login_username_input"
-            )
-            login_password = st.text_input(
-                "密码",
-                type="password",
-                placeholder="输入登录密码",
-                key="login_password_input"
-            )
+    st.markdown("将当前设备与一个易记的用户名绑定，方便以后跨设备登录。")
+    with st.form("bind_account_form"):
+        bind_username = st.text_input(
+            "设置用户名",
+            placeholder="字母、数字或中文，不区分大小写",
+            key="bind_username_input"
+        )
+        bind_password = st.text_input(
+            "设置密码",
+            type="password",
+            placeholder="设置登录密码",
+            key="bind_password_input"
+        )
+        bind_password2 = st.text_input(
+            "确认密码",
+            type="password",
+            placeholder="再次输入密码",
+            key="bind_password2_input"
+        )
 
-            col_l1, col_l2 = st.columns(2)
-            with col_l1:
-                submitted_login = st.form_submit_button("✅ 登录", use_container_width=True)
-            with col_l2:
-                cancelled_login = st.form_submit_button("取消", use_container_width=True)
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            submitted_bind = st.form_submit_button(
+                "✅ 确定", use_container_width=True, type="primary")
+        with col_b2:
+            cancelled_bind = st.form_submit_button("取消", use_container_width=True)
 
-        if cancelled_login:
-            st.session_state.show_login_dialog = False
-            for key in ('login_username_input', 'login_password_input'):
-                st.session_state.pop(key, None)
-            st.rerun()
+    if cancelled_bind:
+        _clear_bind_dialog()
+        st.rerun()          # 必须全量 rerun：不调用 dialog 才会真正关掉弹窗
 
-        if submitted_login:
-            if not login_username or not login_password:
-                st.error("用户名和密码不能为空")
+    if submitted_bind:
+        if bind_password != bind_password2:
+            st.error("两次输入的密码不一致")
+        elif not bind_username or not bind_password:
+            st.error("用户名和密码不能为空")
+        else:
+            mgr = create_account_manager()
+            success, msg = mgr.bind_account(device_fingerprint, bind_username, bind_password)
+            if success:
+                st.session_state.logged_in_username = bind_username.strip()
+                st.session_state.logged_in_user_id = app_state.get_user_id()
+                st.session_state.sidebar_user_data = None
+                _clear_bind_dialog()
+                st.success(msg + " 已自动登录。")
+                st.rerun()
             else:
-                mgr = create_account_manager()
-                success, msg, user_id = mgr.login_account(login_username, login_password)
-                if success and user_id:
-                    st.session_state.logged_in_username = login_username.strip()
-                    st.session_state.logged_in_user_id = user_id
-                    app_state.set_user_id(user_id)
-                    st.session_state.sidebar_user_data = None
-                    st.session_state.show_login_dialog = False
-                    for key in ('login_username_input', 'login_password_input'):
-                        st.session_state.pop(key, None)
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+                st.error(msg)
+
+
+def _clear_login_dialog():
+    """关闭登录弹窗并清空输入（理由同 _clear_bind_dialog）。"""
+    st.session_state.show_login_dialog = False
+    for k in ('login_username_input', 'login_password_input'):
+        st.session_state.pop(k, None)
+
+
+@st.dialog("🔑 账号登录", on_dismiss=_clear_login_dialog)
+def _render_login_dialog(device_fingerprint):
+    """账号登录弹窗。
+
+    [2026-10-27] 与绑定账号同步改为弹窗：两者原本是同一套 expander 写法，
+    同一个「按钮文字被挤断 + 整页重跑」的毛病。只改一个会让两个按钮行为不一致。
+    """
+    from account_manager import create_account_manager
+
+    st.markdown("使用已绑定的用户名和密码登录。")
+    with st.form("login_account_form"):
+        login_username = st.text_input(
+            "用户名",
+            placeholder="输入已绑定的用户名",
+            key="login_username_input"
+        )
+        login_password = st.text_input(
+            "密码",
+            type="password",
+            placeholder="输入登录密码",
+            key="login_password_input"
+        )
+
+        col_l1, col_l2 = st.columns(2)
+        with col_l1:
+            submitted_login = st.form_submit_button(
+                "✅ 登录", use_container_width=True, type="primary")
+        with col_l2:
+            cancelled_login = st.form_submit_button("取消", use_container_width=True)
+
+    if cancelled_login:
+        _clear_login_dialog()
+        st.rerun()
+
+    if submitted_login:
+        if not login_username or not login_password:
+            st.error("用户名和密码不能为空")
+        else:
+            mgr = create_account_manager()
+            success, msg, user_id = mgr.login_account(login_username, login_password)
+            if success and user_id:
+                st.session_state.logged_in_username = login_username.strip()
+                st.session_state.logged_in_user_id = user_id
+                app_state.set_user_id(user_id)
+                st.session_state.sidebar_user_data = None
+                _clear_login_dialog()
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 
 def render_sidebar(active_page: str = "conversion"):
@@ -372,7 +453,8 @@ def render_sidebar(active_page: str = "conversion"):
                     st.session_state.show_login_dialog = True
                     st.session_state.show_bind_dialog = False
 
-        _render_login_dialog(_device_fp)
+        if st.session_state.get('show_login_dialog', False):
+            _render_login_dialog(_device_fp)
 
         # 用户数据加载（复用 app.py 入口统一初始化的会话缓存）
         if not st.session_state.get('user_init_failed', False):
@@ -449,60 +531,12 @@ def render_sidebar(active_page: str = "conversion"):
 
         _render_feature_menu(active_page)
 
-        # ==================== 绑定账号对话框 ====================
+        # ==================== 绑定账号弹窗 ====================
+        # [2026-10-27] 由「功能菜单下方的 expander」改为居中弹窗，理由见
+        # _render_bind_dialog 的 docstring。dialog 从 within-sidebar 调用是官方
+        # 支持用法（源码注释：it lives outside of the normal Streamlit UI flow）。
         if st.session_state.get('show_bind_dialog', False):
-            with st.expander("🔗 绑定账号", expanded=True):
-                st.markdown("将当前设备与一个易记的用户名绑定，方便以后跨设备登录。")
-                with st.form("bind_account_form"):
-                    bind_username = st.text_input(
-                        "设置用户名",
-                        placeholder="字母、数字或中文，不区分大小写",
-                        key="bind_username_input"
-                    )
-                    bind_password = st.text_input(
-                        "设置密码",
-                        type="password",
-                        placeholder="设置登录密码",
-                        key="bind_password_input"
-                    )
-                    bind_password2 = st.text_input(
-                        "确认密码",
-                        type="password",
-                        placeholder="再次输入密码",
-                        key="bind_password2_input"
-                    )
-
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
-                        submitted_bind = st.form_submit_button("✅ 确定", use_container_width=True)
-                    with col_b2:
-                        cancelled_bind = st.form_submit_button("取消", use_container_width=True)
-
-                if cancelled_bind:
-                    st.session_state.show_bind_dialog = False
-                    for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
-                        st.session_state.pop(k, None)
-                    st.rerun()
-
-                if submitted_bind:
-                    if bind_password != bind_password2:
-                        st.error("两次输入的密码不一致")
-                    elif not bind_username or not bind_password:
-                        st.error("用户名和密码不能为空")
-                    else:
-                        mgr = create_account_manager()
-                        success, msg = mgr.bind_account(_device_fp, bind_username, bind_password)
-                        if success:
-                            st.session_state.logged_in_username = bind_username.strip()
-                            st.session_state.logged_in_user_id = app_state.get_user_id()
-                            st.session_state.sidebar_user_data = None
-                            st.session_state.show_bind_dialog = False
-                            for k in ('bind_username_input', 'bind_password_input', 'bind_password2_input'):
-                                st.session_state.pop(k, None)
-                            st.success(msg + " 已自动登录。")
-                            st.rerun()
-                        else:
-                            st.error(msg)
+            _render_bind_dialog(_device_fp)
 
         st.markdown("---")
 
