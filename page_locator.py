@@ -8,8 +8,12 @@ docx 格式**不保存实时分页**，只有 `w:lastRenderedPageBreak` 这种�
 449 个分页标记，按标记推算得到 445 页，个别标题偏 1~16 页。纯 XML 推算无法
 分辨哪些标记已失效，所以「精确页码」只能让 Word 用真实排版引擎算。
 
-Word 状态栏「第 X 页」= `Range.Information(wdActiveEndPageNumber)`，这正是
-**物理页码**（与页脚里手写的「第 X 页 共 Y 页」域无关，后者可能自定义起始值）。
+Word 状态栏「第 X 页」在**分节符重置页码**后与物理页不同：目录占 5 页且不参与
+编号时，页脚显示 573 的那一页物理上是第 578 页。`Range.Information(3)`
+（wdActiveEndPageNumber）返回**物理页**，`(1)`
+（wdActiveEndAdjustedPageNumber）返回**按页码设置调整后的显示页号**。
+用户要的是后者（与页脚「第 X 页」、Word「定位」一致），见 2026-11-05 实测：
+5 页文档、第 2 节页码从 1 重排 → 末页 (3)=5、(1)=2。
 
 ## 性能（实测：414 页 / 314 个标题 / 5864 段）
 
@@ -40,7 +44,10 @@ from typing import Iterable, List, Optional, Sequence
 logger = logging.getLogger('WordStyle')
 
 # Word 常量
-_WD_ACTIVE_END_PAGE_NUMBER = 3      # 物理页码（= 状态栏「第 X 页」）
+# ★ 必须是 1（Adjusted），不能是 3（PageNumber）：
+#   3 返回物理页，遇到「目录章不编号 / 分节重新编号」会整体偏移（用户实测差 5 页）；
+#   1 返回页脚实际显示的页号，与 Word「定位」对话框里的页码一致。
+_WD_ADJUSTED_PAGE_NUMBER = 1
 _WD_FIND_STOP = 0                   # 不绕回文档开头继续找
 _MsoAutomationSecurityForceDisable = 3
 
@@ -185,7 +192,7 @@ def locate_pages(docx_path: str, texts: Sequence[str],
                              i, text[:20], got[:20])
                 pos = rng.End
                 continue
-            result[i] = int(rng.Information(_WD_ACTIVE_END_PAGE_NUMBER))
+            result[i] = int(rng.Information(_WD_ADJUSTED_PAGE_NUMBER))
             pos = rng.End
 
             # 进度回报按时间节流：COM 调用本身是耗时大头，别让回调把速度再拖下去。

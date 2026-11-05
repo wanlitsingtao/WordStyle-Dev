@@ -48,7 +48,7 @@ def render_title_leak_check():
     # 引擎版本参与签名：识别规则升级后旧缓存自动失效，避免展示过时结果。
     # 引擎版本参与缓存签名：加了「Word 物理页码」后，旧缓存里的页码是估算值
     # 且没有 page_source 字段，必须让它失效。
-    _ENGINE_VER = '2026-11-05-pdf'
+    _ENGINE_VER = '2026-11-05-word'
     sig = (uploaded.name, uploaded.size, _ENGINE_VER)
     if st.session_state.get("_tlc_sig") != sig or "_tlc_items" not in st.session_state:
         # 直接读上传流（内存流，不落临时文件，本功能只读）
@@ -167,93 +167,42 @@ def _render_leak_results(items):
         return
 
     st.markdown(f"**识别结果（{len(rows)} 条）：**")
-    # [2026-11-05] 页码来源现在有三种，必须逐一说清（用户报过"578 页显示成 25 页"）：
-    #   word        = 本机 Word 状态栏的物理页码（最准）
-    #   pdf         = 云端 LibreOffice 真渲染后的页码（真实分页，但与 Word 可能差几页）
-    #   estimate    = 按 docx 分页标记推算（程序生成的文档几乎没有标记，可能差几百页）
-    #   unavailable = 连估算都不可信 → 显示「—」，绝不给假数字
-    _srcs = {it.get("page_source", "estimate") for it in rows}
-    _has_na = "unavailable" in _srcs
-    _exact = {"word", "pdf"} & _srcs
-    if _srcs == {"word"}:
-        st.caption("页码为 **Word 物理页码**（与 Word 窗口底部「第 X 页」一致）。")
-    elif _srcs == {"pdf"}:
+    # [2026-11-05] 页码只认 Word（用户验收标准：与 Word 文档里的页码一致，否则不显示）。
+    #   为什么砍掉另外两条路：
+    #   * LibreOffice 渲染 PDF：排版引擎不同，整篇膨胀 ~12%——用户的 578 页标书，
+    #     某标题 Word 显示 573，我们用 PDF 算成 645（645 已超过 PDF 总页数 578，
+    #     说明是整体重排，不是定位漂移）。这种数字比没有更糟。
+    #   * 按 docx 分页标记估算：程序生成的文档常常一个标记都没有（1137 条全算第 25 页）。
+    # 所以现在只有 Word 定位成功才出页码列；否则整列隐藏，并在下方说明一句。
+    _has_word_pages = any(it.get("page_source") == "word" for it in rows)
+    if _has_word_pages:
+        _miss = sum(1 for it in rows if it.get("page_source") != "word")
         st.caption(
-            "页码由 **LibreOffice 渲染后计算**：这是文档的真实分页，"
-            "但与 Microsoft Word 的排版引擎不同，可能相差几页。"
+            "页码为 **Word 显示页号**（与 Word 页脚「第 X 页」及 Word「定位」一致）。"
+            + ("— 表示该条未能在 Word 中定位。" if _miss else "")
         )
-    elif _exact:
-        st.caption(
-            "页码以 **渲染页码**为准（Word 或 LibreOffice）；带 ~ 的为估算值，"
-            "— 表示该条无法定位。"
-        )
-    elif _has_na:
-        # [2026-11-05] 不再拿"看起来精确"的假数字糊弄人：
-        # 程序生成/转换的 docx 没有 w:lastRenderedPageBreak，按标记推算会把
-        # 578 页的文档算成 25 页。这种情况明确说"没有可靠页码"。
-        # 文案区分两种成因（环境没有 Word / 文档没有标记），否则用户不知道该改哪个。
-        try:
-            from page_locator import is_available as _word_available
-            _no_word_env = not _word_available()
-        except Exception:
-            _no_word_env = True
-        try:
-            from pdf_pages import is_available as _pdf_available
-            _no_pdf_env = not _pdf_available()
-        except Exception:
-            _no_pdf_env = True
-        if _no_word_env and _no_pdf_env:
-            st.warning(
-                "⚠️ **无法给出可靠页码**：当前环境既没有 Word，也没有 LibreOffice"
-                "（云端未安装渲染组件，或本地 Python 没装 pywin32），"
-                "而这份文档又缺少可供推算的分页标记，页码已显示为「—」。\n\n"
-                "在 **本地 Windows 版**运行即可拿到 Word 物理页码。"
-            )
-        elif _no_word_env:
-            st.warning(
-                "⚠️ **无法给出可靠页码**：LibreOffice 渲染没有成功"
-                "（可能超时或组件未装齐），而这份文档缺少可供推算的分页标记，"
-                "页码已显示为「—」。\n\n"
-                "可稍后重试；本地 Windows 版会用 Word 直接取页码，更稳。"
-            )
-        else:
-            st.warning(
-                "⚠️ **无法给出可靠页码**：这份文档缺少可供推算的分页标记"
-                "（常见于程序生成或格式转换得到的 docx），页码已显示为「—」。\n\n"
-                "如需准确页码，可先用 Word 打开该文档并保存一次"
-                "（Word 会写入分页标记），再重新上传检查。"
-            )
     else:
         st.caption(
-            "页码为**估算值**（带 ~）：docx 不保存实时分页，只能按文档内分页标记"
-            "（显式分页符 / Word 上次渲染的分页 / 分节符）推算，"
-            "文档被编辑过可能相差数页。"
+            "ℹ️ **本次不显示页码**：当前环境没有可用的 Microsoft Word，"
+            "无法复现 Word 的分页。在本机 Windows 版运行即可显示与 Word 完全一致的页码。"
         )
-    page_head = ("页码" if _srcs <= {"word", "pdf"}
-                 else ("页码（估算）" if not _has_na else "页码"))
+
+    def _row(i, it):
+        d = {"序号": i + 1}
+        if _has_word_pages:
+            # 只有 Word 定位到的才给数字；未定位到用「—」，绝不用 0/1 占位。
+            d["页码"] = (it["page"]
+                        if it.get("page_source") == "word" and it.get("page") else "—")
+        d["编号"] = it["number"]
+        d["标题文本"] = ((it["text"][:60] + "…") if len(it["text"]) > 60
+                       else it["text"].replace('\t', ' '))
+        d["推断级别"] = f"H{it['detected_level']}"
+        d["当前样式说明"] = it["style_description"]
+        d["判定"] = LEAK_LABEL if it["is_leak"] else OK_LABEL
+        return d
+
     st.dataframe(
-        [
-            {
-                "序号": i + 1,
-                # 估算值一律带 "~"（不再只在混用时才标），避免被当成精确页码；
-                # 无法定位显示 "—"，绝不用 0/1 之类的数字占位。
-                page_head: (
-                    "—" if it.get("page") is None
-                    else ("~%s" % it["page"]
-                          if it.get("page_source") == "estimate"
-                          else it["page"])
-                ),
-                "编号": it["number"],
-                "标题文本": (
-                    (it["text"][:60] + "…") if len(it["text"]) > 60
-                    else it["text"].replace('\t', ' ')
-                ),
-                "推断级别": f"H{it['detected_level']}",
-                "当前样式说明": it["style_description"],
-                "判定": LEAK_LABEL if it["is_leak"] else OK_LABEL,
-            }
-            for i, it in enumerate(rows)
-        ],
+        [_row(i, it) for i, it in enumerate(rows)],
         use_container_width=True,
         hide_index=True,
     )

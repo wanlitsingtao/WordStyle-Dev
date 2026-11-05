@@ -1,15 +1,29 @@
 # -*- coding: utf-8 -*-
-"""云端页码定位：docx → PDF（LibreOffice 无头渲染）→ 按页文本定位标题。
+"""【已停用 2026-11-05】云端页码定位：docx → PDF（LibreOffice 无头渲染）→ 按页文本定位标题。
 
-为什么需要这个模块
-------------------
+⚠️ 本模块当前**不在任何生产路径上**。停用原因（用户实测，硬指标）：
+    用户 578 页的标书里某标题，Word 页脚显示 573，本模块给出 **645**。
+    645 已超过 PDF 的 578 页总数 → 不是定位找错，而是 LibreOffice 与 Word
+    的排版引擎差异导致**整篇重排膨胀约 12%**（字体替换、行高、表格行高累计）。
+    继续展示这种数字比没有更糟。用户因此定的验收标准是：
+    「与 Word 里的页码一致就保留，做不到就把页码显示去掉」→ 只保留 Word 路径
+    （见 page_locator.py / title_preprocessor._apply_word_pages）。
+    随之删除：`packages.txt`（不再装 libreoffice-writer / fonts-noto-cjk）。
+
+    保留本文件与配套测试的原因：里面「按文档顺序单调匹配 + 跳过目录条目」
+    的算法与 Word 无关，将来若能在云端拿到与 Word 一致的渲染器（或做
+    Word→PDF 离线预处理）可以直接复用。若确定不再需要，连同
+    `temp/test_title_leak_check.py::TestPdfPageMatching` 一起删掉。
+
+原始说明（保留以备恢复）
+------------------------
 docx 不保存「实时分页」，只有 Word 保存时写下的 ``w:lastRenderedPageBreak``
 快照。程序生成/格式转换得到的 docx 往往一条标记都没有，按标记推算就会把
 578 页的文档算成 25 页（用户 2026-11-05 报的就是这个）。
 
 本机 Windows 可以用 Word COM 取物理页码（见 page_locator.py）；Streamlit
 社区云跑在 Linux 上，没有 Word，只能用 LibreOffice 真渲染一遍拿到真实分页，
-再在 PDF 每页的文本里按文档顺序找标题 —— 这就是本模块的职责。
+再在 PDF 每页的文本里按文档顺序找标题 —— 这就是本模块的职责（现已停用）。
 
 精度说明
 --------
@@ -22,16 +36,12 @@ LibreOffice 与 Word 的排版引擎不同，字体替换/行距细节会让页�
 任何一步失败（没装 LibreOffice、转换超时、PDF 解析失败）都返回 ``None``，
 由调用方退回「分页标记估算」或「页码不可用」，绝不抛异常拖垮标题查漏。
 
-依赖声明（packages.txt）
-------------------------
+依赖声明（原 packages.txt，现已删除）
+------------------------------------
 Streamlit Community Cloud 会在部署时执行 apt-get install packages.txt 里的包，
 **该文件不支持 `#` 注释**——每行都会原样当作包名传给 apt，注释会被报成
 「Unable to locate package #」（2026-11-05 首次部署就是这么失败的）。
-所以 packages.txt 只放两行纯包名，说明文字写在这里：
-
-* ``libreoffice-writer`` —— 提供 ``soffice``，本模块的无头渲染引擎。
-* ``fonts-noto-cjk`` —— 云端默认没有中文字体，缺字体会让换行/分页与 Word
-  差很多；装上后页码偏差显著减小。
+原内容是 ``libreoffice-writer`` 与 ``fonts-noto-cjk`` 两行，现随本模块停用一起删除。
 """
 from __future__ import annotations
 

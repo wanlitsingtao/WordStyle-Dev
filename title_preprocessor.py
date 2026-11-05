@@ -393,50 +393,51 @@ class TitlePreprocessor:
                 item.update(info)
                 item["is_leak"] = not info["is_heading"]
                 item["page"] = None
-                item["page_source"] = 'estimate'
+                # 'none' = 本次没有可信页码来源（不是"估算是 0"）。
+                # 只有 Word 真的定位到才会改成 'word'。
+                item["page_source"] = 'none'
                 results.append(item)
 
-            # 顺序很重要：**先试 Word**，成功就完全跳过估算（估算本身要 15s，
-            # 414 页文档实测；先算再用 Word 覆盖等于白烧 15 秒）。
-            # Word 不可用 / 失败 / 有未命中的条目时，才算估算兜底。
-            need_estimate = True
+            # ---------- 页码：只有 Word 才算数（2026-11-05 决策） ----------
+            # 用户给出的验收标准是「和 Word 文档中的页码一致，否则不要显示」。
+            # 实测两条路都做不到：
+            #   1) LibreOffice 渲染成 PDF（pdf_pages.py）：排版引擎不同，整篇膨胀
+            #      ~12%。用户 578 页的标书，某标题 Word 显示 573、我们给 645
+            #      （645 已超过 PDF 的 578 页总数 → 是整体重排，不是定位找错）。
+            #   2) 按 docx 分页标记估算：程序生成的文档常常一个标记都没有
+            #      （1137 条标题全算成第 25 页）。
+            # 所以这里只留 Word；拿不到就让 page 保持 None，界面整列隐藏。
+            # 这也顺带省掉了云端每次上传白烧的 15s 估算 / 数分钟 PDF 渲染。
             if prefer_word_pages and results:
                 if stage_callback is not None:
                     # Word 定位一段要 10 秒左右（414 页 / 314 条实测 12.6s），
                     # 必须让用户看到「还在干活」，否则会以为界面卡死。
                     try:
-                        stage_callback("📄 正在计算物理页码（Word / LibreOffice 渲染）…")
+                        stage_callback("📄 正在计算物理页码（Word）…")
                     except Exception:
                         pass
                 pages = TitlePreprocessor._apply_word_pages(
                     src, results, progress_callback=word_progress_callback)
                 if pages is None:
                     # 日志留痕：排查「页码差几百页」时先看这一行。
-                    # 常见原因：Linux 云端、Python 环境没装 pywin32、
-                    # Word 未安装或 COM 起不来。
-                    logger.info(
-                        "[PAGES] 本机 Word 不可用（非 Windows / 无 pywin32 / "
-                        "Word 未安装）→ 退回分页标记估算")
-                # 全部命中 → 估算完全不需要；有缺口才补算。
-                need_estimate = any(it["page"] is None for it in results)
-
-            if need_estimate:
-                page_map = TitlePreprocessor.build_page_map(doc)
-                for it in results:
-                    if it["page"] is None:
-                        # 用 item 自己的 index，不要 zip(headings)——results 里
-                        # 有被 `continue` 跳过的异常段落，两个列表并不等长。
-                        idx = it.get("index")
-                        if isinstance(idx, int) and 0 <= idx < len(page_map):
-                            it["page"] = page_map[idx]
-                            it["page_source"] = 'estimate'
-
-                # ---------- 估算可靠性闸门 ----------
-                # docx 只在「被 Word 保存过」时才写分页标记（w:lastRenderedPageBreak）。
-                # 程序生成/格式转换出来的 docx 往往一个标记都没有，按标记推算就会得到
-                # 「533 条标题全在第 25 页」这种看着精确、实际差几百页的数字。
-                # 与其给假数字，不如标成 unavailable，让界面显示「—」并说明原因。
-                TitlePreprocessor._mark_unreliable_pages(results)
+                    # ★ 必须区分「环境不支持」与「环境支持但本次调用失败」：
+                    #   后者实测会偶发（COM 报 “Word 未能引发事件”），诱因是
+                    #   用户已开着多个 Word 文档 / 实例忙 / 上次 COM 请求异常退出。
+                    #   2026-11-05 就因为这里统一写成「本机 Word 不可用」，
+                    #   而 `is_available()` 实测又是 True，导致排查方向被带偏。
+                    try:
+                        from page_locator import is_available as _word_env_ok
+                        _env_ok = _word_env_ok()
+                    except Exception:
+                        _env_ok = False
+                    if _env_ok:
+                        logger.warning(
+                            "[PAGES] Word 可用，但本次定位失败（COM 报错/Word 实例忙）"
+                            "→ 本次不显示页码")
+                    else:
+                        logger.info(
+                            "[PAGES] 本机 Word 不可用（非 Windows / 无 pywin32 / "
+                            "Word 未安装）→ 本次不显示页码")
             return results
         finally:
             if tmp_path:
@@ -449,6 +450,10 @@ class TitlePreprocessor:
     # 说明这份文档缺分页标记，推算已失去意义。
     _MAX_ITEMS_PER_PAGE = 20
 
+    # ⚠️ 当前**无生产调用**：2026-11-05 起页码只认 Word，估算整条路线停用
+    # （见 check_heading_leaks 里的决策注释）。保留它是因为判据本身与引擎无关，
+    # 将来若恢复估算可直接重新接线；配套测试见 temp/test_title_leak_check.py
+    # 的 TestUnreliablePageGate。清理时连同 build_page_map 一起删。
     @staticmethod
     def _mark_unreliable_pages(results: List[Dict]) -> None:
         """把明显不可信的估算页码降级为 'unavailable'（就地修改）。
@@ -490,60 +495,39 @@ class TitlePreprocessor:
 
     @staticmethod
     def _apply_word_pages(src, results: List[Dict], progress_callback=None):
-        """用「精确页码引擎」覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
+        """用 Word 的显示页号覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
 
-        引擎优先级：
-        1. **Word COM**（本地 Windows）：Word 状态栏的物理页码，最准；
-        2. **LibreOffice → PDF**（云端 Linux）：真渲染一遍再按页找标题，
-           与 Word 可能相差几页，但远好于按分页标记估算；
-        3. 都不可用 → 返回 None，由调用方退回估算（或标「不可用」）。
+        **只认 Word。** 2026-11-05 用户定的验收标准是「与 Word 文档里的页码一致，
+        否则不要显示」。实测另两条路都达不到：
 
-        Word 只命中了一部分（>20% 没找到）时，会用 PDF 结果整体替换——
-        混用两种口径会出现「前半段页码正常、后半段差几百页」的假象。
+        * LibreOffice 渲染成 PDF（``pdf_pages.py``）：排版引擎不同，整篇膨胀约
+          12%。用户 578 页的标书，某标题 Word 显示 573、PDF 路线给出 645
+          （645 已超过 PDF 的 578 页总数，说明是整体重排而非定位找错）。
+        * docx 分页标记估算：程序生成的文档常常一个标记都没有。
 
-        位置对应关系：results 已按文档顺序排列，两个引擎也都是单调向后查找，
+        因此这里不再调用 PDF 引擎；``pdf_pages.py`` 保留但停用（见其文件头）。
+        返回 None 表示「本次拿不到 Word 页码」，调用方不再退化成估算，而是让
+        界面把页码列整列隐藏。
+
+        位置对应关系：results 已按文档顺序排列，Word 定位也是单调向后查找，
         因此可以直接按序 zip，不需要段落索引（python-docx 与 Word 的段落集合
         口径不同：同一文档 python 侧 8297 段、Word 侧 8892 段，按索引对齐会错位）。
         """
         texts = [str(it.get("text") or "") for it in results]
 
-        def _word():
-            try:
-                from page_locator import locate_pages
-                return locate_pages(src, texts, progress_callback=progress_callback)
-            except Exception as e:
-                logger.debug('[PAGES] Word 定位失败：%s', e)
-                return None
-
-        def _pdf():
-            try:
-                from pdf_pages import locate_pages_pdf
-                return locate_pages_pdf(src, texts, progress_callback=progress_callback)
-            except Exception as e:
-                logger.info('[PAGES] PDF 定位不可用：%s', e)
-                return None
-
-        pages = _word()
-        source = 'word'
-        if pages:
-            hit = sum(1 for p in pages if p)
-            if hit / float(len(pages)) < 0.8:
-                logger.info('[PAGES] Word 仅命中 %d/%d，尝试用 PDF 兜底', hit, len(pages))
-                pdf = _pdf()
-                if pdf and sum(1 for p in pdf if p) > hit:
-                    pages, source = pdf, 'pdf'
-        else:
-            pages = _pdf()
-            source = 'pdf'
+        try:
+            from page_locator import locate_pages
+            pages = locate_pages(src, texts, progress_callback=progress_callback)
+        except Exception as e:
+            logger.debug('[PAGES] Word 定位失败：%s', e)
+            pages = None
 
         if not pages:
             return None
-        if source == 'pdf':
-            logger.info('[PAGES] 页码来源：LibreOffice 渲染的 PDF（与 Word 可能相差几页）')
         for it, pg in zip(results, pages):
             if pg:
                 it["page"] = pg
-                it["page_source"] = source
+                it["page_source"] = 'word'
         return pages
 
     @staticmethod
