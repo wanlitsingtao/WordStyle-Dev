@@ -30,6 +30,7 @@ FindText / MatchCase / Wrap … 全部塞进一次 `Execute()`。
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
@@ -52,7 +53,13 @@ _PROBE_LEN = 20
 
 
 def is_available() -> bool:
-    """当前环境能否用 Word 取页码（不实际启动 Word）。"""
+    """当前环境能否用 Word 取页码（不实际启动 Word）。
+
+    支持 `WS_DISABLE_WORD_PAGES=1` 强制返回 False：用于在装了 Word 的机器上
+    复现「云端无 Word」的界面表现（验证"页码不可用"分支），无需改代码。
+    """
+    if os.environ.get('WS_DISABLE_WORD_PAGES') == '1':
+        return False
     if sys.platform != 'win32':
         return False
     try:
@@ -85,14 +92,17 @@ def _to_find_text(text: str, n: int = _PROBE_LEN) -> str:
 
 
 def locate_pages(docx_path: str, texts: Sequence[str],
-                 time_budget: float = 120.0,
+                 time_budget: Optional[float] = None,
                  progress_callback=None) -> Optional[List[Optional[int]]]:
     """返回每个 `texts[i]` 所在段落的物理页码（1-based）。
 
     Args:
         docx_path: 传给 Word 打开的文件路径（Word 不接受内存流，调用方需先落盘）。
         texts: 按**文档顺序**排列的标题文本，单调向后查找（保证重复文本不会串位）。
-        time_budget: 总时间预算（秒），超时后剩余条目返回 None，不抛异常。
+        time_budget: 总时间预算（秒）。缺省按条数自适应：
+            120s 起、每条 +0.15s、上限 420s。固定 120s 对 1000+ 条的大标书
+            会在半途截断，后半个文档全退化成估算（用户看到"前面页码对、
+            后面差几百页"）；自适应后能覆盖整篇，最坏也在 7 分钟内收敛。
         progress_callback: 可选，progress_callback(done, total)。
             这一段动辄十几秒，没有进度回报用户会以为界面卡死。
 
@@ -106,6 +116,9 @@ def locate_pages(docx_path: str, texts: Sequence[str],
     """
     if not is_available() or not texts:
         return None
+
+    if time_budget is None:
+        time_budget = min(420.0, max(120.0, 0.15 * len(texts) + 60.0))
 
     try:
         import pythoncom

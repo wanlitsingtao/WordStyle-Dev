@@ -20,5 +20,9 @@ lxml>=4.9.0
 # 运行期由 page_locator.is_available() 判断，不可用则回退到分页标记估算。
 pywin32>=306; sys_platform == "win32"
 
+# 云端页码：LibreOffice 把 docx 渲染成 PDF 后，用 pypdf 按页找标题。
+# 纯 Python、跨平台；LibreOffice 本体由 packages.txt 安装（见仓库根目录）。
+pypdf>=4.0
+
 # 定时任务
 APScheduler>=3.10.0

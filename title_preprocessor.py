@@ -10,12 +10,15 @@
 4. 判断文档是否已使用标题样式（供转换页引导提示）
 5. 查漏：找出"本应是标题、却既非标题格式也无大纲级别"的编号段落（只检查、不修改）
 """
+import logging
 import os
 import re
 import tempfile
 from typing import List, Dict, Optional
 
 from docx import Document
+
+logger = logging.getLogger('WordStyle')
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -353,14 +356,19 @@ class TitlePreprocessor:
                     "page_source": str,         # 'word' = Word 物理页码；'estimate' = 标记估算
                 }
         """
-        # Word 只能打开**文件路径**，而本函数允许传入内存流（Streamlit 上传的对象）。
-        # 需要精确页码时先落一份临时文件；不需要时（或流式调用）仍走原路径，零开销。
+        # Word / LibreOffice 都只能打开**文件路径**，而本函数允许传入内存流
+        # （Streamlit 上传的对象）。需要精确页码时先落一份临时文件；
+        # 两个引擎都不可用时（云端未装 LibreOffice 且无 Word）不落盘，零开销。
         tmp_path = None
         src = docx_file
         if prefer_word_pages and not isinstance(docx_file, (str, os.PathLike)):
             try:
                 from page_locator import is_available as _word_available
-                if _word_available():
+                try:
+                    from pdf_pages import is_available as _pdf_available
+                except Exception:
+                    _pdf_available = lambda: False
+                if _word_available() or _pdf_available():
                     buf = docx_file.getbuffer() if hasattr(docx_file, 'getbuffer') else docx_file.read()
                     fd, tmp_path = tempfile.mkstemp(suffix='.docx', prefix='ws_pages_')
                     with os.fdopen(fd, 'wb') as f:
@@ -397,11 +405,18 @@ class TitlePreprocessor:
                     # Word 定位一段要 10 秒左右（414 页 / 314 条实测 12.6s），
                     # 必须让用户看到「还在干活」，否则会以为界面卡死。
                     try:
-                        stage_callback("📄 正在用 Word 计算物理页码…")
+                        stage_callback("📄 正在计算物理页码（Word / LibreOffice 渲染）…")
                     except Exception:
                         pass
                 pages = TitlePreprocessor._apply_word_pages(
                     src, results, progress_callback=word_progress_callback)
+                if pages is None:
+                    # 日志留痕：排查「页码差几百页」时先看这一行。
+                    # 常见原因：Linux 云端、Python 环境没装 pywin32、
+                    # Word 未安装或 COM 起不来。
+                    logger.info(
+                        "[PAGES] 本机 Word 不可用（非 Windows / 无 pywin32 / "
+                        "Word 未安装）→ 退回分页标记估算")
                 # 全部命中 → 估算完全不需要；有缺口才补算。
                 need_estimate = any(it["page"] is None for it in results)
 
@@ -415,6 +430,13 @@ class TitlePreprocessor:
                         if isinstance(idx, int) and 0 <= idx < len(page_map):
                             it["page"] = page_map[idx]
                             it["page_source"] = 'estimate'
+
+                # ---------- 估算可靠性闸门 ----------
+                # docx 只在「被 Word 保存过」时才写分页标记（w:lastRenderedPageBreak）。
+                # 程序生成/格式转换出来的 docx 往往一个标记都没有，按标记推算就会得到
+                # 「533 条标题全在第 25 页」这种看着精确、实际差几百页的数字。
+                # 与其给假数字，不如标成 unavailable，让界面显示「—」并说明原因。
+                TitlePreprocessor._mark_unreliable_pages(results)
             return results
         finally:
             if tmp_path:
@@ -423,27 +445,105 @@ class TitlePreprocessor:
                 except OSError:
                     pass
 
+    # 一条编号标题平均占不到 1/20 页。若推算结果比这还密（>20 条/页），
+    # 说明这份文档缺分页标记，推算已失去意义。
+    _MAX_ITEMS_PER_PAGE = 20
+
+    @staticmethod
+    def _mark_unreliable_pages(results: List[Dict]) -> None:
+        """把明显不可信的估算页码降级为 'unavailable'（就地修改）。
+
+        两类判据：
+        1. **通篇都是估算**：总条数 / 最大页码 > 20 → 整体不可信。
+        2. **精确页（Word/PDF）与估算混用**：估算页比前面已确认的精确页还小 →
+           一定错位（页码只能单调不减），单独降级该条。
+        """
+        has_precise = any(it.get("page_source") in ("word", "pdf") for it in results)
+        est_items = [it for it in results
+                     if it.get("page_source") == "estimate" and it.get("page")]
+        if not est_items:
+            return
+
+        if not has_precise:
+            if len(results) < 20:
+                return                      # 短文档本来就只有几页，不判
+            max_page = max(it["page"] for it in est_items)
+            if len(results) / float(max(1, max_page)) > TitlePreprocessor._MAX_ITEMS_PER_PAGE:
+                for it in results:
+                    if it.get("page_source") == "estimate":
+                        it["page"] = None
+                        it["page_source"] = "unavailable"
+                logger.info(
+                    "[PAGES] 分页标记过少（%d 条标题推算仅 %d 页），估算不可信 → 标记为不可用",
+                    len(results), max_page)
+            return
+
+        # 混用情形：逐条检查是否与已确认的精确页码冲突
+        last_precise = 0
+        for it in results:
+            if it.get("page_source") in ("word", "pdf"):
+                last_precise = max(last_precise, it.get("page") or 0)
+            elif (it.get("page_source") == "estimate"
+                  and it.get("page") and it["page"] < last_precise):
+                it["page"] = None
+                it["page_source"] = "unavailable"
+
     @staticmethod
     def _apply_word_pages(src, results: List[Dict], progress_callback=None):
-        """用 Word 的物理页码覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
+        """用「精确页码引擎」覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
 
-        位置对应关系：results 已按文档顺序排列，locate_pages 也是单调向后查找，
+        引擎优先级：
+        1. **Word COM**（本地 Windows）：Word 状态栏的物理页码，最准；
+        2. **LibreOffice → PDF**（云端 Linux）：真渲染一遍再按页找标题，
+           与 Word 可能相差几页，但远好于按分页标记估算；
+        3. 都不可用 → 返回 None，由调用方退回估算（或标「不可用」）。
+
+        Word 只命中了一部分（>20% 没找到）时，会用 PDF 结果整体替换——
+        混用两种口径会出现「前半段页码正常、后半段差几百页」的假象。
+
+        位置对应关系：results 已按文档顺序排列，两个引擎也都是单调向后查找，
         因此可以直接按序 zip，不需要段落索引（python-docx 与 Word 的段落集合
         口径不同：同一文档 python 侧 8297 段、Word 侧 8892 段，按索引对齐会错位）。
-        定位不到的条目保持 page=None，由调用方用分页标记估算兜底。
         """
-        try:
-            from page_locator import locate_pages
-        except Exception:
-            return None
-        pages = locate_pages(src, [str(it.get("text") or "") for it in results],
-                             progress_callback=progress_callback)
+        texts = [str(it.get("text") or "") for it in results]
+
+        def _word():
+            try:
+                from page_locator import locate_pages
+                return locate_pages(src, texts, progress_callback=progress_callback)
+            except Exception as e:
+                logger.debug('[PAGES] Word 定位失败：%s', e)
+                return None
+
+        def _pdf():
+            try:
+                from pdf_pages import locate_pages_pdf
+                return locate_pages_pdf(src, texts, progress_callback=progress_callback)
+            except Exception as e:
+                logger.info('[PAGES] PDF 定位不可用：%s', e)
+                return None
+
+        pages = _word()
+        source = 'word'
+        if pages:
+            hit = sum(1 for p in pages if p)
+            if hit / float(len(pages)) < 0.8:
+                logger.info('[PAGES] Word 仅命中 %d/%d，尝试用 PDF 兜底', hit, len(pages))
+                pdf = _pdf()
+                if pdf and sum(1 for p in pdf if p) > hit:
+                    pages, source = pdf, 'pdf'
+        else:
+            pages = _pdf()
+            source = 'pdf'
+
         if not pages:
             return None
+        if source == 'pdf':
+            logger.info('[PAGES] 页码来源：LibreOffice 渲染的 PDF（与 Word 可能相差几页）')
         for it, pg in zip(results, pages):
             if pg:
                 it["page"] = pg
-                it["page_source"] = 'word'
+                it["page_source"] = source
         return pages
 
     @staticmethod
