@@ -1,6 +1,2 @@
-# Streamlit Community Cloud 会在部署时 apt install 这里的包（每行一个）。
-# 用途：标题查漏在云端计算「真实页码」——没有 Word，只能让 LibreOffice
-# 无头渲染成 PDF，再按页定位标题（见 pdf_pages.py）。
-# fonts-noto-cjk：云端默认没有中文字体，缺字体会导致换行/分页与 Word 差很多。
 libreoffice-writer
 fonts-noto-cjk

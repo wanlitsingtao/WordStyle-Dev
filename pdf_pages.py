@@ -21,6 +21,17 @@ LibreOffice 与 Word 的排版引擎不同，字体替换/行距细节会让页�
 --------
 任何一步失败（没装 LibreOffice、转换超时、PDF 解析失败）都返回 ``None``，
 由调用方退回「分页标记估算」或「页码不可用」，绝不抛异常拖垮标题查漏。
+
+依赖声明（packages.txt）
+------------------------
+Streamlit Community Cloud 会在部署时执行 apt-get install packages.txt 里的包，
+**该文件不支持 `#` 注释**——每行都会原样当作包名传给 apt，注释会被报成
+「Unable to locate package #」（2026-11-05 首次部署就是这么失败的）。
+所以 packages.txt 只放两行纯包名，说明文字写在这里：
+
+* ``libreoffice-writer`` —— 提供 ``soffice``，本模块的无头渲染引擎。
+* ``fonts-noto-cjk`` —— 云端默认没有中文字体，缺字体会让换行/分页与 Word
+  差很多；装上后页码偏差显著减小。
 """
 from __future__ import annotations
 
