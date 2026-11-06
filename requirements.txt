@@ -20,10 +20,8 @@ lxml>=4.9.0
 # 运行期由 page_locator.is_available() 判断，不可用则回退到分页标记估算。
 pywin32>=306; sys_platform == "win32"
 
-# 已停用（2026-11-05）：LibreOffice 渲染 PDF 的页码路线与 Word 相差 ~12%，
-# 界面不再展示，packages.txt 已删除。pypdf 仅为 pdf_pages.py 与其测试保留，
-# 纯 Python 无额外系统依赖，留着不影响部署。
-pypdf>=4.0
+# [2026-11-05] 页码功能（含 pypdf / LibreOffice 渲染路线）已整体移除，
+# 本地与云端行为一致：都不显示页码。pypdf 依赖同步删除。
 
 # 定时任务
 APScheduler>=3.10.0

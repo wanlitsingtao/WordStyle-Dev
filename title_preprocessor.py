@@ -11,9 +11,7 @@
 5. 查漏：找出"本应是标题、却既非标题格式也无大纲级别"的编号段落（只检查、不修改）
 """
 import logging
-import os
 import re
-import tempfile
 from typing import List, Dict, Optional
 
 from docx import Document
@@ -256,68 +254,8 @@ class TitlePreprocessor:
         return headings
 
     @staticmethod
-    def _count_page_breaks_in(p_el) -> tuple:
-        """统计段落元素内的分页事件，返回 (事件总数, 首个文字之前的事件数)。
-
-        统计两类标记：① 显式分页符 w:br type="page"；
-        ② Word 上次保存时的渲染分页标记 w:lastRenderedPageBreak（它标记的是
-        上次 Word 打开/保存时真实分页的位置，标在新页第一个字符之前）。
-        "首个文字之前的事件数"用于处理"段落恰好从新页开始"的情况：
-        此时标记在段落开头，段落起始页应 +1。
-        """
-        total = 0
-        before_text = 0
-        seen_text = False
-        for node in p_el.iter():
-            tag = node.tag
-            if tag == qn('w:t'):
-                if node.text and node.text.strip():
-                    seen_text = True
-            elif tag == qn('w:br'):
-                if node.get(qn('w:type')) == 'page':
-                    total += 1
-                    if not seen_text:
-                        before_text += 1
-            elif tag == qn('w:lastRenderedPageBreak'):
-                total += 1
-                if not seen_text:
-                    before_text += 1
-        return total, before_text
-
-    @staticmethod
-    def build_page_map(doc) -> List[int]:
-        """推算每个正文段落（与 doc.paragraphs 顺序一致）的起始页码（1-based）。
-
-        docx 格式本身不保存实时分页结果，页码只能依据文档内的分页标记推算：
-        ① 显式分页符（w:br type="page"）；② Word 上次保存时的渲染分页标记
-        （w:lastRenderedPageBreak）；③ "下一页"型分节符（w:sectPr 非 continuous）。
-        结果与 Word 当前实际分页可能相差 1 页左右（文档保存后又被编辑过的情况），
-        仅供定位参考。
-        """
-        page_map: List[int] = []
-        page = 1
-        body = doc.element.body
-        for p_el in body.iter(qn('w:p')):
-            total, before_text = TitlePreprocessor._count_page_breaks_in(p_el)
-            # 分节符（段落 pPr 内）：非 continuous 型分节符开启新页，
-            # 分节发生在该段落之后，不影响本段起始页
-            pPr = p_el.find(qn('w:pPr'))
-            if pPr is not None:
-                sectPr = pPr.find(qn('w:sectPr'))
-                if sectPr is not None:
-                    sect_type = sectPr.find(qn('w:type'))
-                    if sect_type is None or sect_type.get(qn('w:val')) != 'continuous':
-                        total += 1
-            # 只登记正文级段落（doc.paragraphs 的成员，父节点为 w:body）；
-            # 表格/文本框内的段落只参与分页事件累计，不进入页码表
-            if p_el.getparent() is body:
-                page_map.append(page + before_text)
-            page += total
-        return page_map
-
-    @staticmethod
     def check_heading_leaks(docx_file, progress_callback=None,
-                            prefer_word_pages: bool = True,
+                            prefer_word_pages: bool = False,
                             stage_callback=None,
                             word_progress_callback=None) -> List[Dict]:
         """查漏：检查"本应是标题、却既非标题格式也无大纲级别"的编号段落。
@@ -329,15 +267,9 @@ class TitlePreprocessor:
             docx_file: docx 文件路径，或可读的文件对象（如 io.BytesIO）。
             progress_callback: 可选，**段落扫描阶段**进度回调 (done, total)。
                 只用于扫描阶段，一定会推进到 (total, total)。
-            prefer_word_pages: 是否优先用本机 Word 取「物理页码」（默认 True）。
-                True 且环境可用时，页码为 Word 状态栏那个页号（准确）；
-                否则退回按分页标记估算（文档编辑过就可能差几页）。
-                两种情况在结果的 ``page_source`` 里区分：'word' / 'estimate'。
-            stage_callback: 可选，阶段切换提示回调 (msg: str)。
-            word_progress_callback: 可选，**Word 取页码阶段**进度回调 (done, total)。
-                刻意与 progress_callback 分开：两个阶段的分母不同（段落数 vs 标题数），
-                共用一个回调会让进度条在切换时倒退回 0（测试
-                test_check_heading_leaks_progress_monotonic_and_complete 就是这么发现的）。
+            prefer_word_pages / stage_callback / word_progress_callback:
+                **已废弃（2026-11-05）**，传任何值都不生效，仅为兼容旧调用保留签名。
+                页码功能已整体移除，原因见函数体首段注释。
 
         Returns:
             List[Dict]，每个元素在 detect_headings 结果的基础上增加：
@@ -352,183 +284,34 @@ class TitlePreprocessor:
                     "is_heading": bool,         # 已是标题格式（标题样式或大纲级别任一成立）
                     "is_leak": bool,            # 格式异常：既非标题样式、也无大纲级别
                     "style_description": str,   # 当前样式说明，如 "Normal｜无大纲级别"
-                    "page": int,                # 起始页码（1-based）
-                    "page_source": str,         # 'word' = Word 物理页码；'estimate' = 标记估算
                 }
         """
-        # Word / LibreOffice 都只能打开**文件路径**，而本函数允许传入内存流
-        # （Streamlit 上传的对象）。需要精确页码时先落一份临时文件；
-        # 两个引擎都不可用时（云端未装 LibreOffice 且无 Word）不落盘，零开销。
-        tmp_path = None
-        src = docx_file
-        if prefer_word_pages and not isinstance(docx_file, (str, os.PathLike)):
-            try:
-                from page_locator import is_available as _word_available
-                try:
-                    from pdf_pages import is_available as _pdf_available
-                except Exception:
-                    _pdf_available = lambda: False
-                if _word_available() or _pdf_available():
-                    buf = docx_file.getbuffer() if hasattr(docx_file, 'getbuffer') else docx_file.read()
-                    fd, tmp_path = tempfile.mkstemp(suffix='.docx', prefix='ws_pages_')
-                    with os.fdopen(fd, 'wb') as f:
-                        f.write(bytes(buf))
-                    src = tmp_path
-            except Exception:
-                tmp_path = None          # 落盘失败不影响主流程，继续用原流
-                src = docx_file
-
-        try:
-            doc = Document(src)
-            headings = TitlePreprocessor._detect_headings_in(
-                doc, progress_callback=progress_callback)
-            paragraphs = doc.paragraphs
-            results = []
-            for h in headings:
-                idx = h["index"]
-                if not 0 <= idx < len(paragraphs):
-                    continue
-                info = TitlePreprocessor.describe_paragraph_style(paragraphs[idx])
-                item = dict(h)
-                item.update(info)
-                item["is_leak"] = not info["is_heading"]
-                item["page"] = None
-                # 'none' = 本次没有可信页码来源（不是"估算是 0"）。
-                # 只有 Word 真的定位到才会改成 'word'。
-                item["page_source"] = 'none'
-                results.append(item)
-
-            # ---------- 页码：只有 Word 才算数（2026-11-05 决策） ----------
-            # 用户给出的验收标准是「和 Word 文档中的页码一致，否则不要显示」。
-            # 实测两条路都做不到：
-            #   1) LibreOffice 渲染成 PDF（pdf_pages.py）：排版引擎不同，整篇膨胀
-            #      ~12%。用户 578 页的标书，某标题 Word 显示 573、我们给 645
-            #      （645 已超过 PDF 的 578 页总数 → 是整体重排，不是定位找错）。
-            #   2) 按 docx 分页标记估算：程序生成的文档常常一个标记都没有
-            #      （1137 条标题全算成第 25 页）。
-            # 所以这里只留 Word；拿不到就让 page 保持 None，界面整列隐藏。
-            # 这也顺带省掉了云端每次上传白烧的 15s 估算 / 数分钟 PDF 渲染。
-            if prefer_word_pages and results:
-                if stage_callback is not None:
-                    # Word 定位一段要 10 秒左右（414 页 / 314 条实测 12.6s），
-                    # 必须让用户看到「还在干活」，否则会以为界面卡死。
-                    try:
-                        stage_callback("📄 正在计算物理页码（Word）…")
-                    except Exception:
-                        pass
-                pages = TitlePreprocessor._apply_word_pages(
-                    src, results, progress_callback=word_progress_callback)
-                if pages is None:
-                    # 日志留痕：排查「页码差几百页」时先看这一行。
-                    # ★ 必须区分「环境不支持」与「环境支持但本次调用失败」：
-                    #   后者实测会偶发（COM 报 “Word 未能引发事件”），诱因是
-                    #   用户已开着多个 Word 文档 / 实例忙 / 上次 COM 请求异常退出。
-                    #   2026-11-05 就因为这里统一写成「本机 Word 不可用」，
-                    #   而 `is_available()` 实测又是 True，导致排查方向被带偏。
-                    try:
-                        from page_locator import is_available as _word_env_ok
-                        _env_ok = _word_env_ok()
-                    except Exception:
-                        _env_ok = False
-                    if _env_ok:
-                        logger.warning(
-                            "[PAGES] Word 可用，但本次定位失败（COM 报错/Word 实例忙）"
-                            "→ 本次不显示页码")
-                    else:
-                        logger.info(
-                            "[PAGES] 本机 Word 不可用（非 Windows / 无 pywin32 / "
-                            "Word 未安装）→ 本次不显示页码")
-            return results
-        finally:
-            if tmp_path:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-
-    # 一条编号标题平均占不到 1/20 页。若推算结果比这还密（>20 条/页），
-    # 说明这份文档缺分页标记，推算已失去意义。
-    _MAX_ITEMS_PER_PAGE = 20
-
-    # ⚠️ 当前**无生产调用**：2026-11-05 起页码只认 Word，估算整条路线停用
-    # （见 check_heading_leaks 里的决策注释）。保留它是因为判据本身与引擎无关，
-    # 将来若恢复估算可直接重新接线；配套测试见 temp/test_title_leak_check.py
-    # 的 TestUnreliablePageGate。清理时连同 build_page_map 一起删。
-    @staticmethod
-    def _mark_unreliable_pages(results: List[Dict]) -> None:
-        """把明显不可信的估算页码降级为 'unavailable'（就地修改）。
-
-        两类判据：
-        1. **通篇都是估算**：总条数 / 最大页码 > 20 → 整体不可信。
-        2. **精确页（Word/PDF）与估算混用**：估算页比前面已确认的精确页还小 →
-           一定错位（页码只能单调不减），单独降级该条。
-        """
-        has_precise = any(it.get("page_source") in ("word", "pdf") for it in results)
-        est_items = [it for it in results
-                     if it.get("page_source") == "estimate" and it.get("page")]
-        if not est_items:
-            return
-
-        if not has_precise:
-            if len(results) < 20:
-                return                      # 短文档本来就只有几页，不判
-            max_page = max(it["page"] for it in est_items)
-            if len(results) / float(max(1, max_page)) > TitlePreprocessor._MAX_ITEMS_PER_PAGE:
-                for it in results:
-                    if it.get("page_source") == "estimate":
-                        it["page"] = None
-                        it["page_source"] = "unavailable"
-                logger.info(
-                    "[PAGES] 分页标记过少（%d 条标题推算仅 %d 页），估算不可信 → 标记为不可用",
-                    len(results), max_page)
-            return
-
-        # 混用情形：逐条检查是否与已确认的精确页码冲突
-        last_precise = 0
-        for it in results:
-            if it.get("page_source") in ("word", "pdf"):
-                last_precise = max(last_precise, it.get("page") or 0)
-            elif (it.get("page_source") == "estimate"
-                  and it.get("page") and it["page"] < last_precise):
-                it["page"] = None
-                it["page_source"] = "unavailable"
-
-    @staticmethod
-    def _apply_word_pages(src, results: List[Dict], progress_callback=None):
-        """用 Word 的显示页号覆盖 results 里的页码（就地修改），返回 Pages 列表或 None。
-
-        **只认 Word。** 2026-11-05 用户定的验收标准是「与 Word 文档里的页码一致，
-        否则不要显示」。实测另两条路都达不到：
-
-        * LibreOffice 渲染成 PDF（``pdf_pages.py``）：排版引擎不同，整篇膨胀约
-          12%。用户 578 页的标书，某标题 Word 显示 573、PDF 路线给出 645
-          （645 已超过 PDF 的 578 页总数，说明是整体重排而非定位找错）。
-        * docx 分页标记估算：程序生成的文档常常一个标记都没有。
-
-        因此这里不再调用 PDF 引擎；``pdf_pages.py`` 保留但停用（见其文件头）。
-        返回 None 表示「本次拿不到 Word 页码」，调用方不再退化成估算，而是让
-        界面把页码列整列隐藏。
-
-        位置对应关系：results 已按文档顺序排列，Word 定位也是单调向后查找，
-        因此可以直接按序 zip，不需要段落索引（python-docx 与 Word 的段落集合
-        口径不同：同一文档 python 侧 8297 段、Word 侧 8892 段，按索引对齐会错位）。
-        """
-        texts = [str(it.get("text") or "") for it in results]
-
-        try:
-            from page_locator import locate_pages
-            pages = locate_pages(src, texts, progress_callback=progress_callback)
-        except Exception as e:
-            logger.debug('[PAGES] Word 定位失败：%s', e)
-            pages = None
-
-        if not pages:
-            return None
-        for it, pg in zip(results, pages):
-            if pg:
-                it["page"] = pg
-                it["page_source"] = 'word'
-        return pages
+        # ---------- 页码功能已整体移除（2026-11-05，用户决策） ----------
+        # 验收标准是「与本机 Word 文档里的页码完全一致，做不到就本地和云端都去掉」。
+        # 三条路都达不到：
+        #   1) Word COM（本地 Windows）：云端没有 Word → 两端行为必然不一致；
+        #   2) LibreOffice 渲染 PDF（pdf_pages.py，已删除）：排版引擎不同，整篇膨胀
+        #      ~12%——用户 578 页的标书，某标题 Word 显示 573，这条路给 645
+        #      （645 已超过 PDF 的 578 页总数，属整体重排，不是定位找错）；
+        #   3) 按 docx 分页标记估算：程序生成的文档常常一个标记都没有
+        #      （1137 条标题全算成第 25 页）。
+        # 因此页码列、page/page_source 字段、Word 与 PDF 两个引擎全部删除。
+        # 顺带收益：云端不再白烧 15s 估算或数分钟 PDF 渲染，本地也不再拉起 Word。
+        doc = Document(docx_file)
+        headings = TitlePreprocessor._detect_headings_in(
+            doc, progress_callback=progress_callback)
+        paragraphs = doc.paragraphs
+        results = []
+        for h in headings:
+            idx = h["index"]
+            if not 0 <= idx < len(paragraphs):
+                continue
+            info = TitlePreprocessor.describe_paragraph_style(paragraphs[idx])
+            item = dict(h)
+            item.update(info)
+            item["is_leak"] = not info["is_heading"]
+            results.append(item)
+        return results
 
     @staticmethod
     def describe_paragraph_style(paragraph) -> Dict:

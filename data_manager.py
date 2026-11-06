@@ -1534,6 +1534,49 @@ def get_storage_stats() -> Dict:
 # ==================== Supabase 连接池单例 ====================
 _supabase_engine = None
 
+
+def _install_read_write_guard(engine):
+    """给 SQLAlchemy 引擎挂「只读自愈」钩子（Supavisor 事务池 6543 专用）。
+
+    背景（2026-11-06 事故）：Supabase 的 6543 事务池会把**会话级设置**粘在物理
+    backend 上 —— 任一客户端执行过 `SET default_transaction_read_only = on`，
+    这条 backend 归还池后，下一个借到它的客户端就继承只读状态，报
+    `psycopg2.errors.ReadOnlySqlTransaction: cannot execute UPDATE in a read-only
+    transaction`。官方说明见 troubleshooting `.../ef582c`（"connection contamination"）。
+
+    应用侧的表现正是最迷惑人的那种：**能读不能写** ——
+    登录/查询都正常，一到 UPDATE users.last_login 就炸，
+    app.py 的用户初始化异常分支接管，侧边栏显示「获取用户ID失败」、额度 0。
+
+    为什么放在 connect 事件：它只在建立新物理连接时触发一次，开销可忽略；
+    而脏 backend 只需要被纠正一次就永久恢复。真发生时日志会留下
+    `[DB] 检测到只读的池连接` 一行，方便判断是不是又被污染了。
+    """
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _force_read_write(dbapi_connection, connection_record):  # noqa: ARG001
+        try:
+            cur = dbapi_connection.cursor()
+            cur.execute("SHOW transaction_read_only")
+            row = cur.fetchone()
+            if row and str(row[0]).lower() == "on":
+                cur.execute("SET default_transaction_read_only = off")
+                # 必须提交：psycopg2 默认非 autocommit，不提交的话 SET 会随事务回滚，
+                # 钩子看着成功、实际完全没生效（第一版踩过）。
+                dbapi_connection.commit()
+                logger.warning(
+                    "[DB] 检测到只读的池连接，已强制改回 read-write"
+                    "（Supavisor 状态粘连，见 Supabase troubleshooting ef582c）")
+            cur.close()
+        except Exception as e:  # 自愈失败绝不能挡住正常连接
+            try:
+                dbapi_connection.rollback()
+            except Exception:
+                pass
+            logger.debug("[DB] 只读状态自检跳过: %s", e)
+
+
 def _get_supabase_engine():
     """
     获取 Supabase SQLAlchemy 引擎（进程级单例）
@@ -1571,6 +1614,13 @@ def _get_supabase_engine():
             pool_pre_ping=True,
             pool_recycle=300,
         )
+        # [FIX 2026-11-06] 事务池(6543)会把会话级 read-only 设置粘在 backend 上，
+        # 导致「能读不能写 → 用户初始化失败 → 侧边栏获取用户ID失败」。
+        # 每条新连接先自检一次，发现脏状态立即改回 read-write。
+        # 只挂 6543：session 模式(5432)连接归还即断，不存在跨客户端状态粘连；
+        # 那边若读出只读，属于 Supabase 的配额保护，不该被静默绕过。
+        if ":6543" in url:
+            _install_read_write_guard(_supabase_engine)
     return _supabase_engine
 
 
