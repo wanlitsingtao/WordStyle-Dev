@@ -257,6 +257,28 @@ def _resolve_identity_mode() -> str:
 
 IDENTITY_MODE = _resolve_identity_mode()
 
+# ==================== 地址栏身份参数隐藏（2026-11-09）====================
+# 背景：Community Cloud 的代理会在 WS 握手里丢掉 Cookie，`st.context.cookies` 恒为空，
+# 身份只能靠 URL 参数 `?ws_bid=<32位设备号>` 传进来。参数常驻地址栏意味着
+# **把链接转发/截图给别人 = 把自己的额度、转换历史、样式映射一起给出去**。
+#   true（默认）—— 身份确认后立刻从地址栏移除；代价：刷新/新标签会先闪约 1 秒加载页
+#   false       —— 参数常驻，零闪烁；适合只在内部自用、绝不外发链接的场景
+# 回滚：环境变量 HIDE_IDENTITY_PARAM=0，或 Streamlit Secrets 顶层键 hide_identity_param=false
+def _resolve_hide_identity_param() -> bool:
+    raw = os.getenv("HIDE_IDENTITY_PARAM")
+    if raw is None or str(raw).strip() == "":
+        try:
+            import streamlit as st
+            raw = st.secrets.get("hide_identity_param", None)
+        except Exception:
+            raw = None
+    if raw is None:
+        return True  # 默认开启（安全优先）
+    return str(raw).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+HIDE_IDENTITY_PARAM = _resolve_hide_identity_param()
+
 # ==================== 社区云署名徽章（实验性）====================
 # 社区云访问时会返回它自己的「外壳页面」，并在外壳文档里渲染右下角徽章
 # （Created by <你> / Hosted with Streamlit）。该徽章不在本应用文档内——应用被
@@ -282,6 +304,7 @@ def _resolve_hide_cloud_badge() -> bool:
 HIDE_CLOUD_BADGE = _resolve_hide_cloud_badge()
 print(f"  [诊断] HIDE_CLOUD_BADGE={HIDE_CLOUD_BADGE}")
 print(f"  [诊断] IDENTITY_MODE={IDENTITY_MODE}")
+print(f"  [诊断] HIDE_IDENTITY_PARAM={HIDE_IDENTITY_PARAM}")
 
 # ==================== 安全配置 ====================
 FILENAME_MAX_LENGTH = 200  # 文件名最大长度

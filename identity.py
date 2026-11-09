@@ -98,6 +98,8 @@ IDENTITY_COOKIE_NAME = "ws_bid"
 # 参数名与 cookie 同名，便于对照；桥脚本会把它写进地址栏。
 IDENTITY_QUERY_PARAM = "ws_bid"
 BRIDGE_FLAG_PARAM = "_ws_bid_bridge"   # 防循环：脚本写入，服务端见到就说明已尝试过
+# [2026-11-09] 地址栏清理后，本次会话靠它记住身份（session_state，刷新即失效）
+SESSION_BID_KEY = "_ws_identity_bid"
 COOKIE_MAX_AGE = 2 * 365 * 24 * 3600  # 2 年（秒）
 _COOKIE_SAMESITE = "Lax"
 
@@ -108,6 +110,7 @@ _V2_PREFIX = "ws2|"
 SOURCE_COOKIE = "cookie"        # 命中了浏览器持久化 ID（正常态）
 SOURCE_COOKIE_NEW = "cookie_new"  # 首次写入 cookie（本次仍用旧身份）
 SOURCE_URL = "url_param"        # 从 URL 参数拿到 bid（Community Cloud 上的正常态）
+SOURCE_SESSION = "session"      # 本次会话内已确认（地址栏参数已按配置清理）
 SOURCE_LEGACY = "legacy_ua"     # 无 cookie，降级用 UA（仅过渡期）
 SOURCE_FALLBACK = "fallback"    # UA 也取不到，退化为会话级临时身份
 
@@ -199,7 +202,7 @@ class Identity:
     @property
     def is_trusted(self) -> bool:
         """身份是否可信到"可以认领一个历史账号"。"""
-        return self.source in (SOURCE_COOKIE, SOURCE_URL, SOURCE_LEGACY) and bool(self.legacy_fingerprint)
+        return self.source in (SOURCE_COOKIE, SOURCE_URL, SOURCE_SESSION, SOURCE_LEGACY) and bool(self.legacy_fingerprint)
 
     @property
     def should_renew_cookie(self) -> bool:
@@ -294,6 +297,36 @@ def _read_query_bid() -> Optional[str]:
         return value if _BID_RE.match(value) else None
     except Exception:
         return None
+
+
+# [2026-11-09] 会话级记忆：地址栏参数被清理后，本次会话靠它继续认出自己。
+# 为什么必需：清理参数会触发一次 rerun，而 Cloud 上读不到 cookie、URL 也已经没有参数，
+# 若不记住 bid，rerun 立刻又判定"无身份"→ 再桥接一次 → 地址栏又被写上 → 再清理……
+# 形成死循环。session_state 只活在当前 WebSocket 会话里，刷新/新标签自然失效，
+# 那时重新桥接一次即可（可见代价仅一个约 1 秒的加载页）。
+def _read_session_bid() -> Optional[str]:
+    """读取本次会话已确认的 bid（没有则 None）。"""
+    try:
+        import streamlit as st
+        value = st.session_state.get(SESSION_BID_KEY)
+        if isinstance(value, str):
+            value = value.strip().lower()
+            if _BID_RE.match(value):
+                return value
+    except Exception:
+        pass
+    return None
+
+
+def _remember_session_bid(bid: str) -> None:
+    """把已确认的 bid 记进本次会话（不写 cookie，不建用户）。"""
+    if not is_valid_bid(bid):
+        return
+    try:
+        import streamlit as st
+        st.session_state[SESSION_BID_KEY] = bid.strip().lower()
+    except Exception:
+        pass
 
 
 def _bridge_already_tried() -> bool:
@@ -455,11 +488,68 @@ def drop_bridge_flag_from_url() -> bool:
         return False
 
 
+def _hide_identity_param_enabled() -> bool:
+    """地址栏是否隐藏身份参数（默认开启；HIDE_IDENTITY_PARAM=0 可回退为常驻）。"""
+    try:
+        from config import HIDE_IDENTITY_PARAM  # 延迟导入，避免循环依赖
+        return bool(HIDE_IDENTITY_PARAM)
+    except Exception:
+        return True
+
+
+def clean_identity_url() -> bool:
+    """把身份参数从地址栏移除（`ws_bid` 与遗留的 `_ws_bid_bridge` 一并清）。
+
+    为什么要做：`ws_bid` 是本机设备号，服务端据此映射用户行 —— 链接被转发、截图、
+    录屏就等于把"额度 + 转换历史 + 样式映射"交出去（用户 2026-11-09 明确要求隐藏）。
+
+    为什么用 Streamlit 原生 API 而不是注入 JS：实测 `history.replaceState` 改完会被
+    前端持有的 query_params 状态**重新写回**（详见 drop_bridge_flag_from_url）。
+
+    为什么不会死循环（**这个顺序不能调换**）：
+        ① resolve_identity() 命中 URL 参数时先 `_remember_session_bid()`；
+        ② 本函数删除参数 → 前端触发一次 rerun；
+        ③ rerun 时 URL 已空，但 `_read_session_bid()` 接住了同一 bid，身份不变、不再桥接。
+    若把"记住"放到清理之后，rerun 会判定无身份 → 重新桥接 → 又写参数 → 死循环。
+
+    代价：刷新 / 新标签页时 session_state 是新的，必须重新桥接一次（约 1 秒加载页）。
+    这是"地址栏干净"换来的确定性成本，不是 bug。
+
+    只删这两个参数，其余查询参数（如 embed）原样保留。
+    """
+    if not _hide_identity_param_enabled():
+        return False
+    try:
+        import streamlit as st
+    except Exception:
+        return False
+    removed = False
+    try:
+        # 只能逐个 del：实测 `st.query_params = {...}` 整体赋值在 1.63 上不会同步
+        # 地址栏（赋值不报错但 URL 不变），所以这里不用整体替换。
+        # 代价：删两个参数会让地址栏跳变两次（带 flag → 只剩 ws_bid → 干净），
+        # 但第 2 次已在桥接后 1 秒内发生，肉眼几乎不可见。
+        if BRIDGE_FLAG_PARAM in st.query_params:
+            del st.query_params[BRIDGE_FLAG_PARAM]
+            removed = True
+        if IDENTITY_QUERY_PARAM in st.query_params:
+            del st.query_params[IDENTITY_QUERY_PARAM]
+            removed = True
+    except Exception:
+        return removed
+    return removed
+
+
 def render_bridge_and_stop(bid: str) -> None:
-    """渲染"正在识别设备"占位页 + 桥脚本，然后终止本次脚本执行。
+    """渲染"加载中"占位页 + 桥脚本，然后终止本次脚本执行。
 
     为什么必须 stop：桥生效前不能创建用户。否则每进入一次就按 UA 建一行垃圾用户
     （云端读不到 cookie 时正是这样），且这些行还会被"历史账号认领"逻辑反复搬来搬去。
+
+    为什么长这样：这一屏在"地址栏没有 ws_bid"的进入方式下必然会出现一次
+    （新标签/书签/清空参数），持续约 1 秒。用户 2026-11-09 反馈原来那句
+    「正在识别本机身份…」+「点此继续（不记忆设备）」看着像报错，所以改成
+    居中的加载指示，兜底链接压到几乎看不见（只有禁用 JS 时才会停留在此）。
     """
     try:
         import streamlit as st
@@ -467,15 +557,21 @@ def render_bridge_and_stop(bid: str) -> None:
         return
     try:
         st.markdown(
-            "<div style='padding:1.2rem 0;color:#64748b;font-size:0.95rem;'>"
-            "正在识别本机身份…</div>",
+            "<style>@keyframes wsSpin{to{transform:rotate(360deg)}}</style>"
+            "<div style='display:flex;flex-direction:column;align-items:center;"
+            "justify-content:center;gap:0.85rem;padding:18vh 0 0;'>"
+            "<div style='width:1.5rem;height:1.5rem;border-radius:50%;"
+            "border:2px solid #e2e8f0;border-top-color:#94a3b8;"
+            "animation:wsSpin 0.9s linear infinite;'></div>"
+            "<div style='color:#94a3b8;font-size:0.85rem;'>正在加载…</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
         # 极端兜底：浏览器禁用 JS 时脚本不会执行，给一个可点击的链接（平时瞬间跳走，看不见）
         st.markdown(
-            "<div style='font-size:0.8rem;color:#94a3b8;'>如果 3 秒内没有自动继续，"
-            "<a href='?" + IDENTITY_QUERY_PARAM + "=" + bid
-            + "&" + BRIDGE_FLAG_PARAM + "=1'>点此继续</a>（不记忆设备）</div>",
+            "<div style='text-align:center;margin-top:2rem;font-size:0.7rem;'>"
+            "<a style='color:#cbd5e1;text-decoration:none;' href='?" + IDENTITY_QUERY_PARAM + "=" + bid
+            + "&" + BRIDGE_FLAG_PARAM + "=1'>继续</a></div>",
             unsafe_allow_html=True,
         )
         st.html(bridge_script(bid), unsafe_allow_javascript=True)
@@ -580,9 +676,29 @@ def _resolve_identity() -> Identity:
     # 能进 `st.query_params`；自托管两种都有，取哪个结果都一样，所以统一先看 URL。
     bid = _read_query_bid()
     if bid:
+        # 记住它：随后 app.py 可能会把参数从地址栏清掉（HIDE_IDENTITY_PARAM），
+        # 清理触发的 rerun 必须还能认出同一身份。
+        _remember_session_bid(bid)
         return Identity(
             fingerprint=fingerprint_from_bid(bid),
             source=SOURCE_URL,
+            bid=bid,
+            legacy_fingerprint=legacy_fp if ua_ok else None,
+            user_agent=user_agent,
+            # [2026-11-09] 必须把 URL 里的 bid 同步写进 cookie。
+            # 为什么：地址栏参数随后会被清掉（HIDE_IDENTITY_PARAM），而 Cloud 读不到
+            # cookie 只能靠"桥脚本先读 document.cookie"来接续身份。若这里不写，
+            # 浏览器里根本没这个 cookie → 下次无参数进入时桥脚本生成**新 bid**，
+            # 用户就变成新账号（额度、历史、样式映射全"消失"）。
+            should_write_cookie=True,
+        )
+
+    # 正常档 1.5：本次会话已确认过身份（地址栏参数已清理；Cloud 上非常态）
+    bid = _read_session_bid()
+    if bid:
+        return Identity(
+            fingerprint=fingerprint_from_bid(bid),
+            source=SOURCE_SESSION,
             bid=bid,
             legacy_fingerprint=legacy_fp if ua_ok else None,
             user_agent=user_agent,
