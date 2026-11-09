@@ -58,6 +58,29 @@
   * "dual" —— 默认。有 cookie 走 v2；无 cookie 先用 v1 身份跑完本次会话（保证老用户
               本次不丢数据），同时写入 cookie，下次访问即切到 v2 并认领历史账号
   * "v2"   —— 只认 cookie（用于灰度观察结束后的收口）
+
+==================== 2026-11-09：Streamlit Community Cloud 读不到 cookie ====================
+线上实测（bid-buddy.streamlit.app）：
+  * 浏览器发出的 WebSocket 握手**带着** `Cookie: ws_bid=…`（CDP 抓包确认）；
+  * 但应用侧 `st.context.cookies` **恒为空** —— Cloud 的代理在转发 WS 升级请求时
+    丢弃了 Cookie 头（Streamlit 社区已知限制；`st.context.cookies` 正是从
+    WS 握手取值的，见 `StarletteClientContext`）；
+  * 铁证：库里线上用户的 `device_fingerprint` 与 `md5(真实 User-Agent)` 逐位相同。
+
+后果：v2 在 Cloud 上从未生效，一直走 v1 `md5(UA)`。UA 里带浏览器版本号，
+**浏览器自动更新（通常在重启后应用）→ 指纹变 → 新建账号 → 用户ID 变化**，
+即用户反馈的"开关机一次就不一样"。同一原因也让 `ws_tz` 时区 cookie 在云端读不到。
+
+修复：**URL 参数桥**。Cloud 上唯一能被 Python 在握手时读到的客户端状态是 URL
+（`st.query_params`）。因此当既没有 URL 参数、又读不到 cookie 时：
+    1) 本次渲染不创建用户（避免产生垃圾行），先写一个 `<script>`；
+    2) 脚本读 `document.cookie`（读不到就新建一个），把 bid 写进**地址栏参数**
+       `?ws_bid=…`（同源时替换顶层地址，Cloud 的外壳会把参数转发进 iframe）；
+    3) 浏览器自动重载一次，这次 `st.query_params['ws_bid']` 就能被 Python 读到，
+       身份进入 v2 并认领该浏览器的历史 UA 账号。
+代价：每次**新进入**页面多一次约 1 秒的自动重载（地址栏带上参数后，刷新不再重载）。
+防循环：脚本同时写入 `_ws_bid_bridge=1`，若重载后仍拿不到 bid（JS 被禁用等），
+则不再重试、退回 UA 身份保证应用可用。
 """
 
 from __future__ import annotations
@@ -71,6 +94,10 @@ from typing import Optional
 
 # ==================== 常量 ====================
 IDENTITY_COOKIE_NAME = "ws_bid"
+# [2026-11-09] URL 参数桥（Community Cloud 读不到 cookie 时的唯一可行通道）
+# 参数名与 cookie 同名，便于对照；桥脚本会把它写进地址栏。
+IDENTITY_QUERY_PARAM = "ws_bid"
+BRIDGE_FLAG_PARAM = "_ws_bid_bridge"   # 防循环：脚本写入，服务端见到就说明已尝试过
 COOKIE_MAX_AGE = 2 * 365 * 24 * 3600  # 2 年（秒）
 _COOKIE_SAMESITE = "Lax"
 
@@ -80,6 +107,7 @@ _V2_PREFIX = "ws2|"
 # 身份来源（用于日志与界面提示）
 SOURCE_COOKIE = "cookie"        # 命中了浏览器持久化 ID（正常态）
 SOURCE_COOKIE_NEW = "cookie_new"  # 首次写入 cookie（本次仍用旧身份）
+SOURCE_URL = "url_param"        # 从 URL 参数拿到 bid（Community Cloud 上的正常态）
 SOURCE_LEGACY = "legacy_ua"     # 无 cookie，降级用 UA（仅过渡期）
 SOURCE_FALLBACK = "fallback"    # UA 也取不到，退化为会话级临时身份
 
@@ -160,6 +188,9 @@ class Identity:
     legacy_fingerprint: Optional[str] = None  # 供服务端认领历史账号的 v1 指纹
     user_agent: str = ""
     should_write_cookie: bool = False # 是否需要在本次渲染中写入 cookie
+    # [2026-11-09] URL 参数桥：本次渲染先不建用户，把 bid 带进地址栏后重载一次
+    should_bridge: bool = False
+    bridge_bid: Optional[str] = None
 
     @property
     def is_legacy(self) -> bool:
@@ -168,7 +199,7 @@ class Identity:
     @property
     def is_trusted(self) -> bool:
         """身份是否可信到"可以认领一个历史账号"。"""
-        return self.source in (SOURCE_COOKIE, SOURCE_LEGACY) and bool(self.legacy_fingerprint)
+        return self.source in (SOURCE_COOKIE, SOURCE_URL, SOURCE_LEGACY) and bool(self.legacy_fingerprint)
 
     @property
     def should_renew_cookie(self) -> bool:
@@ -245,6 +276,38 @@ def _read_cookie_bid() -> Optional[str]:
         return None
 
 
+# [2026-11-09] URL 参数桥 —— Community Cloud 上唯一能被服务端在握手时读到的通道。
+# 为什么不是 localStorage / 组件 iframe：Cloud 把应用放在 sandboxed iframe 里，
+# 组件 iframe 与原文档不同源，读不到主文档 cookie；而 URL 是 Streamlit 侧
+# `st.query_params` 的原生能力，且 Cloud 的外壳会把顶层查询参数转发进 iframe。
+def _read_query_bid() -> Optional[str]:
+    """从 URL 查询参数读出浏览器持久化 ID（URL 参数桥的落点）。"""
+    try:
+        import streamlit as st
+        params = getattr(st, "query_params", None)
+        if params is None:
+            return None
+        value = params.get(IDENTITY_QUERY_PARAM) if hasattr(params, "get") else None
+        if isinstance(value, (list, tuple)):      # 少数实现返回列表
+            value = value[0] if value else None
+        value = (value or "").strip().lower()
+        return value if _BID_RE.match(value) else None
+    except Exception:
+        return None
+
+
+def _bridge_already_tried() -> bool:
+    """本次请求是否已经走过一次 URL 参数桥（防死循环）。"""
+    try:
+        import streamlit as st
+        params = getattr(st, "query_params", None)
+        if params is None:
+            return False
+        return bool(params.get(BRIDGE_FLAG_PARAM))
+    except Exception:
+        return False
+
+
 def _session_salt() -> str:
     """会话级随机盐：让"取不到 UA"的访问彼此隔离（而不是共用一个账号）。"""
     try:
@@ -314,6 +377,88 @@ def write_identity_cookie(bid: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# ==================== URL 参数桥（2026-11-09）====================
+def bridge_script(bid: str) -> str:
+    """生成 URL 参数桥脚本：把 bid 写进地址栏并重载一次。
+
+    设计要点（每一条都对应一个踩过的坑）：
+    1. **读 cookie 优先**：服务器读不到不代表浏览器里没有。若浏览器已有 bid，
+       必须沿用它，否则等于把用户又换了一个身份（不能拿服务端新生成的覆盖）。
+    2. **重载 iframe 自己的 URL（不是顶层）**：参数必须落在应用自身地址上，
+       `st.query_params` 才 100% 能读到；改顶层地址要依赖 Cloud 外壳转发参数，
+       万一不转发就会来回重载。顶层只做 `history.replaceState`（不导航），
+       让地址栏也带上参数 —— 这样手动刷新时外壳若转发就免重载，不转发也最多再重载一次。
+    3. **保留其它查询参数**：用 URL API 逐个 set，不会把 embed 等参数冲掉。
+    4. **写入 `_ws_bid_bridge=1`**：服务端见到它就说明桥已尝试过，拿不到 bid 时
+       不再重试（否则 JS 被禁用会无限重载）。
+    5. 顺带重写一次 cookie（滑动续期），并用 try/catch 包住全部逻辑。
+    """
+    body = (
+        "<script>(function(){try{"
+        # 0) 客户端级防循环：sessionStorage 记上次尝试时间，5 秒内不重复重载。
+        #    服务端的 `_ws_bid_bridge=1` 依赖"参数能被读到"，万一读不到就会来回刷，
+        #    这一层与平台无关，是最后的保险。
+        #    ⚠️ 比较必须写成 `last+5000>now`（不能用 `<`）：DOMPurify 见到「< 紧跟数字」
+        #    会把整条 script 丢掉（不报错不告警），这是本模块最容易踩的坑。
+        "var k='_ws_bid_bridge_ts',last=0;"
+        "try{last=parseInt(sessionStorage.getItem(k)||'0',10)||0;}catch(e){}"
+        "if(last+5000>Date.now()){return;}"
+        "try{sessionStorage.setItem(k,String(Date.now()));}catch(e){}"
+        "var re=/(?:^|;\\s*)" + IDENTITY_COOKIE_NAME + "=([0-9a-fA-F]{32})/;"
+        "var m=document.cookie.match(re);"
+        "var bid=m?m[1].toLowerCase():'" + bid + "';"
+        "document.cookie='" + IDENTITY_COOKIE_NAME + "='+bid+"
+        "'; max-age=" + str(COOKIE_MAX_AGE) + "; path=/; SameSite=" + _COOKIE_SAMESITE + "';"
+        # ① 顶层地址栏同步（不导航，仅 replaceState）
+        "try{if(window.top&&window.top!==window&&window.top.location.origin===location.origin){"
+        "var t=new URL(window.top.location.href);"
+        "t.searchParams.set('" + IDENTITY_QUERY_PARAM + "',bid);"
+        "t.searchParams.set('" + BRIDGE_FLAG_PARAM + "','1');"
+        "window.top.history.replaceState(null,'',t.toString());}}catch(e){}"
+        # ② 应用自身地址：带参数后重载（st.query_params 必定能读到）
+        "var u=new URL(location.href);"
+        "u.searchParams.set('" + IDENTITY_QUERY_PARAM + "',bid);"
+        "u.searchParams.set('" + BRIDGE_FLAG_PARAM + "','1');"
+        "location.replace(u.toString());"
+        "}catch(e){}})();</script>"
+    )
+    # DOMPurify 的硬约束：正文里出现「< 紧跟字母/数字」会把整条 script 丢掉（不报错）。
+    # 这里的 JS 里不应出现任何比较运算，留一道自检防止后人改坏。
+    if re.search(r"<[A-Za-z0-9_!/]", body.replace("<script", "").replace("</script", "")):
+        raise ValueError("bridge_script 中含 DOMPurify 会吞掉的内容")
+    return body
+
+
+def render_bridge_and_stop(bid: str) -> None:
+    """渲染"正在识别设备"占位页 + 桥脚本，然后终止本次脚本执行。
+
+    为什么必须 stop：桥生效前不能创建用户。否则每进入一次就按 UA 建一行垃圾用户
+    （云端读不到 cookie 时正是这样），且这些行还会被"历史账号认领"逻辑反复搬来搬去。
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    try:
+        st.markdown(
+            "<div style='padding:1.2rem 0;color:#64748b;font-size:0.95rem;'>"
+            "正在识别本机身份…</div>",
+            unsafe_allow_html=True,
+        )
+        # 极端兜底：浏览器禁用 JS 时脚本不会执行，给一个可点击的链接（平时瞬间跳走，看不见）
+        st.markdown(
+            "<div style='font-size:0.8rem;color:#94a3b8;'>如果 3 秒内没有自动继续，"
+            "<a href='?" + IDENTITY_QUERY_PARAM + "=" + bid
+            + "&" + BRIDGE_FLAG_PARAM + "=1'>点此继续</a>（不记忆设备）</div>",
+            unsafe_allow_html=True,
+        )
+        st.html(bridge_script(bid), unsafe_allow_javascript=True)
+    except Exception as e:      # 占位页绝不能因为渲染失败把应用卡死
+        logging.getLogger(__name__).warning(f"[IDENTITY] 桥接占位页渲染失败: {e}")
+        return
+    st.stop()
 
 
 # ==================== 滑动续期 ====================
@@ -406,7 +551,21 @@ def _resolve_identity() -> Identity:
             should_write_cookie=False,
         )
 
-    # 正常档：有 cookie → v2 身份
+    # 正常档 1：URL 参数（[2026-11-09] Community Cloud 上的正常态）
+    # 为什么 URL 排在 cookie 前面：Cloud 的 WS 握手拿不到 cookie，只有 URL 参数
+    # 能进 `st.query_params`；自托管两种都有，取哪个结果都一样，所以统一先看 URL。
+    bid = _read_query_bid()
+    if bid:
+        return Identity(
+            fingerprint=fingerprint_from_bid(bid),
+            source=SOURCE_URL,
+            bid=bid,
+            legacy_fingerprint=legacy_fp if ua_ok else None,
+            user_agent=user_agent,
+            should_write_cookie=False,
+        )
+
+    # 正常档 2：cookie（自托管 / 本地开发）
     bid = _read_cookie_bid()
     if bid:
         return Identity(
@@ -419,10 +578,24 @@ def _resolve_identity() -> Identity:
             should_write_cookie=False,
         )
 
-    # 无 cookie（首次访问）：本次沿用 v1 身份（保证老用户本次不丢数据），
-    # 同时准备写入 cookie —— 下次访问即切到 v2 并认领该历史账号。
+    # 两者都没有（首次访问，或 Cloud 读不到 cookie）：
+    # 先走 URL 参数桥把 bid 带进地址栏，重载后再按 v2 建号；
+    # 已尝试过桥仍拿不到（JS 被禁用等）才退回 v1，保证应用可用。
     fresh_bid = new_bid()
     if user_agent:
+        if not _bridge_already_tried():
+            return Identity(
+                fingerprint=legacy_fp,
+                source=SOURCE_LEGACY,
+                bid=fresh_bid,
+                legacy_fingerprint=legacy_fp,
+                user_agent=user_agent,
+                # 关键：不能在这里写 cookie —— 浏览器里可能已经有旧 bid，
+                # 服务端读不到它，写新值等于把用户又换一个人。
+                should_write_cookie=False,
+                should_bridge=True,
+                bridge_bid=fresh_bid,
+            )
         return Identity(
             fingerprint=legacy_fp,
             source=SOURCE_LEGACY,
@@ -433,7 +606,19 @@ def _resolve_identity() -> Identity:
         )
 
     # UA 也拿不到 → 会话级临时身份（绝不与任何人共用）
+    # [2026-11-09] 先试一次 URL 桥：能拿到 bid 就能摆脱"每次都是新身份"。
     salt = _session_salt()
+    if not _bridge_already_tried():
+        return Identity(
+            fingerprint=fingerprint_from_ua(f"fallback|{salt}"),
+            source=SOURCE_FALLBACK,
+            bid=fresh_bid,
+            legacy_fingerprint=None,
+            user_agent="",
+            should_write_cookie=False,
+            should_bridge=True,
+            bridge_bid=fresh_bid,
+        )
     return Identity(
         fingerprint=fingerprint_from_ua(f"fallback|{salt}"),
         source=SOURCE_FALLBACK,

@@ -320,6 +320,7 @@ from config import DATA_SOURCE
 from data_manager import load_user_data, claim_free_paragraphs
 from data_manager import generate_device_fingerprint, get_or_create_user_by_device
 from identity import resolve_identity, write_identity_cookie, renew_identity_cookie
+from identity import render_bridge_and_stop
 
 import hashlib
 
@@ -340,6 +341,14 @@ try:
     user_agent = identity.user_agent
     _legacy_fingerprint = identity.legacy_fingerprint
     logger.info(f"[IDENTITY] {identity.describe()}")
+
+    # [2026-11-09] URL 参数桥：Streamlit Community Cloud 的代理会把 WS 握手里的
+    # Cookie 头丢掉，`st.context.cookies` 恒为空（详见 identity.py 顶部说明）。
+    # 此时不建用户，先把 bid 写进地址栏并重载一次；下一次请求 `st.query_params`
+    # 就能读到它，身份进入 v2 并认领该浏览器的历史 UA 账号。
+    if identity.should_bridge and identity.bridge_bid:
+        logger.info("[IDENTITY] 未拿到 bid → 触发 URL 参数桥（本次不创建用户）")
+        render_bridge_and_stop(identity.bridge_bid)
 
     # 首次访问（尚无 cookie）→ 写入浏览器持久化 ID。
     # 本次会话仍沿用旧身份（保证老用户本次不丢数据），下次访问即切换到稳定身份，

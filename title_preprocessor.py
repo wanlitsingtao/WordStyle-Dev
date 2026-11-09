@@ -82,8 +82,9 @@ class TitlePreprocessor:
             List[Dict]，每个元素结构：
                 {
                     "index": int,             # 段落索引（doc.paragraphs 中的位置）
-                    "text": str,              # 段落原文
+                    "text": str,              # 段落原文（含编号）
                     "number": str,            # 编号部分（如 "1.1.1"）
+                    "content": str,           # 剥离编号后的标题正文
                     "detected_level": int,    # 自动推断的级别（1-9）
                 }
         """
@@ -196,6 +197,9 @@ class TitlePreprocessor:
                     "index": c["index"],
                     "text": c["text"],
                     "number": c["number"],
+                    # 剥离编号后的标题正文：界面用它做「新标题」，
+                    # 改写编号时也只动前缀、不碰这段正文（2026-11-06）。
+                    "content": c["content"],
                     "detected_level": c["detected_level"],
                 })
 
@@ -225,6 +229,7 @@ class TitlePreprocessor:
                 "index": idx,
                 "text": text,
                 "number": m.group(1),
+                "content": content,
                 "detected_level": 1,
             })
 
@@ -246,6 +251,7 @@ class TitlePreprocessor:
                 "index": idx,
                 "text": text,
                 "number": number,
+                "content": text[len(number):].lstrip(' \t\u3000\xa0.、．'),
                 "detected_level": TitlePreprocessor.infer_level(number),
             })
 
@@ -421,6 +427,72 @@ class TitlePreprocessor:
         TitlePreprocessor._set_outline_level(paragraph, level)
 
     @staticmethod
+    def _suppress_auto_numbering(paragraph) -> None:
+        """关闭段落继承/自带的 Word 自动编号（w:numId=0）。
+
+        为什么必须做（2026-11-06 用户反馈）：
+            很多标书的 Heading 样式链着多级列表。正文段落一旦被套上 Heading N，
+            Word 就会自动渲染出 "16.1." 这类编号；而原文正文里本来就写着
+            "1.1 一致性" → 输出变成 "16.1. 1.1 一致性"，两个编号并存，
+            且自动编号在界面上完全不可见、不可编辑。
+            本工具统一改为「编号写进正文文本」（可预览、可逐行编辑），
+            因此必须显式关闭自动编号，否则同一行永远显示两个号。
+
+        `w:numId=0` 是 OOXML 里「明确无编号」的写法，可覆盖样式继承来的编号。
+        """
+        pPr = paragraph._p.get_or_add_pPr()
+        # get_or_add_numPr 会按 schema 顺序插入（numPr 在 pPr 里有固定位置），
+        # 直接 append 到末尾 Word 可能忽略。
+        numPr = pPr.get_or_add_numPr()
+        # ilvl 对「无编号」没有意义，留着反而可能让 Word 仍按列表项处理
+        for child in list(numPr):
+            if child.tag != qn('w:numId'):
+                numPr.remove(child)
+        numId = numPr.find(qn('w:numId'))
+        if numId is None:
+            numId = OxmlElement('w:numId')
+            numPr.append(numId)
+        numId.set(qn('w:val'), '0')
+
+    @staticmethod
+    def _replace_leading_number(paragraph, old_number: str, new_number: str) -> bool:
+        """把段落开头那段编号替换成新编号，保留其余文字与各 run 的格式。
+
+        只替换**第一个**匹配（编号一定在最前面），且逐 run 处理：
+        编号常常与标题正文分属不同的 run（编号是西文、正文是中文），
+        整段重写会把两个 run 的字体统一成一个，中英文混排的标书会变形。
+
+        Returns:
+            True 表示已替换；False 表示段落文本里找不到 old_number（不动）。
+        """
+        full = paragraph.text
+        start = full.find(old_number)
+        if start < 0:
+            return False
+        end = start + len(old_number)
+
+        offset = 0
+        replaced = False
+        for run in paragraph.runs:
+            r_text = run.text
+            r_start = offset
+            r_end = offset + len(r_text)
+            offset = r_end
+            # 与 [start, end) 无交集 → 不碰这个 run
+            if r_end <= start or r_start >= end:
+                continue
+            local_start = max(start - r_start, 0)
+            local_end = min(end - r_start, len(r_text))
+            if not replaced:
+                # 新编号写进编号起始所在的 run，保持该 run 的字体（通常是数字字体）
+                run.text = r_text[:local_start] + new_number + r_text[local_end:]
+                replaced = True
+            else:
+                # 编号跨了多个 run → 后续 run 里属于旧编号的部分直接删掉
+                run.text = r_text[:local_start] + r_text[local_end:]
+        return replaced
+
+    @staticmethod
     def apply_headings(docx_file, output_file, selections: List[Dict], progress_callback=None) -> None:
         """将选中段落应用对应 Heading N 样式，保存为新文档。
 
@@ -428,22 +500,38 @@ class TitlePreprocessor:
             docx_file: 输入 docx 路径。
             output_file: 输出 docx 路径。
             selections: List[Dict]，每个元素结构：
-                {"index": int, "target_level": int}
+                {"index": int, "target_level": int, "new_number": str}
                 target_level 为 1-9；不在 selections 中的段落保持不变。
+                new_number 可选：给了且与原文编号不同时，正文里的旧编号会被替换；
+                不给（或为空）则正文一字不改，只做样式与「关闭自动编号」处理。
             progress_callback: 可选，每处理一个选中段落后调用
                 progress_callback(done: int, total: int)。
+
+        输出约定（2026-11-06 用户要求「新旧编号只保留新编号」）：
+            1) 关掉段落的 Word 自动编号（否则 Heading 样式会再生成一个号）；
+            2) 正文里的旧编号按 new_number 替换（未改则原样保留）；
+            3) 全篇最终只有正文里那一个编号，且它在界面上可见、可编辑。
         """
         doc = Document(docx_file)
         # 按 index 建立查找表
-        sel_map = {s["index"]: s["target_level"] for s in selections if s.get("target_level", 0) >= 1}
+        sel_map = {s["index"]: s for s in selections if s.get("target_level", 0) >= 1}
         total = len(sel_map)
         done = 0
         for idx, para in enumerate(doc.paragraphs):
-            if idx in sel_map:
-                TitlePreprocessor._apply_heading_style(doc, para, sel_map[idx])
-                done += 1
-                if progress_callback:
-                    progress_callback(done, total)
+            if idx not in sel_map:
+                continue
+            sel = sel_map[idx]
+            TitlePreprocessor._apply_heading_style(doc, para, sel["target_level"])
+            # 先关自动编号，再改正文编号：两步互不依赖，但顺序固定便于排查
+            TitlePreprocessor._suppress_auto_numbering(para)
+            new_number = str(sel.get("new_number") or "").strip()
+            if new_number:
+                old_number = TitlePreprocessor._extract_number_prefix(para.text)
+                if old_number and old_number != new_number:
+                    TitlePreprocessor._replace_leading_number(para, old_number, new_number)
+            done += 1
+            if progress_callback:
+                progress_callback(done, total)
         doc.save(output_file)
         if progress_callback:
             progress_callback(total, total)

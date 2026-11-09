@@ -53,6 +53,31 @@ def _style_display_name(style_name):
     return _LIST_STYLE_DISPLAY_NAMES.get(style_name, style_name)
 
 
+# [2026-11-06] 源样式名后注明「（表格样式）」「（图片样式）」。
+# 需求来源：第 3 区把「表格专属样式」「图片专属样式」和普通正文样式混在一列
+# （如 Word 内置的 Table Text 紧跟在 Normal 后面），用户看不出这一行只作用于表格/图片，
+# 误以为改它会影响正文。和第 4 区兜底的关系是「本区优先、兜底只管未映射的」，
+# 标清归属才能判断改这里有没有用。
+# ⚠️ 只改展示文本：widget key、style_map 的 key、保存值全部仍用原始样式名，
+#    否则已保存的映射配置会全部对不上（与列表虚拟样式同一个纪律）。
+def _style_display_with_kind(style_name, table_only=(), image_only=()):
+    """在源样式显示名后追加专属标注；列表虚拟样式已有说明，不重复标注。"""
+    name = _style_display_name(style_name)
+    if style_name in _LIST_STYLE_DISPLAY_NAMES:
+        return name
+    key = (style_name or '').strip()
+    if not key:
+        return name
+    tags = []
+    if key in {str(x).strip() for x in table_only}:
+        tags.append('表格样式')
+    if key in {str(x).strip() for x in image_only}:
+        tags.append('图片样式')
+    if not tags:
+        return name
+    return '%s（%s）' % (name, '、'.join(tags))
+
+
 def get_answer_mode_options():
     """获取应答句插入模式选项（与桌面版保持一致）"""
     return {
@@ -781,6 +806,13 @@ def show_style_mapping_dialog():
     _hidden_norm = {h.strip() for h in hidden_styles}
     visible_body_styles = [s for s in body_styles if s.strip() not in _hidden_norm]
 
+    # [2026-11-06] 展示名（含「（表格样式）/（图片样式）」标注）一次算好，
+    # 供下面单列/双列两条渲染分支共用；内部键仍是 source_style 原名。
+    _body_display_names = {
+        s: _style_display_with_kind(s, _table_only_set, _image_only_set)
+        for s in visible_body_styles
+    }
+
     body_mapping = {}
     answer_mapping = {}
 
@@ -809,7 +841,7 @@ def show_style_mapping_dialog():
                 cols = st.columns([2, 2, 2])
                 with cols[0]:
                     # 显示名与内部键分离：列表虚拟样式显示中文说明，写回时仍用原名
-                    st.text(_style_display_name(source_style))
+                    st.text(_body_display_names[source_style])
                 with cols[1]:
                     default_val = resolve_default_target(
                         source_style, current_file_mapping, default_style_map,
@@ -835,7 +867,7 @@ def show_style_mapping_dialog():
             else:
                 cols = st.columns([2, 2])
                 with cols[0]:
-                    st.text(_style_display_name(source_style))
+                    st.text(_body_display_names[source_style])
                 with cols[1]:
                     default_val = resolve_default_target(
                         source_style, current_file_mapping, default_style_map,
