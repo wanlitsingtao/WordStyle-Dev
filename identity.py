@@ -390,6 +390,7 @@ def bridge_script(bid: str) -> str:
        `st.query_params` 才 100% 能读到；改顶层地址要依赖 Cloud 外壳转发参数，
        万一不转发就会来回重载。顶层只做 `history.replaceState`（不导航），
        让地址栏也带上参数 —— 这样手动刷新时外壳若转发就免重载，不转发也最多再重载一次。
+       顶层**只写 `ws_bid`**，不写 `_ws_bid_bridge`（内部标记，用户不该看到）。
     3. **保留其它查询参数**：用 URL API 逐个 set，不会把 embed 等参数冲掉。
     4. **写入 `_ws_bid_bridge=1`**：服务端见到它就说明桥已尝试过，拿不到 bid 时
        不再重试（否则 JS 被禁用会无限重载）。
@@ -412,10 +413,13 @@ def bridge_script(bid: str) -> str:
         "document.cookie='" + IDENTITY_COOKIE_NAME + "='+bid+"
         "'; max-age=" + str(COOKIE_MAX_AGE) + "; path=/; SameSite=" + _COOKIE_SAMESITE + "';"
         # ① 顶层地址栏同步（不导航，仅 replaceState）
+        #    只写**身份参数**，不写内部标记 —— `_ws_bid_bridge` 是给服务端判重用的，
+        #    露在地址栏纯属噪音（用户 2026-11-09 反馈"这些内容可以不出现吗"）。
+        #    顺带 delete 一次：老版本已经把标记写进过地址栏，这样刷新一次就自动变干净。
         "try{if(window.top&&window.top!==window&&window.top.location.origin===location.origin){"
         "var t=new URL(window.top.location.href);"
         "t.searchParams.set('" + IDENTITY_QUERY_PARAM + "',bid);"
-        "t.searchParams.set('" + BRIDGE_FLAG_PARAM + "','1');"
+        "t.searchParams.delete('" + BRIDGE_FLAG_PARAM + "');"
         "window.top.history.replaceState(null,'',t.toString());}}catch(e){}"
         # ② 应用自身地址：带参数后重载（st.query_params 必定能读到）
         "var u=new URL(location.href);"
@@ -429,6 +433,26 @@ def bridge_script(bid: str) -> str:
     if re.search(r"<[A-Za-z0-9_!/]", body.replace("<script", "").replace("</script", "")):
         raise ValueError("bridge_script 中含 DOMPurify 会吞掉的内容")
     return body
+
+
+def drop_bridge_flag_from_url() -> bool:
+    """把地址栏里遗留的内部标记 `_ws_bid_bridge` 删掉（只删这一个参数）。
+
+    为什么用 Streamlit 原生 API 而不是注入 JS：实测 `history.replaceState` 改完
+    地址栏会被 Streamlit 前端的 query_params 状态**重新写回**（它在内部持有该参数），
+    所以 JS 方案无效。`del st.query_params[...]` 是官方通道，前端会同步更新地址栏。
+    代价：触发一次 rerun（很快，且此时身份已确定，不会重复桥接）。
+
+    只删 `_ws_bid_bridge`，`ws_bid` 与其他参数一律不动。
+    """
+    try:
+        import streamlit as st
+        if BRIDGE_FLAG_PARAM not in st.query_params:
+            return False
+        del st.query_params[BRIDGE_FLAG_PARAM]
+        return True
+    except Exception:
+        return False
 
 
 def render_bridge_and_stop(bid: str) -> None:

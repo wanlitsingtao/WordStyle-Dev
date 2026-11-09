@@ -320,7 +320,7 @@ from config import DATA_SOURCE
 from data_manager import load_user_data, claim_free_paragraphs
 from data_manager import generate_device_fingerprint, get_or_create_user_by_device
 from identity import resolve_identity, write_identity_cookie, renew_identity_cookie
-from identity import render_bridge_and_stop
+from identity import render_bridge_and_stop, drop_bridge_flag_from_url
 
 import hashlib
 
@@ -361,6 +361,12 @@ try:
         # 每次新会话顺带重写一次，保证"只要 400 天内来过，身份就一直续下去"。
         if renew_identity_cookie(identity.bid):
             logger.info(f"[IDENTITY] 已续期浏览器身份 cookie（bid={identity.bid[:8]}…）")
+
+    # [2026-11-09] 地址栏里可能还留着老版本桥脚本写入的 `_ws_bid_bridge=1`
+    # （纯内部标记，对用户无意义）。用 Streamlit 原生 query_params 删掉，
+    # 只动这一个参数，`ws_bid` 不动；会触发一次 rerun，此时身份已确定不受影响。
+    if drop_bridge_flag_from_url():
+        logger.info("[IDENTITY] 已清理地址栏遗留的 _ws_bid_bridge 标记")
 
     # [TZ] 探测浏览器时区，写进 cookie `ws_tz`（与身份 cookie 同一套机制）。
     # 为什么必须在入口就做：Python 跑在服务器（云端是 UTC），datetime.now() 比用户
