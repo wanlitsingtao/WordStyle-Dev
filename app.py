@@ -320,7 +320,7 @@ from config import DATA_SOURCE
 from data_manager import load_user_data, claim_free_paragraphs
 from data_manager import generate_device_fingerprint, get_or_create_user_by_device
 from identity import resolve_identity, write_identity_cookie, renew_identity_cookie
-from identity import render_bridge_and_stop, clean_identity_url
+from identity import render_bridge_and_stop, clean_identity_url, hide_identity_in_top_url
 
 import hashlib
 
@@ -362,9 +362,15 @@ try:
         if renew_identity_cookie(identity.bid):
             logger.info(f"[IDENTITY] 已续期浏览器身份 cookie（bid={identity.bid[:8]}…）")
 
-    # [2026-11-09] 身份已确定 → 把地址栏里的身份参数清掉（默认行为，开关见
-    # config.HIDE_IDENTITY_PARAM）。背景：云端读不到 cookie，`?ws_bid=<设备号>`
-    # 是唯一入口，但它常驻地址栏 = 把链接发出去就把额度/历史一起发出去了。
+    # [2026-11-09] 第一步：首帧就用 JS 抹掉**顶层**地址栏的身份参数（不触发 rerun）。
+    # 为什么它排在下面那个之前：`clean_identity_url()` 改的是 iframe 自己的 URL，
+    # 要等一次 rerun + 外壳同步才反映到地址栏，实测用户会看到 `?ws_bid=…` 停留数秒。
+    # 这段脚本直接改 window.top（线上 iframe 与顶层同源，已实测），应用一渲染就生效。
+    hide_identity_in_top_url()
+
+    # 第二步：再把 iframe 自己的 URL 也清干净（同时删掉遗留的 `_ws_bid_bridge`）。
+    # 背景：云端读不到 cookie，`?ws_bid=<设备号>` 是唯一入口，但它常驻地址栏 =
+    # 把链接发出去就把额度/历史一起发出去了（开关见 config.HIDE_IDENTITY_PARAM）。
     # 为什么不会反复桥接：resolve_identity() 读到 URL 参数时已把 bid 记进
     # session_state，本次清理触发的 rerun 会从会话里取回同一身份（详见 identity.py）。
     if clean_identity_url():

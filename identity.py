@@ -445,13 +445,15 @@ def bridge_script(bid: str) -> str:
         "var bid=m?m[1].toLowerCase():'" + bid + "';"
         "document.cookie='" + IDENTITY_COOKIE_NAME + "='+bid+"
         "'; max-age=" + str(COOKIE_MAX_AGE) + "; path=/; SameSite=" + _COOKIE_SAMESITE + "';"
-        # ① 顶层地址栏同步（不导航，仅 replaceState）
-        #    只写**身份参数**，不写内部标记 —— `_ws_bid_bridge` 是给服务端判重用的，
-        #    露在地址栏纯属噪音（用户 2026-11-09 反馈"这些内容可以不出现吗"）。
-        #    顺带 delete 一次：老版本已经把标记写进过地址栏，这样刷新一次就自动变干净。
+        # ① 顶层地址栏：**只删不写**（2026-11-09 改）
+        #    为什么不再往顶层写 ws_bid：地址栏从导航开始就显示目标 URL，任何 JS 都
+        #    要等页面加载完才能改；写进去等于让用户必然看到几秒参数。实测线上
+        #    应用 iframe 与顶层同源（iframe 为 `/~/+/`，origin 相同），所以这里
+        #    直接 replaceState 把顶层抹干净，iframe 自己的 URL 仍带参数（服务端能读）。
+        #    代价：刷新时顶层无参数 → 外壳生成的 iframe 也不带参数 → 重新桥一次。
         "try{if(window.top&&window.top!==window&&window.top.location.origin===location.origin){"
         "var t=new URL(window.top.location.href);"
-        "t.searchParams.set('" + IDENTITY_QUERY_PARAM + "',bid);"
+        "t.searchParams.delete('" + IDENTITY_QUERY_PARAM + "');"
         "t.searchParams.delete('" + BRIDGE_FLAG_PARAM + "');"
         "window.top.history.replaceState(null,'',t.toString());}}catch(e){}"
         # ② 应用自身地址：带参数后重载（st.query_params 必定能读到）
@@ -495,6 +497,61 @@ def _hide_identity_param_enabled() -> bool:
         return bool(HIDE_IDENTITY_PARAM)
     except Exception:
         return True
+
+
+_TOP_CLEAN_SESSION_KEY = "_ws_top_url_cleaned"
+
+
+def _top_url_cleanup_script() -> str:
+    """生成"抹掉顶层地址栏身份参数"的脚本（只改 window.top，不导航）。"""
+    body = (
+        "<script>(function(){try{"
+        # 不同源时改了会抛异常，直接放弃（自托管单页场景 top===self，也走不到这里）
+        "if(!(window.top&&window.top!==window&&window.top.location.origin===location.origin)){return;}"
+        "var u=new URL(window.top.location.href),d=false;"
+        "if(u.searchParams.has('" + IDENTITY_QUERY_PARAM + "')){"
+        "u.searchParams.delete('" + IDENTITY_QUERY_PARAM + "');d=true;}"
+        "if(u.searchParams.has('" + BRIDGE_FLAG_PARAM + "')){"
+        "u.searchParams.delete('" + BRIDGE_FLAG_PARAM + "');d=true;}"
+        "if(d){window.top.history.replaceState(null,'',u.toString());}"
+        "}catch(e){}})();</script>"
+    )
+    # 与 bridge_script 同一条硬约束：正文出现「< + 字母/数字」会被 DOMPurify 整段吞掉
+    if re.search(r"<[A-Za-z0-9_!/]", body.replace("<script", "").replace("</script", "")):
+        raise ValueError("_top_url_cleanup_script 中含 DOMPurify 会吞掉的内容")
+    return body
+
+
+def hide_identity_in_top_url() -> bool:
+    """首帧就把**顶层**地址栏的身份参数抹掉（不触发 rerun、不导航）。
+
+    为什么不能只靠 `clean_identity_url()`：那个改的是应用 iframe 自己的 URL，
+    而且要等一次 rerun 才同步到地址栏；Cloud 外壳的同步还有额外延迟，实测用户会
+    看到 `?ws_bid=…` 停留数秒（2026-11-09 用户反馈"还是会闪出这个地址"）。
+
+    为什么这段能生效：实测线上应用 iframe 是 `https://<app>/~/+/`，与顶层**同源**
+    （`window.top.location` 可读），所以可以直接 `replaceState` 改顶层。
+    iframe 自己的 URL 保留参数 —— 服务端后续每帧仍能读到，不需要 session 兜底。
+
+    只在"本次 URL 里确实有身份参数"时注入一次；没有参数时什么都不做，
+    自托管（top===self）时脚本内部直接返回，不产生任何副作用。
+    """
+    if not _hide_identity_param_enabled():
+        return False
+    try:
+        import streamlit as st
+    except Exception:
+        return False
+    if st.session_state.get(_TOP_CLEAN_SESSION_KEY):
+        return False
+    if not _read_query_bid() and not _bridge_already_tried():
+        return False
+    try:
+        st.html(_top_url_cleanup_script(), unsafe_allow_javascript=True)
+        st.session_state[_TOP_CLEAN_SESSION_KEY] = True
+        return True
+    except Exception:
+        return False
 
 
 def clean_identity_url() -> bool:
