@@ -32,7 +32,7 @@ logger = logging.getLogger('WordStyle')
 
 # 识别引擎版本：参与结果缓存签名。识别规则一变就改这里，旧缓存自动失效，
 # 避免界面还显示上一版规则的结果（2026-11-05 起沿用这个约定）。
-_ENGINE_VER = '2026-11-10-organize-v2'
+_ENGINE_VER = '2026-11-11-organize-v3'
 
 # 标题文字长度过滤的默认阈值（用户 2026-11-06 指定：默认 20 字符）。
 DEFAULT_MAX_TITLE_CHARS = 20

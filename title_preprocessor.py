@@ -36,6 +36,15 @@ HEADING_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)[ \t\u3000\xa0]+([^\t]*)$')
 # 排除 "5.1.10信息化管理\t175" 这类目录行）。
 HEADING_PATTERN_NOSEP = re.compile(r'^\s*(\d+(?:\.\d+){2,})([^\d\s\t].*)$')
 
+# 纯日期行（"2024 年 6 月"、"2024年6月30日"、"2024 年"）。
+# 为什么要单独排除（2026-11-11 用户实测反馈）：`HEADING_PATTERN` 把行首数字当编号，
+# "2024 年 6 月" 因此被切成「编号 2024 + 标题文字 年 6 月」——内容首字符是"年"，
+# 逃过了"内容以数字/符号开头"的过滤，又因为短、无正文特征，最终被判「漏检」并
+# 默认勾选转标题。日期行在任何标书里都不是标题，直接在候选阶段丢弃。
+# 只认「整行就是日期」：`2024 年度财务报告` 这类仍按正常规则处理，不会误杀。
+_DATE_ONLY_PATTERN = re.compile(
+    r'^\s*(?:19|20)\d{2}\s*年(?:\s*\d{1,2}\s*月)?(?:\s*\d{1,2}\s*日)?\s*$')
+
 # 文本开头数字编号：用于已具有标题样式/大纲级别的段落统一按编号推断级别（如 "1.1 线路" / "1.1线路"）。
 NUMBER_PREFIX_PATTERN = re.compile(r'^\s*(\d+(?:\.\d+)*)')
 
@@ -790,6 +799,10 @@ class TitlePreprocessor:
             # "4.5.3.1 分供范围与备案\n卖方可将…"）：只取首行做标题匹配，
             # 首行即标题行，正文行不参与编号判断（2026-10-27）。
             first_line = raw_text.split('\n', 1)[0] if '\n' in raw_text else raw_text
+            # 纯日期行（"2024 年 6 月"）不是标题候选：行首年份会被当成编号，
+            # 详见 _DATE_ONLY_PATTERN 的说明。识别/分类两阶段都从这里过，只需拦一次。
+            if _DATE_ONLY_PATTERN.match(first_line):
+                continue
             m = (HEADING_PATTERN.match(first_line)
                  or HEADING_PATTERN_NOSEP.match(first_line))
             if not m:
@@ -1097,6 +1110,11 @@ class TitlePreprocessor:
         """
         raw = raw or ''
         first_line = raw.split('\n', 1)[0] if '\n' in raw else raw
+        # 纯日期行不算"编号 + 内容"：否则第二阶段会把 "2024 年 6 月" 拆成
+        # 编号 2024 + 内容 "年 6 月"，重新走一遍分类又变成「漏检」。
+        # 返回 None 后，调用方的 `number is None` 分支会把它当普通正文跳过（非标题格式时）。
+        if _DATE_ONLY_PATTERN.match(first_line):
+            return None, raw.strip(), raw.strip()
         m = (HEADING_PATTERN.match(first_line)
              or HEADING_PATTERN_NOSEP.match(first_line))
         if m:

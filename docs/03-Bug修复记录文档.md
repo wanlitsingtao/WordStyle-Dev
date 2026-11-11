@@ -5421,3 +5421,40 @@ stdout 上既没有 `OK` 也没有 `FAIL: xxx` → 阴性对照脚本识别不�
 **变更人员**: AI Assistant
 **涉及文件**: `components/title_preprocess.py`、`temp/test_title_organize.py`、`docs/01-业务需求文档.md`、`docs/02-系统设计文档.md`、`docs/03-Bug修复记录文档.md`
 **部署状态**: 未提交，由用户手动 commit/push
+
+
+## 2026-11-11（识别修正）纯日期行被当成「编号 + 标题」→ 误判漏检
+
+### 现象
+
+用户实测截图：`2024 年 6 月` 出现在「漏检（应为标题）」里，且默认勾选转标题。
+
+### 根因（两步叠加）
+
+1. `HEADING_PATTERN = ^\s*(\d+(?:\.\d+)*)[ \t\u3000\xa0]+([^\t]*)$` 把**行首任意数字**
+   都当编号 —— `2024 年 6 月` 被切成「编号 `2024` + 内容 `年 6 月`」；
+2. 候选过滤只排除「内容以数字/符号开头」的段落，`年` 不在排除集里；该条又短、
+   无正文特征 → 走 `_classify_non_heading()` 的兜底分支，判「漏检 · high」。
+   `_split_number()` 同样会拆出编号 2024，所以第二阶段还会把它再捞回来。
+
+### 修复
+
+| 文件 | 改动 |
+|---|---|
+| `title_preprocessor.py` | 新增 `_DATE_ONLY_PATTERN`（整行就是 `19xx/20xx 年 [月] [日]`）；`_detect_headings_in()` 在匹配编号正则**之前**跳过；`_split_number()` 命中时返回 `(None, 原文, 原文)`，让第二阶段的 `number is None` 分支按普通正文跳过 |
+| `temp/test_title_organize.py` | 新增 `test_date_line_excluded()`（5 条）：三种日期写法都不出现在任何类别；`2024 年度财务报告` 不被误杀；`_split_number('2024 年 6 月')` 不再返回编号 |
+| `docs/01`、`docs/02` | 识别范围「绝对排除」补一条；正则表与识别算法步骤同步 |
+
+只认「整行就是日期」，`2024 年度财务报告` 这类仍是候选 —— 不做过度排除。
+
+### 验证
+
+- `temp/test_title_organize.py`：**90/90**；`test_title_preprocess` 18/18、
+  `test_auto_numbering_headings` 46/46、`test_heading_outline_identity` 8/8。
+- 深圳 8803 段回归：分布与改造前完全一致（normal 912 / suspect 646 / body 192 /
+  missing 34 / misuse 2，共 1786），该文档本身没有日期行。
+
+**变更时间**: 2026-11-11
+**变更人员**: AI Assistant
+**涉及文件**: `title_preprocessor.py`、`temp/test_title_organize.py`、`docs/01-业务需求文档.md`、`docs/02-系统设计文档.md`、`docs/03-Bug修复记录文档.md`
+**部署状态**: 未提交，由用户手动 commit/push
