@@ -83,6 +83,27 @@ def _paragraph_style_id(paragraph) -> str:
     return (p_style.get(qn('w:val')) or '') if p_style is not None else ''
 
 
+def _read_outline_level(pPr_or_none) -> Optional[int]:
+    """从任意 `w:pPr`（段落 / 样式 / 编号级别的 pPr）读取大纲级别（1-9）。
+
+    只读显式声明的 `w:outlineLvl`（0-based 存储），没有则返回 None。
+    抽成独立函数是为了让「段落 pPr」「样式 pPr」「编号级别 pPr」三处共用同一口径。
+    """
+    if pPr_or_none is None:
+        return None
+    outline = pPr_or_none.find(qn('w:outlineLvl'))
+    if outline is None:
+        return None
+    val = outline.get(qn('w:val'))
+    if val is None:
+        return None
+    try:
+        level = int(val) + 1  # outlineLvl 是 0-based
+    except (TypeError, ValueError):
+        return None
+    return level if 1 <= level <= 9 else None
+
+
 class _StyleIndex:
     """一次解析 styles.xml，供逐段查询「样式名 + 标题级别 + 大纲级别」。
 
@@ -94,12 +115,25 @@ class _StyleIndex:
     def __init__(self, doc):
         self.level_by_id: Dict[str, Optional[int]] = {}
         self.name_by_id: Dict[str, str] = {}
+        # 样式自身声明的大纲级别 + basedOn 继承链（2026-11-11）：
+        # 「JZ标题3」这类自定义样式名字不在 HEADING_STYLE_LEVELS 里，
+        # 但它自己在 styles.xml 里写了 outlineLvl，Word 大纲视图照样按标题显示。
+        self._own_outline_by_id: Dict[str, Optional[int]] = {}
+        self._based_on: Dict[str, str] = {}
+        self._resolved_outline: Dict[str, Optional[int]] = {}
+        # 编号级别链接的样式（2026-11-11）：Word 的「多级列表 → 将级别链接到样式」
+        # 会在 numbering.xml 的 w:lvl 里写 w:pStyle。此时段落本身既没有 pStyle
+        # 也没有 outlineLvl，但 Word 实际按该样式渲染（大纲视图可见）。
+        self._num_to_abs: Dict[str, str] = {}
+        self._lvl_style: Dict[tuple, str] = {}
+        self._lvl_outline: Dict[tuple, int] = {}
         # 段落 → styleId 的缓存。同一段落在分类阶段会被问 4 次
         # （是否标题 / 样式名 / 级别 / 说明），每次都要读一次 pPr。
         # 键用底层 XML 元素的 id：`doc.paragraphs` 每次返回新的包装对象，
         # 用包装对象做键会一直命中不了。
         self._sid_cache: Dict[int, str] = {}
         self._outline_cache: Dict[int, Optional[int]] = {}
+        self._numbering_cache: Dict[int, tuple] = {}
         try:
             for style in doc.styles.element.findall(qn('w:style')):
                 sid = style.get(qn('w:styleId')) or ''
@@ -107,9 +141,37 @@ class _StyleIndex:
                 name = ((name_el.get(qn('w:val')) if name_el is not None else '') or '')
                 self.name_by_id[sid] = name
                 self.level_by_id[sid] = HEADING_STYLE_LEVELS.get(name.lower())
+                based = style.find(qn('w:basedOn'))
+                self._based_on[sid] = (based.get(qn('w:val')) if based is not None else '') or ''
+                pPr = style.find(qn('w:pPr'))
+                self._own_outline_by_id[sid] = _read_outline_level(pPr)
         except Exception:  # 样式表异常：退化为「全部按非标题样式」处理
             self.level_by_id = {}
             self.name_by_id = {}
+        try:
+            numbering = doc.part.numbering_part.element
+            for num in numbering.findall(qn('w:num')):
+                nid = num.get(qn('w:numId')) or ''
+                abs_el = num.find(qn('w:abstractNumId'))
+                if abs_el is not None:
+                    self._num_to_abs[nid] = abs_el.get(qn('w:val')) or ''
+            for abstract in numbering.findall(qn('w:abstractNum')):
+                aid = abstract.get(qn('w:abstractNumId')) or ''
+                for lvl in abstract.findall(qn('w:lvl')):
+                    ilvl = lvl.get(qn('w:ilvl')) or '0'
+                    ps = lvl.find(qn('w:pStyle'))
+                    if ps is not None and ps.get(qn('w:val')):
+                        self._lvl_style[(aid, ilvl)] = ps.get(qn('w:val'))
+                    # outlineLvl 可能直接挂在 w:lvl 下，也可能在 w:lvl/w:pPr 下
+                    lvl_outline = _read_outline_level(lvl)
+                    if lvl_outline is None:
+                        lvl_outline = _read_outline_level(lvl.find(qn('w:pPr')))
+                    if lvl_outline is not None:
+                        self._lvl_outline[(aid, ilvl)] = lvl_outline
+        except Exception:  # 无 numbering.xml / 解析异常：退化为不支持编号级联
+            self._num_to_abs = {}
+            self._lvl_style = {}
+            self._lvl_outline = {}
 
     def style_id(self, paragraph) -> str:
         key = id(paragraph._p)
@@ -134,34 +196,131 @@ class _StyleIndex:
             self._outline_cache[key] = TitlePreprocessor._get_outline_level(paragraph)
         return self._outline_cache[key]
 
+    # ------------------------------------------------------------------
+    # 大纲身份的完整口径（2026-11-11）
+    # ------------------------------------------------------------------
+    def _style_outline(self, sid: str) -> Optional[int]:
+        """样式（含 basedOn 继承链）声明的大纲级别；未声明返回 None。"""
+        if not sid:
+            return None
+        if sid in self._resolved_outline:
+            return self._resolved_outline[sid]
+        seen = set()
+        cur = sid
+        found = None
+        while cur and cur not in seen:
+            seen.add(cur)
+            own = self._own_outline_by_id.get(cur)
+            if own is not None:
+                found = own
+                break
+            cur = self._based_on.get(cur, '')
+        self._resolved_outline[sid] = found
+        return found
+
+    def _numbering_info(self, paragraph) -> tuple:
+        """段落 numPr → (编号级别链接的样式ID, 编号级别自带的大纲级别)。
+
+        为什么需要：Word 的多级列表可以把某个级别「链接到样式」（numbering.xml 的
+        `w:lvl/w:pStyle`）。此时**段落本身既没有 pStyle 也没有 outlineLvl**，但 Word
+        按链接样式渲染，大纲视图里能看到 —— 深圳地铁招标文件的 `5.3.1 总体要求`
+        就是这种情况（numId=2/ilvl=2 → JZ3 → 大纲级别 3），旧实现判成了「漏检」。
+        """
+        key = id(paragraph._p)
+        cached = self._numbering_cache.get(key)
+        if cached is not None:
+            return cached
+        result = ('', None)
+        try:
+            pPr = paragraph._p.find(qn('w:pPr'))
+            numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
+            if numPr is not None:
+                nid_el = numPr.find(qn('w:numId'))
+                ilvl_el = numPr.find(qn('w:ilvl'))
+                nid = nid_el.get(qn('w:val')) if nid_el is not None else ''
+                ilvl = ilvl_el.get(qn('w:val')) if ilvl_el is not None else '0'
+                aid = self._num_to_abs.get(nid or '', '')
+                if aid:
+                    result = (self._lvl_style.get((aid, ilvl or '0'), ''),
+                              self._lvl_outline.get((aid, ilvl or '0')))
+        except Exception:
+            result = ('', None)
+        self._numbering_cache[key] = result
+        return result
+
+    def numbering_style_id(self, paragraph) -> str:
+        """编号级别链接的样式ID（没有则空串）。"""
+        return self._numbering_info(paragraph)[0]
+
+    def numbering_level(self, paragraph) -> Optional[int]:
+        """由编号级联得到的标题级别（链接样式的大纲/标题级别，或级别自带 outlineLvl）。"""
+        sid, lvl_outline = self._numbering_info(paragraph)
+        if lvl_outline is not None:
+            return lvl_outline
+        if not sid:
+            return None
+        return self.level_by_id.get(sid) or self._style_outline(sid)
+
+    def effective_style_level(self, paragraph) -> Optional[int]:
+        """段落当前**实际生效**的标题样式级别（直接样式 ∪ 编号级联样式）。"""
+        return self.level_of(paragraph) or self.numbering_level(paragraph)
+
+    def effective_outline_level(self, paragraph) -> Optional[int]:
+        """段落当前**实际生效**的大纲级别（显式 ∪ 编号级联）。"""
+        explicit = self.outline_level(paragraph)
+        if explicit is not None:
+            return explicit
+        _, lvl_outline = self._numbering_info(paragraph)
+        if lvl_outline is not None:
+            return lvl_outline
+        return self._style_outline(self.style_id(paragraph)) \
+            or self._style_outline(self.numbering_style_id(paragraph))
+
+    def effective_name_of(self, paragraph) -> str:
+        """展示用样式名；编号级联时补注来源，避免界面显示「无样式」误导用户。"""
+        name = self.name_of(paragraph)
+        if name:
+            return name
+        nsid = self.numbering_style_id(paragraph)
+        if nsid:
+            return f"{self.name_by_id.get(nsid, nsid)}（编号级联）"
+        return ''
+
     def is_heading(self, paragraph) -> bool:
-        """已是标题格式：标题样式或显式大纲级别任一成立。"""
+        """已是标题格式：直接标题样式 / 显式大纲级别 / 编号级联样式 任一成立。"""
         return (self.level_of(paragraph) is not None
-                or self.outline_level(paragraph) is not None)
+                or self.outline_level(paragraph) is not None
+                or self.numbering_level(paragraph) is not None)
 
     def description(self, paragraph) -> str:
         """人可读的样式说明，如 "Heading 2｜大纲级别 2"。"""
-        name = self.name_of(paragraph) or '无样式'
-        level = self.outline_level(paragraph)
+        name = self.effective_name_of(paragraph) or '无样式'
+        level = self.effective_outline_level(paragraph)
         return f"{name}｜" + (f"大纲级别 {level}" if level is not None else "无大纲级别")
 
 
 # ---------------------------------------------------------------------------
-# 分类（2026-11-10：合并「标题查漏」与「标题预处理」）
+# 分类（2026-11-10：合并「标题查漏」与「标题预处理」；2026-11-11 增加第五类）
 # ---------------------------------------------------------------------------
-# 引擎不再"只输出要处理的条目"，而是把**全部**候选分成四类；处理动作交给用户，
+# 引擎不再"只输出要处理的条目"，而是把**全部**候选分类；处理动作交给用户，
 # 引擎只给建议。这样「尽量多识别、不遗漏」与「不擅自改动」可以同时成立。
-CATEGORY_MISSING = 'missing'      # 漏检：应为标题，当前不是标题格式
+CATEGORY_MISSING = 'missing'      # 漏检：应为标题，当前不是标题格式，文本也像标题
 CATEGORY_NORMAL = 'normal'        # 正常标题：已是标题格式、文本也像标题
 CATEGORY_MISUSE = 'misuse'        # 误套：是标题格式，但语义是正文 → 建议降级
-CATEGORY_BODY = 'body'            # 正文条款：带编号的正文长句 → 不建议转标题
+CATEGORY_SUSPECT = 'suspect'      # 疑似条款（2026-11-11 新增）：带标题编号、无标题
+                                  # 样式也无大纲级别，文本又超过标题合理长度 ——
+                                  # 说不准是标题还是正文，交给用户逐条确认
+CATEGORY_BODY = 'body'            # 正文条款：带编号、且有明确正文特征（冒号/句末
+                                  # 标点/整句/超 300 字）→ 建议保持不动
 
-CATEGORY_ORDER = [CATEGORY_MISSING, CATEGORY_NORMAL, CATEGORY_MISUSE, CATEGORY_BODY]
+CATEGORY_ORDER = [CATEGORY_MISSING, CATEGORY_NORMAL, CATEGORY_MISUSE,
+                  CATEGORY_SUSPECT, CATEGORY_BODY]
 
 CATEGORY_LABELS = {
     CATEGORY_MISSING: '漏检',
     CATEGORY_NORMAL: '正常标题',
     CATEGORY_MISUSE: '误套',
+    CATEGORY_SUSPECT: '疑似条款',
     CATEGORY_BODY: '正文条款',
 }
 
@@ -212,6 +371,196 @@ def _looks_like_body(text: str) -> bool:
     if len(t) >= 60 and BODY_VERB_PATTERN.search(t):
         return True
     return False
+
+
+def _body_clause_reason(content: str, text: str = '') -> Optional[str]:
+    """「编号 + 正文条款」的统一判据，返回原因文案；不像正文则返回 None。
+
+    为什么单独抽出来（2026-11-11 用户实测反馈）：识别阶段对三级以上编号放宽到
+    300 字、且不排除冒号（为了"尽量多识别"），于是 `1.1.1招标人：见投标须知前
+    附表。` 这类纯正文条款也会进候选。合并分类后，第一阶段只按「有没有标题格式」
+    一刀切，把这些候选全部打成「漏检」（且默认勾选），深圳地铁那份文件一次冒出
+    677 条误判。这里把「正文条款」的判据收成一处，识别/分类两阶段共用同一口径。
+
+    判据（与原来第二阶段 body 分支完全一致，只是提前到第一阶段）：
+        1) 含冒号 —— 多为定义、缩略语、参数说明；
+        2) 句末标点结尾且超过一句话长度 —— 完整条文，不是标题；
+        3) `_looks_like_body` 命中 —— 句号/分号结尾，或含逗号分句 + 义务动词。
+    """
+    c = (content or '').strip()
+    t = (text or '').strip()
+    if not c:
+        return None
+    if '：' in c or ':' in c:
+        return '含冒号，多为定义/缩略语列表'
+    if c[-1:] in '。；' and len(c) > SHORT_SENTENCE_MAX:
+        return '句子结尾的正文，不是标题'
+    if _looks_like_body(c):
+        return '内容是完整句子，不像标题'
+    if len(t) > 300:
+        return '超过 300 字'
+    return None
+
+
+def _is_title_numbered(number: str) -> bool:
+    """是否带「标题式编号」——多级编号（`5.1.11.2.2`、`3.1`）。
+
+    单级列表编号（`1)`、`（1）`、`1.`）是正文枚举，不算标题编号。
+
+    为什么单独抽出来（用户 2026-11-11 纠正）：「疑似条款」与「正文条款」的
+    最大区别就是**有没有标题编号**。编号形态像标题（`5.1.11.2.2`）的条目，
+    哪怕内容读起来是条文，也可能是"漏了标题格式的标题"，必须单独列出来让
+    用户确认；不能直接埋进「正文条款」里，否则用户永远看不到这批候选。
+    """
+    return _number_depth(number) >= 2
+
+
+def _is_list_marker_number(number: str) -> bool:
+    """是否单级列表编号（`2.`、`1）`、`（1）`、`4)`、`第五章`）。
+
+    与 `1`（章节号，`1 概述`）区分开：章节号后面没有分隔符，形态仍像标题；
+    带分隔符的是正文枚举项，本来就不是标题候选。
+    """
+    n = str(number or '').strip()
+    if not n:
+        return False
+    if n[0] in '（([' or n.startswith('第'):
+        return True
+    return n[-1] in '.．、)）]】'
+
+
+def _classify_non_heading(content: str, text: str, number: str):
+    """无标题格式（无标题样式、无显式/级联大纲级别）候选的统一归类。
+
+    返回 `(category, confidence, reasons)`。识别/分类两阶段共用，
+    避免两处判据分叉（2026-11-11 之前的教训：一处分歧就出现大批误判）。
+
+    判定顺序：
+
+    1. **带标题编号**（多级）且（文本超过 45 字 或 有正文特征）→ 疑似条款
+       编号像标题、却没有标题身份，还可能是整段条文 —— 既不能默认转标题，
+       也不能埋进正文条款，交给用户逐条确认，默认保持不动。
+    2. **不带标题编号**（单级枚举 / 无编号）且（有正文特征 或 文本过长）
+       → 正文条款。`1) 2) 3)` 这种是正文枚举，本来就不是标题候选。
+    3. 其余（短、形态像标题）→ 漏检（默认勾选转标题）。
+
+    注意：这只是**逐条**判据。返回「漏检」的条目还会经过
+    `_inherit_suspect_from_prev_sibling()`（2026-11-11 第二轮）做一次上下文
+    校验：同父级编号连续、上一条是疑似条款时改判疑似条款。所以调用方不要
+    假设「本函数返回 missing 就一定是漏检」。
+    """
+    c = (content or '').strip()
+    t = (text or '').strip()
+    body_reason = _body_clause_reason(c, t)
+    too_long = len(c) > SHORT_SENTENCE_MAX
+
+    if _is_title_numbered(number):
+        if too_long or body_reason:
+            reasons = ['带标题编号但没有标题格式（无标题样式、无大纲级别）']
+            if body_reason:
+                reasons.append('内容是正文：' + body_reason)
+            if too_long:
+                reasons.append(f'文本超过 {SHORT_SENTENCE_MAX} 字，不像典型标题')
+            reasons.append('说不准是标题还是正文，建议保持不动、人工确认')
+            return CATEGORY_SUSPECT, 'medium', reasons
+        return CATEGORY_MISSING, 'high', [
+            '当前不是标题格式，Word 大纲视图里看不到',
+            '多级编号，挂在标题编号链上',
+        ]
+
+    # 不带标题编号的分支：
+    #  · `2.`、`1）`、`（1）` 这类**列表编号**是正文枚举，即使文本很短也不是标题
+    #    候选（旧实现一律归正文条款，这里保持同样的保守口径，避免把
+    #    `4) 气体灭火系统` 当漏检、默认勾选转标题）；
+    #  · `1 概述` 这种**章节号**（无分隔符）仍是标题形态，短文本判漏检。
+    if body_reason or too_long or _is_list_marker_number(number):
+        reason = body_reason or (f'单级列表编号，正文枚举'
+                                 if _is_list_marker_number(number)
+                                 else f'没有标题编号，文本超过 {SHORT_SENTENCE_MAX} 字，按正文处理')
+        return CATEGORY_BODY, 'medium', [reason]
+    return CATEGORY_MISSING, 'high', ['当前不是标题格式，Word 大纲视图里看不到']
+
+
+# 纯数字多级编号（`6.2.6`、`5.1.11.2.2`），用于拆「父编号 + 末段序号」。
+_DOTTED_NUMBER_PATTERN = re.compile(r'^\s*(\d+(?:[.．]\d+)*)\s*$')
+
+
+def _number_sibling_key(number: str):
+    """把 `6.2.6` 拆成 `('6.2', 6)`：父编号 + 末段序号。拆不出返回 `(None, None)`。
+
+    为什么需要（用户 2026-11-11 实测反馈第二轮）：
+        `6.2.6 开标审查` 只有 4 个字、无句末标点，单看文本确实像标题，于是被判
+        「漏检」并默认勾选「转标题」。但它夹在 `6.2.1`~`6.2.11` 一整串开标条款
+        中间，前后各条都是整句条文（`6.2.5` 已判「疑似条款」）——同一父级下连续
+        编号的相邻条目属于同一组条款，不能因为其中一条恰好很短就单独当成标题。
+
+    只认纯数字编号：`（1）`、`第X章`、`附录A` 这类拆不出序号，一律不参与上下文
+    推断（宁可不动，也不能凭猜测改分类）。
+    """
+    # 与 `_number_depth()` 同口径：先去掉末尾的分隔标点（`6.2.6.` 也算 `6.2.6`）
+    raw = str(number or '').strip().rstrip(' \t.．、,，)）]】')
+    m = _DOTTED_NUMBER_PATTERN.match(raw)
+    if not m:
+        return None, None
+    parts = [p for p in re.split(r'[.．]', m.group(1)) if p != '']
+    if len(parts) < 2:   # 至少 `6.2` 才有「父编号 6 + 序号 2」；单级 `6` 不参与
+        return None, None
+    parent = '.'.join(parts[:-1])
+    try:
+        return parent, int(parts[-1])
+    except ValueError:
+        return None, None
+
+
+def _inherit_suspect_from_prev_sibling(items: List[Dict]) -> List[int]:
+    """同父级连续编号：上一条为疑似条款时，紧随其后的短条目也判疑似条款。
+
+    用户 2026-11-11 的规则原话：「同级别连续编号，上一条为疑似条款，当前也建议
+    判断成疑似条款」。落地为**只在同时满足下列条件时**改判，其余一概不动：
+
+        1. 当前条目原本是「漏检」（短、形态像标题、无正文特征）；
+        2. 当前带多级标题编号（`6.2.6`）；
+        3. 同一父编号（`6.2`）下**上一条**已收录候选是「疑似条款」；
+        4. 两者末段序号连续（`6` = `5` + 1）。
+
+    只做「漏检 → 疑似条款」单向改判：不碰正常标题/误套/正文条款，也不反向把
+    前面的短条目追认成疑似条款（用户没提，且反向推断没有「已确认的条文」作锚点）。
+
+    链式传递：改判后的条目会成为下一条的「上一条」，因此一整段连续的条款列表
+    只要开头有一条被确认为疑似条款，后面同样形态的短条目会跟着归入同类——这正是
+    「同组条款」的语义。
+
+    返回被改判的 index 列表（供测试与日志断言）。
+    """
+    last_by_parent: Dict[str, Dict] = {}
+    changed: List[int] = []
+    for it in items:
+        number = it.get('number') or ''
+        parent, seq = _number_sibling_key(number)
+        if parent is None:
+            continue
+        prev = last_by_parent.get(parent)
+        last_by_parent[parent] = it
+        if (it.get('category') != CATEGORY_MISSING
+                or not _is_title_numbered(number)
+                or prev is None
+                or prev.get('category') != CATEGORY_SUSPECT):
+            continue
+        prev_seq = _number_sibling_key(prev.get('number') or '')[1]
+        if prev_seq is None or seq != prev_seq + 1:
+            continue
+        it['category'] = CATEGORY_SUSPECT
+        it['suggestion'] = ACTION_KEEP
+        it['confidence'] = 'medium'
+        # 整组覆盖而不是追加：原「漏检」的依据（`当前不是标题格式…`）会让人误以为
+        # 这条仍需转标题，留着与最终建议矛盾。
+        it['reasons'] = [
+            '带标题编号但没有标题格式（无标题样式、无大纲级别）',
+            f'同一父级编号（{parent}）的上一条（{prev.get("number")}）是疑似条款',
+            '编号连续、同组条款，本条的短文本不单独按标题处理，建议保持不动、人工确认',
+        ]
+        changed.append(it['index'])
+    return changed
 
 
 class _AutoNumberingResolver:
@@ -563,33 +912,17 @@ class TitlePreprocessor:
 
         # 「是否为标题样式」在下面几个分支里会反复用到（样式分支 + 自动编号分支 +
         # 分组统计），缓存一次，避免同一段落重复解析 pPr/style。
-        # styleId → 标题级别：一次读完 styles.xml，替代逐段 `paragraph.style`
-        # （后者每次都要在 styles.xml 上跑 XPath，是本函数最大的耗时项）。
-        style_level_by_id: Dict[str, Optional[int]] = {}
-        try:
-            for _st in doc.styles.element.findall(qn('w:style')):
-                _nm = _st.find(qn('w:name'))
-                _nm_val = ((_nm.get(qn('w:val')) if _nm is not None else '') or '')
-                style_level_by_id[_st.get(qn('w:styleId')) or ''] = \
-                    HEADING_STYLE_LEVELS.get(_nm_val.lower())
-        except Exception:  # 样式表异常时退回逐段解析（下面 _is_heading_style 的兜底）
-            style_level_by_id = {}
-
-        heading_style_cache: Dict[int, bool] = {}
+        # [2026-11-11] 改用 _StyleIndex：除直接标题样式 / 显式大纲级别外，
+        # 还要认「编号级别链接的标题样式」（numbering.xml 的 w:lvl/w:pStyle）。
+        # 否则 `5.3.1 总体要求`（numId=2/ilvl=2 → JZ3，段落无 pStyle/outlineLvl）
+        # 在识别阶段就被当成普通正文，后续只能被判「漏检」。
+        _style_index = _StyleIndex(doc)
 
         def _style_level_of(para) -> Optional[int]:
-            sid = _paragraph_style_id(para)
-            if style_level_by_id:
-                return style_level_by_id.get(sid)
-            return TitlePreprocessor._get_heading_style_level(para)
+            return _style_index.effective_style_level(para)
 
         def _is_heading_style(idx: int, para) -> bool:
-            cached = heading_style_cache.get(idx)
-            if cached is None:
-                cached = (_style_level_of(para) is not None
-                          or TitlePreprocessor._get_outline_level(para) is not None)
-                heading_style_cache[idx] = cached
-            return cached
+            return _style_index.is_heading(para)
 
         # 同一自动编号组 (numId, ilvl) 内「标题样式 / 正文样式」各多少条。
         # 用于识别「正文枚举列表里个别行被误套标题样式」的情况（见下方排除判据）。
@@ -727,13 +1060,13 @@ class TitlePreprocessor:
         与旧 `detect_headings` 的区别不是"多识别几条"，而是"不再悄悄丢弃"：
         旧实现用一票否决（超长、句末标点、单级编号、组内少数派、含冒号）把这些
         段落直接扔掉，用户在界面上既看不到、也无法判断它们该不该是标题。
-        现在它们全部进结果，只是被归到「正文条款」或「误套」，默认不处理。
+        现在它们全部进结果，只是被归到「疑似条款」或「误套」，默认不处理。
 
         分类（category）：
             missing  漏检     应为标题，但当前既无标题样式也无大纲级别 → 建议转标题
             normal   正常标题 已有标题格式，文本也像标题               → 建议保持
             misuse   误套     是标题格式，但语义是正文                 → 建议降为正文
-            body     正文条款 带编号的正文长句                         → 建议不转标题
+            body     疑似条款 带编号、但语义是正文的条文               → 建议保持不动
 
         Args:
             docx_file: docx 路径或可读文件对象（io.BytesIO）。
@@ -848,9 +1181,9 @@ class TitlePreprocessor:
                 'content': content,
                 'detected_level': level,
                 'is_heading': index.is_heading(para),
-                'is_heading_style': index.level_of(para) is not None,
-                'outline_level': index.outline_level(para),
-                'style_name': index.name_of(para) or '无样式',
+                'is_heading_style': index.effective_style_level(para) is not None,
+                'outline_level': index.effective_outline_level(para),
+                'style_name': index.effective_name_of(para) or '无样式',
                 'style_description': index.description(para),
                 'body_style_hint': _body_hint(idx),
                 'group_heading_count': group.get('heading', 0),
@@ -873,12 +1206,17 @@ class TitlePreprocessor:
                 reasons.append('编号来自 Word 自动编号（正文里看不到）')
 
             if not item['is_heading']:
-                item['category'] = CATEGORY_MISSING
-                item['suggestion'] = ACTION_HEADING
-                item['confidence'] = 'high'
-                reasons.append('当前不是标题格式，Word 大纲视图里看不到')
-                if depth >= 2:
-                    reasons.append('多级编号，挂在标题编号链上')
+                # [2026-11-11] 第一阶段不能只按「有没有标题格式」一刀切：
+                # 识别阶段对三级以上编号放宽到 300 字、不排除冒号，大量条文
+                # （`1.1.1招标人：见投标须知前附表。`）也会进 heads。判据统一
+                # 收在 `_classify_non_heading()`：带标题编号的进「疑似条款」，
+                # 不带标题编号的正文进「正文条款」，剩下的才是真漏检。
+                cat, conf, why = _classify_non_heading(content, h['text'], number)
+                item['category'] = cat
+                item['suggestion'] = (ACTION_HEADING if cat == CATEGORY_MISSING
+                                      else ACTION_KEEP)
+                item['confidence'] = conf
+                reasons.extend(why)
             elif depth == 1 and ends_sentence:
                 # 已套标题样式 + 单级列表编号 + 整句结尾：标书里这类段落几乎都是
                 # 正文枚举（`1) 2) 3)` 要求列表），个别行被误设成了 Heading。
@@ -923,10 +1261,10 @@ class TitlePreprocessor:
                 texts[idx], auto_info.get(idx))
             if content and '\t' in content:
                 # 多列行（目录行、表格行）：`第一章  致投标人\t1`、`1.1 线路\t12`。
-                # 它们不是标题候选，也不该占「正文条款」的名额 —— 直接不收。
+                # 它们不是标题候选，也不该占「疑似条款」的名额 —— 直接不收。
                 continue
             is_h = index.is_heading(para)
-            level = (index.level_of(para)
+            level = (index.effective_style_level(para)
                      or (min(_number_depth(number), TitlePreprocessor.MAX_LEVEL)
                          if number else 1))
             item = _item(idx, number or '', content, display, level)
@@ -980,30 +1318,34 @@ class TitlePreprocessor:
                     item['suggestion'] = ACTION_KEEP
                     item['confidence'] = 'high'
                     item['reasons'] = ['已是标题格式']
-            elif depth >= 3 and len(text) <= 60 and '：' not in content \
-                    and not _looks_like_body(content):
+            elif depth >= 3 and len(content) <= SHORT_SENTENCE_MAX \
+                    and '：' not in content and not _looks_like_body(content):
                 # 深级编号 + 标题式短文本：第一阶段因父级链/序列判据没收进来，
                 # 但形态就是小节标题（如孤立出现的 `5.3.4. 系统主要技术指标`）。
+                # [2026-11-11 第二轮] 长度阈值由 60 收敛到 SHORT_SENTENCE_MAX(45)，
+                # 与「疑似条款」的判据衔接：超过 45 字的无特征长文本归疑似条款。
                 item['category'] = CATEGORY_MISSING
                 item['suggestion'] = ACTION_HEADING
                 item['confidence'] = 'medium'
                 item['reasons'] = ['深级编号 + 标题式短文本，疑似漏检']
             else:
-                item['category'] = CATEGORY_BODY
-                item['suggestion'] = ACTION_KEEP
-                item['confidence'] = 'medium'
-                if '：' in content or ':' in content:
-                    reasons.append('含冒号，多为定义/缩略语列表')
-                elif content[-1:] in '。；':
-                    reasons.append('句子结尾的正文，不是标题')
-                elif depth == 1:
-                    reasons.append('单级列表编号，正文枚举')
-                else:
-                    reasons.append('带编号的正文长句')
-                if len(text) > 300:
-                    reasons.append('超过 300 字')
-                item['reasons'] = reasons
+                # 与第一阶段同一口径（`_classify_non_heading`）：
+                # 带标题编号的长文本/条文 → 疑似条款；不带标题编号的 → 正文条款。
+                cat, conf, why = _classify_non_heading(content, text, number)
+                item['category'] = cat
+                item['suggestion'] = (ACTION_HEADING if cat == CATEGORY_MISSING
+                                      else ACTION_KEEP)
+                # 第二阶段是「第一阶段没收进来」的补判，置信度比第一阶段保守一档。
+                item['confidence'] = 'medium' if cat == CATEGORY_MISSING else conf
+                item['reasons'] = why
             items.append(item)
+
+        items.sort(key=lambda x: x['index'])
+        # 上下文补判（2026-11-11 第二轮，用户实测反馈）：必须在**排序后**做，
+        # 「上一条」指文档顺序上的上一条同父级编号候选，不是判定过程中的上一条。
+        # 放在分类完成之后而不是塞进 `_classify_non_heading()`：那个函数是逐条
+        # 纯函数、被两个阶段共用，加状态会让两阶段口径重新分叉。
+        _inherit_suspect_from_prev_sibling(items)
 
         for it in items:
             it['category_label'] = CATEGORY_LABELS[it['category']]
@@ -1011,7 +1353,6 @@ class TitlePreprocessor:
             it.setdefault('reasons', [])
             it['reason_text'] = '；'.join(it['reasons'])
 
-        items.sort(key=lambda x: x['index'])
         if progress_callback:
             progress_callback(100, 100)
         return items
@@ -1032,9 +1373,17 @@ class TitlePreprocessor:
         style_name = ''
         if paragraph.style is not None and paragraph.style.name:
             style_name = paragraph.style.name
-        style_level = TitlePreprocessor._get_heading_style_level(paragraph)
-        outline_level = TitlePreprocessor._get_outline_level(paragraph)
-        display_name = style_name or '无样式'
+        # [2026-11-11] 与分类引擎同口径：把「编号级别链接样式」也算作标题格式，
+        # 否则同一段落在分类列表里是「正常标题」、在这里却显示「无样式」。
+        try:
+            index = _StyleIndex(paragraph.part.document)
+            style_level = index.effective_style_level(paragraph)
+            outline_level = index.effective_outline_level(paragraph)
+            display_name = index.effective_name_of(paragraph) or style_name or '无样式'
+        except Exception:
+            style_level = TitlePreprocessor._get_heading_style_level(paragraph)
+            outline_level = TitlePreprocessor._get_outline_level(paragraph)
+            display_name = style_name or '无样式'
         outline_text = (f'大纲级别 {outline_level}'
                         if outline_level is not None else '无大纲级别')
         return {

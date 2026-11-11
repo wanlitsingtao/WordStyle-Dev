@@ -5,7 +5,7 @@
 2026-11-10 合并：原「源文档标题查漏」只读检查 + 原「源文档标题预处理」批量转标题。
 两者共用同一套识别引擎、重叠太大，合并为一个入口：
 
-    一次扫描 → 全部候选分类（漏检 / 正常标题 / 误套 / 正文条款）
+    一次扫描 → 全部候选分类（漏检 / 正常标题 / 误套 / 疑似条款 / 正文条款）
              → 用户逐条决定（转标题 / 保持 / 降为正文）
 
 设计原则（用户 2026-11-10 明确）：
@@ -25,7 +25,7 @@ import streamlit as st
 from title_preprocessor import (
     ACTION_DEMOTE, ACTION_HEADING, ACTION_KEEP,
     CATEGORY_BODY, CATEGORY_MISUSE, CATEGORY_MISSING, CATEGORY_NORMAL,
-    CATEGORY_ORDER, TitlePreprocessor,
+    CATEGORY_ORDER, CATEGORY_SUSPECT, TitlePreprocessor,
 )
 
 logger = logging.getLogger('WordStyle')
@@ -66,6 +66,7 @@ _CATEGORY_COLORS = {
     CATEGORY_MISSING: ('#fff7ed', '#c2410c'),
     CATEGORY_NORMAL: ('#ecfdf5', '#047857'),
     CATEGORY_MISUSE: ('#fef2f2', '#b91c1c'),
+    CATEGORY_SUSPECT: ('#fefce8', '#a16207'),
     CATEGORY_BODY: ('#f1f5f9', '#475569'),
 }
 
@@ -77,7 +78,7 @@ def _default_action(item) -> str:
     """按引擎建议给出默认处理方式。
 
     漏检 → 转标题（用户要求"尽量多识别"）；误套 → 降为正文；
-    正常标题与正文条款 → 保持不动（不动就是最安全的）。
+    正常标题 / 疑似条款 / 正文条款 → 保持不动（不动就是最安全的）。
     """
     if item['category'] == CATEGORY_MISSING:
         return f"转为 H{item['detected_level']}"
@@ -87,11 +88,13 @@ def _default_action(item) -> str:
 
 
 def _default_selected(item) -> bool:
-    """默认是否勾选：只勾"引擎认为要动"的漏检条目。
+    """默认是否勾选：勾"引擎认为要动"的条目 —— 漏检与误套。
 
-    误套默认不勾（用户 2026-11-10：按保守做法），需要时用「按建议预选」一键勾上。
+    误套默认勾选（用户 2026-11-11：默认按建议处理，漏检转标题、误套降为正文）；
+    之前误套默认不勾（2026-11-10 的保守做法），需要用「快速选择」手动放开。
+    疑似条款（带标题编号、说不准是标题还是正文）与正文条款仍从不默认勾选。
     """
-    return item['category'] == CATEGORY_MISSING
+    return item['category'] in (CATEGORY_MISSING, CATEGORY_MISUSE)
 
 
 def _action_of(label: str) -> str:
@@ -310,9 +313,14 @@ def render_title_preprocess():
     """
     st.markdown(
         "一次扫描把文档里的标题候选**全部分类**，再由你决定怎么处理："
-        "「漏检」是应为标题却没有标题格式的条目；「正常标题」是已经带 Heading / "
+        "「漏检」是应为标题却没有标题格式的短条目；「正常标题」是已经带 Heading / "
         "大纲级别的条目；「误套」是套了标题样式但语义是正文的段落；"
-        "「正文条款」是带编号的正文长句（默认折叠，避免干扰）。"
+        "「疑似条款」是**带标题编号**（多级，如 5.1.11.2.2）、却没有标题样式也没有"
+        "大纲级别、读起来又像条文的条目——编号形态像标题，所以不能埋进正文条款，"
+        "可单独筛选出来逐条确认（同父级编号连续、上一条已是疑似条款时，紧跟的短条目"
+        "也归这一类，按同组条款处理）；"
+        "「正文条款」是**不带标题编号**（单级枚举 1)、无编号）的正文长句。"
+        "两者的区别就是**有没有标题编号**；建议都是**保持不动**。"
         "\n\n**处理方式**：转标题（套 Heading + 关掉 Word 自动编号 + 编号写进正文）、"
         "降为正文（换回正文样式 + 删大纲级别，保留原编号）、保持不动。"
     )
@@ -374,6 +382,7 @@ def render_title_preprocess():
         st.session_state["to_hide_long"] = False
         st.session_state["to_max_chars"] = DEFAULT_MAX_TITLE_CHARS
         st.session_state["to_show_body"] = False
+        st.session_state["to_hide_suspect"] = False
         st.session_state["to_quick"] = False
         st.session_state["to_page"] = 0
         st.session_state["to_page_size"] = DEFAULT_PAGE_SIZE
@@ -398,12 +407,13 @@ def render_title_preprocess():
         st.session_state["to_levels"] = list(level_options)
 
     _render_summary(items)
-    selected_levels, only_abnormal, hide_long, max_chars, show_body = _render_filters(
-        items, level_options)
+    sel = _render_filters(items, level_options)
+    selected_levels, only_abnormal, hide_long, max_chars = sel[:4]
+    show_body, hide_suspect = sel[4], sel[5]
 
     # 计算当前筛选结果（分页前）
     rows = _filter_items(items, selected_levels, only_abnormal, hide_long,
-                         max_chars, show_body)
+                         max_chars, show_body, hide_suspect)
     total_rows = len(rows)
 
     st.markdown("---")
@@ -412,7 +422,10 @@ def render_title_preprocess():
     _render_task_progress()
 
     if not rows:
-        st.info("当前筛选条件下没有条目。可调整上方筛选或勾选「显示正文条款」。")
+        if hide_suspect:
+            st.info("当前筛选条件下没有条目。可调整上方筛选，或取消勾选过滤项。")
+        else:
+            st.info("当前筛选条件下没有条目。可调整上方筛选，或勾选「显示正文条款」。")
         return
 
     # PAGE_ALL（0）= 一页显示全部：实际条数取当前筛选后的总行数。
@@ -440,16 +453,17 @@ def render_title_preprocess():
 
 
 def _render_summary(items):
-    """四张计数卡：漏检 / 正常 / 误套 / 正文条款。"""
+    """五张计数卡：漏检 / 正常 / 误套 / 疑似条款 / 正文条款。"""
     counts = {c: 0 for c in CATEGORY_ORDER}
     for it in items:
         counts[it['category']] = counts.get(it['category'], 0) + 1
 
-    cols = st.columns(4)
+    cols = st.columns(5)
     specs = [
         (CATEGORY_MISSING, '漏检（应为标题）'),
         (CATEGORY_NORMAL, '正常标题'),
         (CATEGORY_MISUSE, '误套（建议降为正文）'),
+        (CATEGORY_SUSPECT, '疑似条款（带标题编号）'),
         (CATEGORY_BODY, '正文条款（不转标题）'),
     ]
     for col, (cat, label) in zip(cols, specs):
@@ -458,24 +472,27 @@ def _render_summary(items):
 
 
 def _render_filters(items, level_options):
-    """三行筛选：格式异常 / 级别多选 / 长度上限 / 是否显示正文条款。"""
+    """筛选：格式异常 / 标题级别 / 长度上限 / 显示正文条款 / 不显示疑似条款。"""
     col_abn, col_level = st.columns([1.1, 2.9], vertical_alignment="center")
     with col_abn:
         only_abnormal = st.checkbox(
             "只看格式异常的条目", key="to_only_abnormal",
-            help="格式异常 = 没有标题样式、也没有大纲级别（即「漏检」和「正文条款」）。")
+            help="格式异常 = 除「正常标题」以外的全部条目："
+                 "「漏检」（该是标题却没有标题格式）、"
+                 "「误套」（有标题格式但内容是正文）、"
+                 "「疑似条款」「正文条款」（都没有标题格式）。")
     with col_level:
         col_lab, col_ms = st.columns([1.2, 2.8], vertical_alignment="top")
         with col_lab:
             st.markdown(
                 "<div style='height:2.5rem;display:flex;align-items:center;"
                 "text-align:left;font-size:1rem;white-space:nowrap;'>"
-                "只看所选标题级别（可多选）</div>",
+                "显示标题级别（可多选）</div>",
                 unsafe_allow_html=True,
             )
         with col_ms:
             picked = st.multiselect(
-                "只看所选标题级别（可多选）",
+                "显示标题级别（可多选）",
                 options=level_options,
                 # 不传 default：默认值已写进 st.session_state["to_levels"]，
                 # 两处同时给会触发 Streamlit 的 "default value but also set via
@@ -512,26 +529,61 @@ def _render_filters(items, level_options):
             )
 
     body_count = sum(1 for it in items if it['category'] == CATEGORY_BODY)
-    if body_count:
+    suspect_count = sum(1 for it in items if it['category'] == CATEGORY_SUSPECT)
+    # 两个开关**同一行**（用户 2026-11-11 要求）：它们是一对互斥视角的入口，
+    # 分开两行会让人以为要分别设置。条数为 0 时也渲染（禁用），保持布局稳定、
+    # 用户始终能看到功能入口。
+    col_body, col_suspect = st.columns(2, vertical_alignment="center")
+    with col_body:
         show_body = st.checkbox(
             f"显示「正文条款」条目（{body_count} 条，默认折叠）",
             key="to_show_body",
-            help="这些是带编号的正文长句（如 1) 2) 3) 的要求列表）。"
+            disabled=body_count == 0,
+            help="正文条款 = **不带标题编号**的正文长句（单级枚举 1)、"
+                 "或无编号的整句），有明确正文特征（冒号/句末标点/整句/超 300 字）。"
                  "识别它们是为了不漏，但转成标题会把整段正文抬进目录，默认不显示。",
         )
-    else:
-        show_body = False
+    with col_suspect:
+        hide_suspect = st.checkbox(
+            f"不显示疑似条款（{suspect_count} 条）",
+            key="to_hide_suspect",
+            help="疑似条款 = **带标题编号**（多级，如 5.1.11.2.2）、"
+                 "但没有标题样式也没有大纲级别、读起来像条文的条目——"
+                 "编号形态像标题，说不准是标题还是正文。"
+                 "同一父级编号连续、上一条为疑似条款时，紧跟的短条目也算这一类。"
+                 "**默认显示**（先让你看到全貌）；勾上后从列表里过滤掉这一类，"
+                 "取消勾选即恢复显示。",
+        )
 
-    return set(picked or []), only_abnormal, hide_long, int(max_chars), show_body
+    return (set(picked or []), only_abnormal, hide_long, int(max_chars),
+            show_body, hide_suspect)
 
 
-def _filter_items(items, selected_levels, only_abnormal, hide_long, max_chars, show_body):
-    """按筛选条件过滤，返回保持文档顺序的列表。"""
+def _filter_items(items, selected_levels, only_abnormal, hide_long, max_chars,
+                  show_body, hide_suspect):
+    """按筛选条件过滤，返回保持文档顺序的列表。
+
+    类别是**并集**关系（用户 2026-11-11 明确）：
+      · 默认五类全部显示，先给用户全貌；
+      · 「显示正文条款」不勾 → 过滤掉正文条款；
+      · 「不显示疑似条款」勾上 → 过滤掉疑似条款；
+      · 两个开关互不排斥，也与其它类别无关，不存在「只看某一类」。
+    级别、长度是**交集**过滤，作用在类别结果之上。
+
+    「只看格式异常」= 保留 `category != CATEGORY_NORMAL` 的全部条目，
+    因此**包含误套**（用户 2026-11-11 明确）；旧实现按 `is_heading` 判断，
+    把误套一起滤掉了。
+    """
     rows = []
     for it in items:
-        if it['category'] == CATEGORY_BODY and not show_body:
+        if hide_suspect and it['category'] == CATEGORY_SUSPECT:
             continue
-        if only_abnormal and it['is_heading']:
+        if not show_body and it['category'] == CATEGORY_BODY:
+            continue
+        if only_abnormal and it['category'] == CATEGORY_NORMAL:
+            # 「格式异常」= 除正常标题外的全部（用户 2026-11-11：**必须包含误套**）。
+            # 旧实现按 `is_heading` 一刀切，把「有标题格式但内容是正文」的误套
+            # 当成"格式没问题"过滤掉了 —— 恰好漏掉最该修的那一类。
             continue
         if ("H%d" % it['detected_level']) not in selected_levels:
             continue
@@ -560,7 +612,7 @@ def _set_row_state(idx, suffix, checked=None, action=None):
 def _preset_checked(item, include_misuse: bool) -> bool:
     """「快速选择」的勾选判据（纯函数，便于离线单测）。
 
-    漏检一定勾；误套只在开关打开时勾；正常标题与正文条款从不自动勾。
+    漏检一定勾；误套只在开关打开时勾；正常标题 / 疑似条款 / 正文条款从不自动勾。
     不再按 confidence 二次过滤 —— 用户 2026-11-10 反馈"勾了快速选择，误套还是没勾"。
     """
     if item['category'] == CATEGORY_MISSING:
@@ -581,7 +633,7 @@ def _apply_preset(items, suffix, include_misuse: bool):
     """按引擎建议重置勾选与动作。
 
     对应「快速选择」复选框：漏检=勾选+转标题；误套=不勾+降为正文
-    （勾上"含误套"时改为勾选）；正常标题/正文条款=不勾+保持。
+    （勾上"含误套"时改为勾选）；正常标题/疑似条款/正文条款=不勾+保持。
     """
     _bump_epoch()
     for it in items:
@@ -634,11 +686,12 @@ def _render_toolbar(items, rows, sig, temp_path):
         _apply_preset(items, suffix, bool(st.session_state.get("to_quick")))
 
     st.checkbox(
-        "⚡ 快速选择：一键按建议预选（漏检 → 勾选并转标题；误套 → 勾选并降为正文）",
+        "⚡ 快速选择“误套”（勾选并降为正文）",
         key="to_quick",
         on_change=_on_quick_change,
         help="勾上：把「漏检」和「误套」全部勾上，处理方式也用引擎建议值（转标题/降为正文），"
-             "正常标题与正文条款保持不动。取消：恢复保守默认，只勾漏检，误套需要你逐条确认。"
+             "正常标题 / 疑似条款 / 正文条款保持不动。"
+             "取消：恢复保守默认，只勾漏检，误套需要你逐条确认。"
              "这个开关只影响勾选状态，不改变上方筛选条件。",
     )
 
