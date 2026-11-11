@@ -70,6 +70,24 @@ _CATEGORY_COLORS = {
     CATEGORY_BODY: ('#f1f5f9', '#475569'),
 }
 
+# 五张计数卡的数字样式（用户 2026-11-11：字体黑色、加粗）。
+# - st.metric 没有颜色/字重参数，只能走 CSS；
+# - 用 st.container(key='tp_summary') 生成的 .st-key-* 限定作用域，
+#   避免把侧边栏「剩余额度」等其它 st.metric 一起改掉；
+# - 主题默认把 metric 数值染成强调色（深蓝），这里显式改回纯黑并加粗。
+_SUMMARY_CSS = (
+    "<style>\n"
+    '    .st-key-tp_summary [data-testid="stMetricValue"] {\n'
+    "        color: #000000 !important;\n"
+    "        font-weight: 800 !important;\n"
+    "    }\n"
+    '    .st-key-tp_summary [data-testid="stMetricValue"] * {\n'
+    "        color: inherit !important;\n"
+    "        font-weight: inherit !important;\n"
+    "    }\n"
+    "</style>"
+)
+
 # 处理方式下拉项：顺序固定，索引稳定（会话里存的是字符串本身，不是索引）
 _ACTION_OPTIONS = ['保持不动'] + [f'转为 H{i}' for i in range(1, 10)] + ['降为正文']
 
@@ -458,7 +476,6 @@ def _render_summary(items):
     for it in items:
         counts[it['category']] = counts.get(it['category'], 0) + 1
 
-    cols = st.columns(5)
     specs = [
         (CATEGORY_MISSING, '漏检（应为标题）'),
         (CATEGORY_NORMAL, '正常标题'),
@@ -466,9 +483,12 @@ def _render_summary(items):
         (CATEGORY_SUSPECT, '疑似条款（带标题编号）'),
         (CATEGORY_BODY, '正文条款（不转标题）'),
     ]
-    for col, (cat, label) in zip(cols, specs):
-        with col:
-            st.metric(label, counts.get(cat, 0))
+    st.markdown(_SUMMARY_CSS, unsafe_allow_html=True)
+    with st.container(key='tp_summary'):
+        cols = st.columns(5)
+        for col, (cat, label) in zip(cols, specs):
+            with col:
+                st.metric(label, counts.get(cat, 0))
 
 
 def _render_filters(items, level_options):
