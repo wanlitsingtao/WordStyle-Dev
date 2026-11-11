@@ -383,7 +383,7 @@ def render_title_preprocess():
         st.session_state["to_max_chars"] = DEFAULT_MAX_TITLE_CHARS
         st.session_state["to_show_body"] = False
         st.session_state["to_hide_suspect"] = False
-        st.session_state["to_quick"] = False
+        st.session_state["to_quick"] = True   # 误套默认勾选，开关同步为"已勾"
         st.session_state["to_page"] = 0
         st.session_state["to_page_size"] = DEFAULT_PAGE_SIZE
         st.session_state["to_sel_epoch"] = 0
@@ -610,9 +610,9 @@ def _set_row_state(idx, suffix, checked=None, action=None):
 
 
 def _preset_checked(item, include_misuse: bool) -> bool:
-    """「快速选择」的勾选判据（纯函数，便于离线单测）。
+    """「恢复默认勾选」/「快速选择」的勾选判据（纯函数，便于离线单测）。
 
-    漏检一定勾；误套只在开关打开时勾；正常标题 / 疑似条款 / 正文条款从不自动勾。
+    漏检一定勾；误套由 `include_misuse` 决定；正常标题 / 疑似条款 / 正文条款从不自动勾。
     不再按 confidence 二次过滤 —— 用户 2026-11-10 反馈"勾了快速选择，误套还是没勾"。
     """
     if item['category'] == CATEGORY_MISSING:
@@ -630,16 +630,34 @@ def _bump_epoch():
 
 
 def _apply_preset(items, suffix, include_misuse: bool):
-    """按引擎建议重置勾选与动作。
+    """按引擎建议重置**全部**条目的勾选与动作（「恢复默认勾选」按钮用）。
 
-    对应「快速选择」复选框：漏检=勾选+转标题；误套=不勾+降为正文
-    （勾上"含误套"时改为勾选）；正常标题/疑似条款/正文条款=不勾+保持。
+    漏检=勾选+转标题；误套=勾选+降为正文（`include_misuse=False` 时不勾）；
+    正常标题/疑似条款/正文条款=不勾+保持。
     """
     _bump_epoch()
     for it in items:
         _set_row_state(it['index'], suffix,
                        checked=_preset_checked(it, include_misuse),
                        action=_default_action(it))
+
+
+def _apply_misuse_toggle(items, suffix, on: bool):
+    """「快速选择“误套”」开关：**只**改误套条目，其他类别一条都不碰。
+
+    为什么单独一个函数（用户 2026-11-11 明确）：这个复选框只控制误套的选择，
+    不能顺带把漏检/正常标题的勾选或处理方式重置掉 —— 用户可能已经逐条改过
+    漏检的目标级别，被一次误套开关打回默认值是绝对不能接受的。
+
+    勾上 → 误套全部勾选，处理方式置为「降为正文」；
+    取消 → 误套全部取消勾选（处理方式保留，重新勾上仍是降为正文）。
+    """
+    _bump_epoch()
+    for it in items:
+        if it['category'] != CATEGORY_MISUSE:
+            continue
+        _set_row_state(it['index'], suffix, checked=on,
+                       action='降为正文' if on else None)
 
 
 def _render_toolbar(items, rows, sig, temp_path):
@@ -676,23 +694,25 @@ def _render_toolbar(items, rows, sig, temp_path):
                 _set_row_state(idx, suffix, checked=not cur)
     with col_rest:
         if st.button("恢复默认勾选", key="to_reset_sel", use_container_width=True):
-            st.session_state["to_quick"] = False
-            _apply_preset(items, suffix, False)
+            # 默认已含误套（2026-11-11），开关同步置勾选状态，避免"显示未勾、实际已勾"。
+            st.session_state["to_quick"] = True
+            _apply_preset(items, suffix, True)
             st.rerun(scope="fragment")
 
-    # 「快速选择」复选框：勾上就按建议一次性预选（用户 2026-11-10 要求）。
-    # 它不是筛选器，只做"一键勾选"：勾上=按建议预选，取消=回到保守默认（只勾漏检）。
+    # 「快速选择“误套”」复选框：**只**控制误套条目的勾选（用户 2026-11-11 明确），
+    # 不动漏检、正常标题、疑似条款、正文条款的勾选与处理方式。
     def _on_quick_change():
-        _apply_preset(items, suffix, bool(st.session_state.get("to_quick")))
+        _apply_misuse_toggle(items, suffix, bool(st.session_state.get("to_quick")))
 
     st.checkbox(
         "⚡ 快速选择“误套”（勾选并降为正文）",
         key="to_quick",
         on_change=_on_quick_change,
-        help="勾上：把「漏检」和「误套」全部勾上，处理方式也用引擎建议值（转标题/降为正文），"
-             "正常标题 / 疑似条款 / 正文条款保持不动。"
-             "取消：恢复保守默认，只勾漏检，误套需要你逐条确认。"
-             "这个开关只影响勾选状态，不改变上方筛选条件。",
+        help="只控制「误套」这一类：勾上 = 全部误套勾选、处理方式设为「降为正文」"
+             "（默认就勾上，与列表里误套默认选中一致）；"
+             "取消 = 取消全部误套的勾选，便于逐条确认。"
+             "漏检的勾选与目标级别、正常标题 / 疑似条款 / 正文条款一概不受影响；"
+             "也不改变上方筛选条件。",
     )
 
     if not do_process:

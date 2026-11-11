@@ -5391,3 +5391,33 @@ stdout 上既没有 `OK` 也没有 `FAIL: xxx` → 阴性对照脚本识别不�
 **变更人员**: AI Assistant
 **涉及文件**: `components/title_preprocess.py`、`temp/test_title_organize.py`、`docs/01-业务需求文档.md`、`docs/02-系统设计文档.md`、`docs/03-Bug修复记录文档.md`
 **部署状态**: 未提交，由用户手动 commit/push
+
+
+## 2026-11-11（交互调整）误套默认勾选 + 「快速选择“误套”」只控制误套
+
+### 需求
+
+用户 2026-11-11：「误套的默认在列表中选中」；随后补充：既然误套已默认选中，
+「快速选择“误套”」复选框也应是默认勾选状态，并且**这个复选框只控制误套条目，
+不控制漏检**。
+
+### 改动
+
+| 文件 | 改动 |
+|---|---|
+| `components/title_preprocess.py` | `_default_selected()` 改为 `category in (MISSING, MISUSE)`（误套默认勾选、默认动作仍是「降为正文」） |
+| 同上 | 新增 `_apply_misuse_toggle(items, suffix, on)`：**只**遍历 `CATEGORY_MISUSE`，勾上置 `checked=True + action=降为正文`，取消置 `checked=False`；其他类别一条都不碰 |
+| 同上 | 复选框 `on_change` 改调 `_apply_misuse_toggle()`（不再调 `_apply_preset()`，后者会重置全部条目、把用户改过的漏检目标级别打回默认）；help 文案改为「只控制误套」 |
+| 同上 | 换文档初始化 `to_quick = True`（开关显示与列表状态一致）；「恢复默认勾选」改为 `_apply_preset(items, suffix, True)` + `to_quick=True`，与新的默认口径对齐 |
+| `temp/test_title_organize.py` | 「误套默认不勾」断言改为「默认勾选」；`_preset_checked` 断言改为「恢复默认勾选口径」；新增误套开关 4 条行为断言（勾上只影响误套、不动漏检/正常/疑似；取消只取消误套） |
+
+### 验证
+
+- `temp/test_title_organize.py`：**85/85** 通过。
+- 深圳地铁 8803 段：默认勾选条数 = 漏检 34 + 误套 2 = **36 条**（疑似条款 646、正文条款 192 仍不勾）。
+- 执行口径不变：只处理「已勾选 且 处理方式 ≠ 保持不动」的条目；未勾选或「保持不动」一律原样不动。
+
+**变更时间**: 2026-11-11
+**变更人员**: AI Assistant
+**涉及文件**: `components/title_preprocess.py`、`temp/test_title_organize.py`、`docs/01-业务需求文档.md`、`docs/02-系统设计文档.md`、`docs/03-Bug修复记录文档.md`
+**部署状态**: 未提交，由用户手动 commit/push
