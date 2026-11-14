@@ -4,8 +4,8 @@
 
 四个配置区（自上而下）：
 区域 1: 标题样式映射（统一配置，不分原文/应答句）+ 末尾「清除第X章/第X节字样」
-区域 2: 应答句配置 + 末尾「插入提示语」「进行祈使语气转换」（后两者仅在本区，
-        且插入提示语仅「原文+应答句+应答原文」模式下可操作）
+区域 2: 应答句配置 + 末尾「插入原文引用提示语」「进行祈使语气转换」（后两者仅在本区，
+        且插入原文引用提示语仅「原文+应答句+应答原文」模式下可操作）
         [2026-10-11] 原「原文目标样式 / 应答原文目标样式」两个下拉已删除：
         copy_chapter 模式下两份副本样式完全由第 3 区双列决定。
 区域 3: 样式映射（正文+列表段落，根据应答模式动态切换单列/双列）
@@ -17,7 +17,7 @@
 区域 4: 表格/图片/列表兜底配置（支持双列）
 
 功能：
-- 按文件分别存储映射配置（含插入提示语 / 祈使语气转换，均为文件级）
+- 按文件分别存储映射配置（含插入原文引用提示语 / 祈使语气转换，均为文件级）
 - 支持设为默认（持久化到用户数据）
 - 支持恢复默认
 - 双列模式联动
@@ -341,7 +341,7 @@ def show_style_mapping_dialog():
         if '_default_remove_chapter_label' in st.session_state.file_style_mappings
         else default_style_map.get('_remove_chapter_label', False)
     )
-    # [2026-10-10] 插入提示语 / 祈使语气转换 改为文件级配置（原在主页面全局配置区）。
+    # [2026-10-10] 插入原文引用提示语 / 祈使语气转换 改为文件级配置（原在主页面全局配置区）。
     # 默认值来源：_default_hint_config（新）→ _default_hint_settings（旧版遗留键）→ 内置默认。
     default_hint_config = (
         st.session_state.file_style_mappings.get('_default_hint_config')
@@ -473,7 +473,7 @@ def show_style_mapping_dialog():
     )
 
     # ====================================================================
-    # Step 2: 应答句配置（完全参照桌面版）+ 插入提示语 + 祈使语气转换
+    # Step 2: 应答句配置（完全参照桌面版）+ 插入原文引用提示语 + 祈使语气转换
     # [2026-10-10] 由第 4 区改为第 2 区，位于标题样式映射之后，作为后续样式映射和兜底配置的前提。
     # ====================================================================
     st.markdown("---")
@@ -497,7 +497,7 @@ def show_style_mapping_dialog():
     #   3) 「应答句样式 / 插入模式」两个 label 与两个下拉框**并到同一行**四列，
     #      原先 label 压在下拉框上方，两栏各占一行高度，视觉上是两个方块。
     #      下拉框自身 label 置 collapsed，改用前置 markdown 作为行内 label
-    #      （与下方「插入提示语」区的写法保持一致）。
+    #      （与下方「插入原文引用提示语」区的写法保持一致）。
     do_answer = st.checkbox("插入应答句", value=do_answer_val,
                             help="在章节前/后或段落前/后插入应答句",
                             key=f"ans_do_answer_{selected_file.name}")
@@ -532,11 +532,11 @@ def show_style_mapping_dialog():
     is_dual = (do_answer and answer_mode == 'copy_chapter')
 
     # --------------------------------------------------------------------
-    # 插入提示语（原主页面「转换配置」区，2026-10-10 搬入，改为文件级）
+    # 插入原文引用提示语（原主页面「转换配置」区，2026-10-10 搬入，改为文件级）
     # 仅「原文+应答句+应答原文」模式（copy_chapter）下可操作，否则置灰。
     # --------------------------------------------------------------------
     st.markdown("---")
-    st.markdown("**插入提示语**")
+    st.markdown("**插入原文引用提示语**")
 
     hint_enabled = is_dual
     hint_cfg = current_file_mapping.get('_hint_config') or default_hint_config or {}
@@ -549,11 +549,11 @@ def show_style_mapping_dialog():
     hint_image_val = st.session_state.get(f"hint_image_{fname}") or hint_cfg.get('hint_image_path') or None
 
     st.checkbox(
-        "插入提示语",
+        "插入原文引用提示语",
         value=do_hint_val,
         key=f"hint_enable_{fname}",
         disabled=not hint_enabled,
-        help="在每个章节标题后插入提示语（如“招标文件原文”）。"
+        help="在每个章节标题后插入原文引用提示语（如“招标文件原文”）。"
              "仅当应答句插入模式为「原文+应答句+应答原文」时生效。",
     )
     _hint_on = bool(st.session_state.get(f"hint_enable_{fname}", do_hint_val))
@@ -567,7 +567,11 @@ def show_style_mapping_dialog():
         with lbl[1]:
             st.markdown("**提示语样式**")
         with lbl[2]:
-            st.markdown("**提示语文本**" if hint_type_val == "text" else "**上传提示语图片**")
+            # ⚠️ 必须用控件的**实时**值（session_state 里的 radio 当前选择），
+            # 不能用 hint_type_val（打开对话框时的已保存配置）——
+            # 否则用户切换「文本/图片」后，本行的 label 仍停在打开时的类型。
+            _hint_type_live = st.session_state.get(f"hint_type_{fname}", hint_type_val)
+            st.markdown("**提示语文本**" if _hint_type_live == "text" else "**上传提示语图片**")
         with lbl[3]:
             st.markdown("&nbsp;", unsafe_allow_html=True)
         with lbl[4]:
@@ -989,7 +993,7 @@ def show_style_mapping_dialog():
     #    未列出的源样式（如老配置、Step 1 之外的标题样式）转换时按"清理"处理，行为不变。
     updated_mapping['_clean_numbering'] = dict(clean_numbering)
 
-    # 7. 保存「插入提示语」配置（文件级；原主页面全局配置，2026-10-10 搬入）
+    # 7. 保存「插入原文引用提示语」配置（文件级；原主页面全局配置，2026-10-10 搬入）
     hint_config_new = {
         'do_hint': bool(st.session_state.get(f"hint_enable_{fname}", do_hint_val)),
         'hint_type': hint_type,
@@ -1036,7 +1040,7 @@ def show_style_mapping_dialog():
             for _src in heading_styles:
                 st.session_state.pop(_clean_key(_src), None)
             st.session_state.pop(f"clean_numbering_all_{fname}", None)
-            # 「插入提示语 / 祈使语气转换」的控件状态一并复位（否则会沿用上一次的值）
+            # 「插入原文引用提示语 / 祈使语气转换」的控件状态一并复位（否则会沿用上一次的值）
             for _k in (f"mood_{fname}", f"hint_enable_{fname}", f"hint_type_{fname}",
                        f"hint_style_{fname}", f"hint_text_{fname}", f"hint_image_{fname}"):
                 st.session_state.pop(_k, None)
@@ -1069,7 +1073,7 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings['_default_remove_chapter_label'] = remove_chapter_label
             # ★ 标题编号清理开关也进默认集（新文件默认全勾，这里记住用户改过的那些）
             st.session_state.file_style_mappings['_default_clean_numbering'] = dict(clean_numbering)
-            # ★ 插入提示语 / 祈使语气转换也进默认集（2026-10-10 改为文件级）
+            # ★ 插入原文引用提示语 / 祈使语气转换也进默认集（2026-10-10 改为文件级）
             st.session_state.file_style_mappings['_default_hint_config'] = dict(hint_config_new)
             st.session_state.file_style_mappings['_default_mood_config'] = dict(updated_mapping['_mood_config'])
             # ★ 「不配置表格样式 / 不配置图片样式」也进默认集（2026-10-11 文件级）

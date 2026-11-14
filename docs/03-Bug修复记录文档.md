@@ -2,6 +2,44 @@
 
 ## Bug 修复记录
 
+### Bug #017: 提示语表头 label 不随「文本/图片」类型切换
+
+**日期**: 2026-11-14  
+**严重级别**: 🟡 中（界面文案与实际控件不符，误导配置）  
+**影响范围**: `components/dialogs/style_mapping.py`「插入提示语」区表头  
+**发现者**: 用户报告（附截图）  
+**修复状态**: ✅ 已修复
+
+**问题现象**：只有样式映射对话框刚打开时表头显示正确；之后切换类型：
+1. 选「文本」类型，输入框上方却显示「上传提示语图片」；
+2. 选「图片」类型，上传框上方却显示「提示语文本」——即 label 停在**对话框打开时**的类型。
+
+**根因**：表头 label（`st.markdown("**提示语文本**" / "**上传提示语图片**")`）取的是
+`hint_type_val`——来自**已保存配置** `_hint_config`（对话框打开时的快照），
+而 radio 控件渲染后用户切换的选择存在 `session_state["hint_type_<文件>"]` 里，
+label 行没有跟着读实时值。
+
+**修复**：label 行改为先读控件实时值再渲染：
+```python
+_hint_type_live = st.session_state.get(f"hint_type_{fname}", hint_type_val)
+st.markdown("**提示语文本**" if _hint_type_live == "text" else "**上传提示语图片**")
+```
+radio 切换触发 rerun 时，label 行执行前 `session_state` 已更新为用户的新选择，
+因此表头与下方控件实时一致；首次打开时取已保存配置，行为不变。
+
+**验证**：
+- `temp/test_style_mapping_layout.py` 新增 `test_m_hint_label_follows_live_type`：
+  默认 text → 表头「提示语文本」；切 image → 实时变「上传提示语图片」；切回 text → 恢复。
+  **阳性对照**：临时回退到旧实现（用 `hint_type_val`），该用例失败（FAILED failures=1），
+  证明用例确能抓住此 bug；恢复修复后 14 例全过。
+- 全量收尾自检：**337 例，失败套件无**（runner 引用的 `test_title_leak_check.py` 已在
+  2026-11-10 查漏/预处理合并时删除，改指向合并后的 `test_title_organize.py`，并兼容其
+  自定义输出格式「结果：通过 N 项，失败 M 项」；顺带更新 `test_admin_used_paragraphs.py`
+  的过时列顺序断言——2026-10-29 起用户列表新增「最后登录」列）。
+- `style_mapping.py` 字节校验：裸 LF=0、无 BOM（中途一度被转为 LF，已恢复 CRLF）。
+
+**回滚**：还原 `components/dialogs/style_mapping.py` 中表头 label 行即可；无数据/配置变更。
+
 ### Bug #016: 删除/更换文档后，标题查漏的筛选条件被沿用
 
 **日期**: 2026-10-27  
