@@ -187,6 +187,54 @@ def get_used_paragraphs(user):
     return 0
 
 
+def compute_conversion_task_stats(all_users, today):
+    """
+    汇总「转换任务」指标（纯函数，便于自动化测试；不含任何 Streamlit 依赖）。
+
+    [FIX 2026-11-16] 旧口径读 conversion_tasks 表 count()，有两个致命问题：
+      1) supabase 模式下 _add_conversion_record 是空实现，线上转换根本不写这张表；
+      2) 即便有记录，_cleanup_expired_tasks 也会把保留期（默认 7 天）外的已完成任务
+         物理删除。
+    因此那个数只剩历史遗留脏数据，与「用户管理」列表里的「总转换数」完全对不上。
+
+    现口径与用户列表同源，保证两处能对账：
+      - total  = Σ users.total_converted（累计成功转换的文件数）
+      - today  = 今日 conversion_history 记录里的 success 之和（同样是成功文件数）
+      - failed = conversion_history 记录里的 failed 之和（累计失败文件数）
+
+    :param all_users: 用户数据字典列表（load_all_users_data() 的返回值）
+    :param today: 北京时间日期字符串 YYYY-MM-DD
+    :return: {'total': int, 'today': int, 'failed': int}
+    """
+    total = 0
+    today_count = 0
+    failed = 0
+    for user in all_users or []:
+        if not isinstance(user, dict):
+            continue
+        try:
+            total += int(user.get('total_converted') or 0)
+        except (TypeError, ValueError):
+            pass
+        history = user.get('conversion_history')
+        if not isinstance(history, list):
+            continue
+        for record in history:
+            if not isinstance(record, dict):
+                continue
+            try:
+                failed += int(record.get('failed') or 0)
+            except (TypeError, ValueError):
+                pass
+            # conversion_history.time 由 now_local() 写入（用户本地时区，国内即北京时间）
+            if str(record.get('time') or '')[:10] == today:
+                try:
+                    today_count += int(record.get('success') or 0)
+                except (TypeError, ValueError):
+                    pass
+    return {'total': total, 'today': today_count, 'failed': failed}
+
+
 def filter_sort_paginate_users(all_users, keyword, sort_by, page, page_size):
     """
     用户列表的纯逻辑处理：搜索过滤 → 排序 → 分页。
@@ -331,8 +379,16 @@ def show_dashboard():
         today = datetime.now(BEIJING_TZ).strftime('%Y-%m-%d')
         today_users = sum(1 for u in all_users if beijing_date_str(u.get('created_at')) == today)
         
+        # [FIX 2026-11-16] 「转换任务」改用累计口径 + 新增「今日转换任务」。
+        # 详见 compute_conversion_task_stats() 的注释：原来读 conversion_tasks 表
+        # count() 得到的 37 之类数字（该表线上不写入 + 保留期后被物理删除）毫无意义。
+        conv_stats = compute_conversion_task_stats(all_users, today)
+        total_tasks = conv_stats['total']
+        today_tasks = conv_stats['today']
+        failed_tasks = conv_stats['failed']
+        
         # 显示关键指标
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.markdown(f"""
@@ -353,18 +409,31 @@ def show_dashboard():
         with col3:
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{stats.get('total_tasks', 0)}</div>
-                <div class="metric-label">转换任务</div>
+                <div class="metric-value">{total_tasks}</div>
+                <div class="metric-label">累计转换任务</div>
             </div>
             """, unsafe_allow_html=True)
         
+        with col4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{today_tasks}</div>
+                <div class="metric-label">今日转换任务</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.caption(
+            "说明：累计/今日转换任务均按**成功转换的文件数**统计，与「用户管理」列表的"
+            "「总转换数」同源；conversion_tasks 表仅作任务日志，超过保留期会被清理，不参与统计。"
+        )
+        
         st.markdown("### 📈 转换任务统计")
         
-        # 任务状态分布
+        # 任务状态分布（已完成/失败来自 conversion_history 累计；处理中/等待中来自任务表）
         task_col1, task_col2, task_col3, task_col4 = st.columns(4)
         
         with task_col1:
-            st.metric("✅ 已完成", stats.get('completed_tasks', 0))
+            st.metric("✅ 已完成", total_tasks)
         
         with task_col2:
             st.metric("⏳ 处理中", stats.get('processing_tasks', 0))
@@ -373,12 +442,11 @@ def show_dashboard():
             st.metric("⏸️ 等待中", stats.get('pending_tasks', 0))
         
         with task_col4:
-            st.metric("❌ 失败", stats.get('failed_tasks', 0))
+            st.metric("❌ 失败", failed_tasks)
         
-        # 成功率
-        success_rate = 0
-        if stats.get('total_tasks', 0) > 0:
-            success_rate = (stats.get('completed_tasks', 0) / stats.get('total_tasks', 1)) * 100
+        # 成功率（分母 = 成功 + 失败；两者都来自 conversion_history 累计）
+        total_attempts = total_tasks + failed_tasks
+        success_rate = (total_tasks / total_attempts * 100) if total_attempts > 0 else 0
         
         st.metric("🎯 成功率", f"{success_rate:.1f}%")
         

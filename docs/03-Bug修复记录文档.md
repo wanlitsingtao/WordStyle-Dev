@@ -2,6 +2,46 @@
 
 ## Bug 修复记录
 
+### Bug #018: 数据看板「转换任务」口径错误（既非当日也非累计），且缺少当日指标
+
+**日期**: 2026-11-16  
+**严重级别**: 🟡 中（管理后台核心指标失真，无法掌握真实业务量）  
+**影响范围**: `admin_web.py` 数据看板（`show_dashboard`）  
+**发现者**: 用户报告（附截图）  
+**修复状态**: ✅ 已修复
+
+**问题现象**：数据看板「转换任务」显示 37，而「用户管理」列表中各用户「总转换数」为
+43 / 26 / 7 / 7 / 7 / 5 ...，合计远超 37，两处完全对不上；且看板没有「今日」口径。
+
+**根因**：该卡片读 `get_task_stats()['total_tasks']`，即 `conversion_tasks` 表的
+`count()`。而：
+1. Supabase 模式下 `_add_conversion_record()` 是空实现，线上转换**根本不写这张表**；
+2. `_cleanup_expired_tasks()` 会把创建超过 `TASK_EXPIRY_DAYS`（默认 7 天）的已完成任务
+   **物理删除**。
+两者叠加，表里只剩少量历史遗留记录 —— 既不是当日，也不是累计，没有业务含义。
+
+**修复**：
+1. `admin_web.py` 新增纯函数 `compute_conversion_task_stats(all_users, today)`，口径与
+   用户列表同源：
+   - `total` = Σ `users.total_converted`（累计成功转换文件数，= 用户列表「总转换数」之和）
+   - `today` = 今日 `conversion_history` 记录的 `success` 之和
+   - `failed` = `conversion_history` 记录的 `failed` 之和
+2. 看板改为 4 张卡片：总用户数 / 今日新增 / **累计转换任务** / **今日转换任务**，
+   并在下方增加一行口径说明。
+3. 状态区「已完成 / 失败」改用上述累计值，「成功率」分母改为「成功 + 失败」
+   （原分母是任务表总数，与新口径混用会算出错误百分比）；处理中 / 等待中仍取
+   `conversion_tasks`（前台同步转换为 0）。
+
+**验证**：
+- 新增 `temp/test_dashboard_conversion_stats.py`（12 例）：
+  - 累计求和（43+26+7=76）、今日仅统计当日记录、失败累计、多用户叠加；
+  - 空输入 / 非 dict / 非法数值（`'abc'`、`None`、`[]`）/ 非 list 历史不崩溃且不误计；
+  - 源码守卫：看板必须调用 `compute_conversion_task_stats`、不得再出现
+    `stats.get('total_tasks'`、成功率分母必须为 `total_tasks + failed_tasks`。
+  - **阳性对照**：临时把今日分支改为 `if False:`，用例集失败（RC=1），随后按
+    sha256 原样还原（裸 LF=0）。
+- 收尾自检见 `temp/_out/final_dashboard_metric_20261116.txt`。
+
 ### Bug #017: 提示语表头 label 不随「文本/图片」类型切换
 
 **日期**: 2026-11-14  
