@@ -88,6 +88,93 @@ def _get_ds_image_bytes():
     return _read_ds_image_bytes(_ds_image_path.stat().st_mtime, str(_ds_image_path))
 
 
+# 绑定弹窗右侧的公众号二维码。
+# 用 __file__ 定位而不是 cwd：云端（Streamlit Cloud / Render）启动目录不一定是项目根，
+# 按 cwd 拼 "resource/gzh.png" 会偶发读不到图。
+_GZH_IMAGE_PATH = Path(__file__).resolve().parent.parent / "resource" / "gzh.png"
+
+# 绑定弹窗整体布局 CSS（2026-11-16 按用户示意图精确还原）：
+#   - 弹窗卡片限宽 640px（示意图 620px；小屏自适应 92vw）——不加的话 large 档
+#     在宽屏下几乎全宽，表单按钮被拉到 300px、二维码孤悬右侧；
+#   - 两栏等高，右栏 0.5px 分割线（示意图同款）；
+#   - 右栏图片居中、图片与文案间距收紧（Streamlit 默认行距 1rem，示意图是紧贴）。
+# 用 st.container(key='bind_two_col' / 'bind_gzh') 的 .st-key-* 限定作用域，
+# 卡片限宽选择器带 stDialog 前缀，且绑定/登录弹窗互斥，不会影响登录弹窗。
+_BIND_DIALOG_CSS = (
+    "<style>\n"
+    '    [data-testid="stDialog"] > div:first-child {\n'
+    "        width: min(640px, 92vw) !important;\n"
+    "    }\n"
+    '    [data-testid="stDialog"] section {\n'
+    "        width: 100% !important;\n"
+    "    }\n"
+    '    [data-testid="stDialog"] > div:first-child {\n'
+    "        justify-content: center;\n"
+    "    }\n"
+    '    [data-testid="stDialog"] h2 {\n'
+    "        border-bottom: 1px solid rgba(0, 0, 0, 0.12);\n"
+    "    }\n"
+    # 只用「容器 → 布局包装 → 横向块」这条直接子级链定位外层两列，
+    # 避免命中表单内部「确定/取消」按钮列（否则会在两个按钮之间多画一条竖线）。
+    '    .st-key-bind_two_col > div > [data-testid="stHorizontalBlock"] {\n'
+    "        align-items: stretch;\n"
+    "    }\n"
+    '    .st-key-bind_two_col > div > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {\n'
+    "        border-left: 1px solid rgba(0, 0, 0, 0.12);\n"
+    "        display: flex;\n"
+    "        flex-direction: column;\n"
+    "    }\n"
+    # 二维码 + 文案作为一整组在右列里上下居中
+    '    .st-key-bind_two_col > div > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child > [data-testid="stVerticalBlock"] {\n'
+    "        flex: 1 1 auto;\n"
+    "        justify-content: center;\n"
+    "    }\n"
+    # 二维码与文案整体水平居中（两者左边界对齐到同一中线）
+    '    .st-key-bind_gzh {\n'
+    "        align-items: center !important;\n"
+    "    }\n"
+    '    .st-key-bind_gzh [data-testid="stImage"] {\n'
+    "        display: flex;\n"
+    "        justify-content: center;\n"
+    "    }\n"
+    '    .st-key-bind_gzh [data-testid="stImage"] img {\n'
+    "        border-radius: 8px;\n"
+    "        border: 0.5px solid rgba(0, 0, 0, 0.12);\n"
+    "    }\n"
+    '    .st-key-bind_gzh [data-testid="stVerticalBlock"] {\n'
+    "        row-gap: 8px !important;\n"
+    "    }\n"
+    "    .st-key-bind_gzh .bind-gzh-caption {\n"
+    "        margin-top: 0;\n"
+    "        text-align: center;\n"
+    "        font-size: 12px;\n"
+    "        line-height: 1.6;\n"
+    "        color: #808495;\n"
+    "    }\n"
+    # Streamlit 给 markdown 容器加了 margin-bottom:-16px（用来吃掉段间距），
+    # 两行文案因此被压缩成 22px、内容溢出，整组视觉重心偏下；这里归零。
+    '    .st-key-bind_gzh [data-testid="stMarkdownContainer"] {\n'
+    "        margin-bottom: 0 !important;\n"
+    "    }\n"
+    "</style>"
+)
+
+
+def _render_bind_gzh():
+    """绑定弹窗右栏：公众号二维码 + 关注提示（纯展示，不参与表单）。"""
+    with st.container(key="bind_gzh"):
+        if _GZH_IMAGE_PATH.exists():
+            st.image(str(_GZH_IMAGE_PATH), width=150)
+        else:
+            # 图片缺失不应让整个绑定流程不可用，降级为文字提示并留日志
+            logger.warning(f"[BIND] 公众号二维码缺失: {_GZH_IMAGE_PATH}")
+            st.caption("二维码加载失败")
+        st.markdown(
+            '<div class="bind-gzh-caption">关注后将第一时间获得<br>工具的改进情况</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def _clear_bind_dialog():
     """关闭绑定弹窗并清空输入。
 
@@ -99,7 +186,7 @@ def _clear_bind_dialog():
         st.session_state.pop(k, None)
 
 
-@st.dialog("🔗 绑定账号", on_dismiss=_clear_bind_dialog)
+@st.dialog("🔗 绑定账号", width="large", on_dismiss=_clear_bind_dialog)
 def _render_bind_dialog(device_fingerprint):
     """绑定账号弹窗（dialog = fragment，内部交互不牵动主界面）。
 
@@ -114,32 +201,42 @@ def _render_bind_dialog(device_fingerprint):
     """
     from account_manager import create_account_manager
 
-    st.markdown("将当前设备与一个易记的用户名绑定，方便以后跨设备登录。")
-    with st.form("bind_account_form"):
-        bind_username = st.text_input(
-            "设置用户名",
-            placeholder="字母、数字或中文，不区分大小写",
-            key="bind_username_input"
-        )
-        bind_password = st.text_input(
-            "设置密码",
-            type="password",
-            placeholder="设置登录密码",
-            key="bind_password_input"
-        )
-        bind_password2 = st.text_input(
-            "确认密码",
-            type="password",
-            placeholder="再次输入密码",
-            key="bind_password2_input"
-        )
+    st.markdown(_BIND_DIALOG_CSS, unsafe_allow_html=True)
 
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            submitted_bind = st.form_submit_button(
-                "✅ 确定", use_container_width=True, type="primary")
-        with col_b2:
-            cancelled_bind = st.form_submit_button("取消", use_container_width=True)
+    with st.container(key="bind_two_col"):
+        col_form, col_qr = st.columns([1.5, 1], gap="large")
+
+        with col_form:
+            st.markdown("将当前设备与一个易记的用户名绑定，方便以后跨设备登录。")
+            with st.form("bind_account_form"):
+                bind_username = st.text_input(
+                    "设置用户名",
+                    placeholder="字母、数字或中文，不区分大小写",
+                    key="bind_username_input"
+                )
+                bind_password = st.text_input(
+                    "设置密码",
+                    type="password",
+                    placeholder="设置登录密码",
+                    key="bind_password_input"
+                )
+                bind_password2 = st.text_input(
+                    "确认密码",
+                    type="password",
+                    placeholder="再次输入密码",
+                    key="bind_password2_input"
+                )
+
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    submitted_bind = st.form_submit_button(
+                        "✅ 确定", use_container_width=True, type="primary")
+                with col_b2:
+                    cancelled_bind = st.form_submit_button("取消", use_container_width=True)
+
+        # 右栏：公众号二维码（关注入口），与表单并列展示，不参与提交
+        with col_qr:
+            _render_bind_gzh()
 
     if cancelled_bind:
         _clear_bind_dialog()
