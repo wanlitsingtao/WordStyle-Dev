@@ -12,10 +12,10 @@ from ui_theme import render_page_title, render_section_title
 
 logger = logging.getLogger('WordStyle')
 
-# 转换结果展示区高度（px）。
-# st.code 默认高度随内容自适应且不折行，长段落会被挤成一行、需横向滚动，
-# 用户反馈「只有一行，体验非常不好」，故显式给定高度并开启折行。
-RESULT_BOX_HEIGHT = 360
+# 转换测试区两个框的高度（px）：输入文本框与转换结果框等高，
+# 避免"高度太小、只有一行"的局促感；结果框始终显示，无结果时显示占位提示。
+TEST_BOX_HEIGHT = 200
+TEST_RESULT_PLACEHOLDER = "点击「测试转换」后在此显示结果"
 
 
 def _ensure_rules_loaded():
@@ -33,38 +33,62 @@ def _ensure_rules_loaded():
 
 
 def _render_test_section(rules):
-    """渲染测试转换区（用当前编辑中的临时规则模拟转换）。"""
+    """渲染转换测试区：输入文本框 → 测试转换按钮 → 转换结果框（三列等高）。
+
+    结果框始终显示且始终与输入框等高；点击按钮后用当前编辑中的临时规则
+    模拟转换，结果直接写入 session_state，本轮即可显示（无需 rerun）。
+    """
     from tone_rules_manager import ToneRulesManager
 
     st.markdown("---")
     render_section_title("🧪 转换测试")
-    test_text = st.text_area(
-        "输入文本",
-        placeholder="例如：投标人必须理解并应对招标文件中的要求负责。",
-        key="tone_test_input",
-        height=90,
-    )
-    if st.button("🧪 测试转换", key="tone_test_btn", use_container_width=True):
+
+    col_input, col_btn, col_result = st.columns([5, 1.6, 5])
+
+    with col_input:
+        st.caption("输入文本")
+        test_text = st.text_area(
+            "输入文本",
+            placeholder="例如：投标人必须理解并应对招标文件中的要求负责。",
+            key="tone_test_input",
+            height=TEST_BOX_HEIGHT,
+            label_visibility="collapsed",
+        )
+
+    with col_btn:
+        # Streamlit 的列默认顶部对齐，用一段空白把按钮压到与两个框大致齐平的位置
+        st.markdown(
+            "<div style='height:%dpx'></div>" % (TEST_BOX_HEIGHT // 2),
+            unsafe_allow_html=True,
+        )
+        test_clicked = st.button("测试转换 →", key="tone_test_btn", use_container_width=True)
+
+    # 先处理按钮、再渲染结果框：本轮就能显示本次结果，不必 rerun
+    if test_clicked:
         if not test_text.strip():
             st.warning("⚠️ 请输入要测试的文本。")
         else:
-            result = ToneRulesManager.test_convert(rules, test_text)
-            st.session_state.tone_test_result = result
+            st.session_state.tone_test_result = ToneRulesManager.test_convert(rules, test_text)
 
-    if st.session_state.get('tone_test_result'):
-        st.markdown("**转换结果：**")
-        st.code(
-            st.session_state.tone_test_result,
-            language=None,
-            wrap_lines=True,            # 长段落按容器宽度折行，不再横向滚动成一行
-            height=RESULT_BOX_HEIGHT,   # 固定展示高度，内容超出时内部滚动
+    with col_result:
+        st.caption("转换结果")
+        st.text_area(
+            "转换结果",
+            value=st.session_state.get("tone_test_result") or TEST_RESULT_PLACEHOLDER,
+            height=TEST_BOX_HEIGHT,
+            disabled=True,
+            label_visibility="collapsed",
         )
+
+    st.caption("转换结果框始终显示；点击「测试转换」后用当前编辑中的规则模拟转换。")
 
 
 def render_tone_config_page():
     """语气配置页入口（供 st.navigation 调用）。"""
     from tone_rules_manager import ToneRulesManager
     from components.sidebar import render_sidebar
+    from components.tone_rules import render_tone_rules_editor, clear_tone_editor_state
+
     render_sidebar("tone_config")
 
     # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
@@ -78,21 +102,16 @@ def render_tone_config_page():
 
     rules = _ensure_rules_loaded()
 
-    # 编辑区（@st.fragment，局部刷新）
-    from components.tone_rules import render_tone_rules_editor, clear_tone_editor_state
-    rules = render_tone_rules_editor(rules)
-    app_state.set_tone_rules(rules)
+    # 操作反馈占位：按钮渲染在页面顶部，事件处理在编辑区之后，
+    # 反馈仍显示在操作区正下方（而不是掉到页面最底部）。
+    action_status = st.empty()
 
-    st.markdown("---")
-
-    # 操作按钮行（在编辑区之后，保证点击时能读取最新编辑值）
-    col_reset, col_save, col_test = st.columns(3)
+    # ===== 1. 操作区（置顶：先保存 / 恢复 / 导入导出，再编辑）=====
+    col_reset, col_save = st.columns(2)
     with col_reset:
         reset_clicked = st.button("🔄 恢复默认规则", key="tone_reset_btn", use_container_width=True)
     with col_save:
         save_clicked = st.button("💾 保存全部", key="tone_save_btn", type="primary", use_container_width=True)
-    with col_test:
-        st.caption("测试转换见下方区域")
 
     # 导入 / 导出（P2）
     with st.expander("📥 导入 / 导出规则（JSON）", expanded=False):
@@ -119,28 +138,44 @@ def render_tone_config_page():
                     app_state.set_tone_rules(new_rules)
                     app_state.set_tone_rules_dirty(True)
                     clear_tone_editor_state()
-                    st.success(msg + "，点击「保存全部」生效。")
+                    # st.rerun() 会丢弃本轮输出，故把提示存到 session_state，下一轮再显示
+                    st.session_state.tone_flash = ("success", msg + "，点击「保存全部」生效。")
                     st.rerun()
                 else:
-                    st.error(msg)
+                    action_status.error(msg)
 
-    # 处理保存 / 恢复默认
+    st.markdown("---")
+
+    # ===== 2. 编辑区（@st.fragment，局部刷新）=====
+    rules = render_tone_rules_editor(rules)
+    app_state.set_tone_rules(rules)
+
+    # ===== 3. 转换测试区 =====
+    _render_test_section(rules)
+
+    # ===== 操作事件处理 =====
+    # 必须放在编辑区之后：编辑组件返回的是本轮渲染后的最新工作副本，
+    # 顶部按钮只负责渲染，事件在这里统一读取最新 rules 处理。
+    flash = st.session_state.pop("tone_flash", None)
+    if flash:
+        getattr(action_status, flash[0])(flash[1])
+
     if save_clicked:
         ok, msg = ToneRulesManager.validate_rules(rules)
         if not ok:
-            st.error(f"❌ 校验失败：{msg}")
+            action_status.error(f"❌ 校验失败：{msg}")
         else:
             user_id = app_state.get_user_id()
             if not user_id:
-                st.error("❌ 用户未初始化，无法保存。")
+                action_status.error("❌ 用户未初始化，无法保存。")
             else:
                 ok2, msg2 = ToneRulesManager.save(user_id, rules)
                 if ok2:
                     app_state.set_tone_rules(ToneRulesManager.normalize_rules(rules))
                     app_state.set_tone_rules_dirty(False)
-                    st.success(f"✅ {msg2}，下次转换生效。")
+                    action_status.success(f"✅ {msg2}，下次转换生效。")
                 else:
-                    st.error(f"❌ {msg2}")
+                    action_status.error(f"❌ {msg2}")
 
     if reset_clicked:
         if st.session_state.get('tone_reset_confirm', False):
@@ -152,18 +187,16 @@ def render_tone_config_page():
                     app_state.set_tone_rules_dirty(False)
                     clear_tone_editor_state()
                     st.session_state.tone_reset_confirm = False
-                    st.success(f"✅ {msg}")
+                    st.session_state.tone_flash = ("success", f"✅ {msg}")
                     st.rerun()
                 else:
-                    st.error(f"❌ {msg}")
+                    action_status.error(f"❌ {msg}")
             else:
                 app_state.set_tone_rules(ToneRulesManager.default_rules())
                 clear_tone_editor_state()
                 st.session_state.tone_reset_confirm = False
+                st.session_state.tone_flash = ("success", "✅ 已恢复默认规则")
                 st.rerun()
         else:
             st.session_state.tone_reset_confirm = True
-            st.warning("⚠️ 确定要恢复为默认规则吗？当前编辑中的自定义规则将被覆盖。请再次点击「恢复默认规则」确认。")
-
-    # 测试转换区
-    _render_test_section(rules)
+            action_status.warning("⚠️ 确定要恢复为默认规则吗？当前编辑中的自定义规则将被覆盖。请再次点击「恢复默认规则」确认。")

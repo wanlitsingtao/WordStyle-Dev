@@ -2,6 +2,51 @@
 
 ## Bug 修复记录
 
+### Bug #020: 祈使语气配置页版式重排（需求增强，非缺陷）
+
+**日期**: 2026-11-18  
+**严重级别**: 🟢 低（界面版式改进，规则数据结构与转换逻辑零改动）  
+**影响范围**: `views/tone_config.py`、`components/tone_rules.py`  
+**发现者**: 用户提出（先出示意图确认，再要求实现）  
+**修复状态**: ✅ 已实现（仅 dev，未同步 pub、未提交）
+
+**需求**（用户 5 点 + 补充）：
+1. 投标人称谓替换排到第一个；
+2. 多字祈使词替换与单字祈使词替换合并为一张表，用「类型」列区分，保存仍拆回两个规则集；
+3. "应+对"分离结构标志动词放到祈使词替换后面，例外词列表放最后；
+4. 操作区（恢复默认 / 保存全部 / 导入导出）移到页面最上面；
+5. 转换测试输入框与结果框放大、改左右结构、结果框始终显示；
+   补充定稿：**按钮在输入文本框右侧，结果框在按钮右侧（三列）**，结果框始终显示且与输入框等高。
+
+**实现**：
+- `components/tone_rules.py`：
+  - 新增 `_render_imperative_editor(rules, editor_key)`，用一张 `st.data_editor` 渲染
+    「类型（多字/单字下拉）｜原词｜替换词」，返回时按类型拆回
+    `multi_imperative` / `single_imperative`；空类型按「多字」、空原词/空替换词忽略、
+    值做 `strip()`。`ToneRulesManager` / `doc_converter` 的数据结构与转换逻辑不变。
+  - `render_tone_rules_editor` 改为 4 个折叠区块，顺序为
+    投标人称谓替换 → 祈使词替换 → 应+对分离结构标志动词 → 例外词列表。
+  - `TONE_EDITOR_KEYS` 去掉 `tone_editor_multi` / `tone_editor_single`，
+    新增 `tone_editor_imperative`；`clear_tone_editor_state()` 同步。
+- `views/tone_config.py`：
+  - 操作区（两个按钮 + 导入/导出折叠区）置顶；按钮事件仍在编辑区之后处理，
+    保证保存读到本轮最新编辑值；`st.empty()` 占位让反馈显示在操作区下方；
+    导入/恢复默认需 `st.rerun()`，提示改由 `tone_flash` 跨轮携带。
+  - 转换测试改三列 `st.columns([5, 1.6, 5])`：输入文本框 → `测试转换 →` → 转换结果框；
+    两框同用 `TEST_BOX_HEIGHT=200`、`label_visibility="collapsed"`，结果框 `disabled=True`
+    且**始终显示**（无结果显示 `TEST_RESULT_PLACEHOLDER`）；按钮先处理再渲染结果框，
+    本轮即显示结果，移除按需显示的 `st.code`。
+
+**验证**：
+- `temp/test_tone_editor_smoke.py` 重写为 5 例（4 区顺序 / 类型下拉 / 合并表真实拆分 /
+  清理键契约 / 无重复标题）；
+- `temp/test_tone_config_page_smoke.py` 重写为 10 例（操作区置顶与事件顺序 / 三列等高 /
+  结果框常显 / 点击本轮出结果 / 页面标题规格）；
+- 两套 + 全量回归全绿；源码与 docs 保持 CRLF、裸 LF=0、无 BOM。
+
+**教训**：界面"合并成一张表"只改编辑组件，不要动持久化的规则键；
+`st.rerun()` 之前的 `st.success` 会被丢弃，跨轮提示必须写进 session_state。
+
 ### Bug #019: 用户列表"按注册时间降序却缺行"——实为表头排序仅作用于当前页的交互误解（非数据缺陷）
 
 **日期**: 2026-11-17  
