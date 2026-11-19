@@ -746,9 +746,22 @@ def apply_format_snapshot(paragraph, snapshot):
             continue
 
 
-def build_word_pattern(word):
-    """构建单词匹配正则（前后用非字母数字边界限定）"""
-    return r'(?<![a-zA-Z0-9])' + re.escape(word) + r'(?![a-zA-Z0-9])'
+def build_word_pattern(word, prefix=None):
+    """构建规则词匹配正则。
+
+    前缀默认用「非字母数字」边界，避免规则词命中更长的英文/数字串内部。
+    尾部边界只对**纯 ASCII 规则词**保留：中文规则词后紧跟英文字母/数字是标书里
+    极常见的写法（如「需提供PDF」「需要提供WORD」「提交A4纸」），若沿用
+    (?![a-zA-Z0-9]) 会让这类搭配整条漏匹配。
+
+    Args:
+        word: 规则原词。
+        prefix: 自定义前缀断言。以「投标人」开头的称谓词传 r'(?<![本])'，
+            避免把已替换出的「本投标人」再次命中（与旧行为一致）。
+    """
+    head = prefix if prefix is not None else r'(?<![a-zA-Z0-9])'
+    tail = r'(?![a-zA-Z0-9])' if word and word.isascii() else ''
+    return head + re.escape(word) + tail
 
 
 def build_single_imperative_pattern(word):
@@ -831,7 +844,7 @@ class DocumentConverter:
         _patterns = []
         for word in bidder_map.keys():
             if word.startswith("投标人"):
-                _patterns.append(r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])')
+                _patterns.append(build_word_pattern(word, prefix=r'(?<![本])'))
             else:
                 _patterns.append(build_word_pattern(word))
         self.replace_regex = re.compile('|'.join(_patterns)) if _patterns else None
@@ -3662,70 +3675,81 @@ class DocumentConverter:
         if not clean_to_full:
             return False
 
-        # 收集所有替换（在 full_text 坐标中）
-        replacements = []
+        # 收集所有候选替换（统一在 full_text 坐标中）
+        # 三类规则各自在**原始文本**上匹配，重叠部分在下面统一消解。
+        candidates = []   # (fs, fe, repl, source)
 
-        def _add_match(clean_start, clean_end, repl_text):
-            """将 clean_text 中的匹配转换为 full_text 坐标并加入替换列表"""
-            if clean_start >= len(clean_to_full):
-                return
-            fs = clean_to_full[clean_start]
-            if clean_end - 1 < len(clean_to_full):
-                fe = clean_to_full[clean_end - 1] + 1
-            else:
-                fe = len(full_text)
-            orig = full_text[fs:fe]
-            if repl_text and repl_text != orig:
-                replacements.append((fs, fe, repl_text))
+        def _map_range(clean_start, clean_end):
+            """clean_text 坐标 -> full_text 坐标；越界返回 None。"""
+            if clean_start >= len(clean_to_full) or clean_end - 1 >= len(clean_to_full):
+                return None
+            return clean_to_full[clean_start], clean_to_full[clean_end - 1] + 1
 
         # 1. replace_regex: "投标人" -> "本投标人" 等固定替换
         if self.replace_regex:
             for m in self.replace_regex.finditer(clean_text):
-                _add_match(m.start(), m.end(), self.replace_map.get(m.group(0), ''))
+                rng = _map_range(m.start(), m.end())
+                if rng:
+                    candidates.append((rng[0], rng[1],
+                                       self.replace_map.get(m.group(0), ''), 'bidder'))
 
         # 2. multi_imperative_regex: 多字祈使词
         if self.multi_imperative_regex:
             for m in self.multi_imperative_regex.finditer(clean_text):
-                word = m.group(0)
-                cs, ce = m.start(), m.end()
-                if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
+                rng = _map_range(m.start(), m.end())
+                if not rng:
                     continue
-                fs = clean_to_full[cs]
-                fe = clean_to_full[ce - 1] + 1
+                fs, fe = rng
+                word = m.group(0)
                 if self.is_multi_exception(full_text, fs, fe, word):
                     continue
                 repl = self.multi_imperative_map.get(word)
                 if repl:
-                    replacements.append((fs, fe, repl))
+                    candidates.append((fs, fe, repl, 'multi'))
 
         # 3. single_imperative_regex: 单字祈使词
         if self.single_imperative_regex:
             for m in self.single_imperative_regex.finditer(clean_text):
-                word = m.group(0)
-                cs, ce = m.start(), m.end()
-                if cs >= len(clean_to_full) or ce - 1 >= len(clean_to_full):
+                rng = _map_range(m.start(), m.end())
+                if not rng:
                     continue
-                fs = clean_to_full[cs]
-                fe = clean_to_full[ce - 1] + 1
+                fs, fe = rng
+                word = m.group(0)
                 if self.is_part_of_exception(full_text, fs, fe, word):
                     continue
                 repl = self.single_replace_map.get(word)
                 if repl:
-                    replacements.append((fs, fe, repl))
+                    candidates.append((fs, fe, repl, 'single'))
 
-        if not replacements:
+        # 丢掉「替换结果与原文本一致」的空操作
+        candidates = [c for c in candidates if c[2] != full_text[c[0]:c[1]]]
+        if not candidates:
             return False
 
-        # 按起始位置降序排列，从后往前执行替换避免偏移问题
-        replacements.sort(key=lambda x: x[0], reverse=True)
+        # 重叠消解：长匹配优先，同长按起始位置、再按收集顺序。
+        # 旧实现按起始位置降序逐个对「已修改过的字符串」按原始坐标切片替换，
+        # 重叠时第二次替换用的是旧坐标，会吞字或把规则悄悄吃掉（如「投标人需」）。
+        order = sorted(
+            range(len(candidates)),
+            key=lambda i: (-(candidates[i][1] - candidates[i][0]), candidates[i][0], i),
+        )
+        kept = []
+        for i in order:
+            fs, fe, repl, src = candidates[i]
+            if any(not (fe <= kfs or fs >= kfe) for kfs, kfe, _r, _s in kept):
+                continue
+            kept.append((fs, fe, repl, src))
 
-        # 在 full_text 上执行所有替换
-        result = full_text
-        for fs, fe, repl in replacements:
-            result = result[:fs] + repl + result[fe:]
-
-        # "将将" -> "将把"（后处理，全局替换）
-        result = result.replace('将将', '将把')
+        # 按原始坐标一次性重建，绝不在已修改的字符串上二次切片。
+        kept.sort(key=lambda x: x[0])
+        pieces = []
+        pos = 0
+        for fs, fe, repl, src in kept:
+            pieces.append(full_text[pos:fs])
+            pieces.append(repl)
+            pos = fe
+        pieces.append(full_text[pos:])
+        result = ''.join(pieces).replace('将将', '将把')
 
         # 按原始字符数比例将 result 分配回各个 run
         total_orig = len(full_text)
