@@ -237,12 +237,16 @@ class ToneRulesManager:
         ying_dui_verbs = rules.get("ying_dui_verbs", [])
 
         def _word_re(words):
-            return re.compile('|'.join(build_word_pattern(w) for w in words)) if words else None
+            # 长词在前：正则交替按「先列先试」取词，短词在前会让长规则永远轮不到
+            # （与 doc_converter._build_tone_regexes 同口径）。
+            ordered = sorted(words, key=len, reverse=True)
+            return re.compile('|'.join(build_word_pattern(w) for w in ordered)) if words else None
 
         bidder_re = None
         if bidder_map:
             patterns = []
-            for w in bidder_map:
+            # 同上：长词在前，避免用户配置顺序影响匹配结果
+            for w in sorted(bidder_map, key=len, reverse=True):
                 if w.startswith("投标人"):
                     patterns.append(r'(?<![本])' + re.escape(w) + r'(?![a-zA-Z0-9])')
                 else:
@@ -293,18 +297,28 @@ class ToneRulesManager:
             return False
 
         # 1) 收集：三类规则各自在原始 text 上匹配
+        # 称谓词 / 多字词逐词扫描 —— 合并交替正则在每个位置只产出一个候选，
+        # 短词先命中会让长词候选缺失，全局消解无从选起（与 doc_converter 同口径）。
         candidates = []   # (start, end, repl, source)
-        if bidder_re:
-            for m in bidder_re.finditer(text):
-                candidates.append((m.start(), m.end(),
-                                   bidder_map.get(m.group(0), ''), 'bidder'))
-        if multi_re:
-            for m in multi_re.finditer(text):
-                word = m.group(0)
-                if is_multi_exc(text, m.start(), m.end(), word):
+        if bidder_map:
+            for w, repl in bidder_map.items():
+                if not repl:
                     continue
-                candidates.append((m.start(), m.end(),
-                                   multi_map.get(word, word), 'multi'))
+                if w.startswith("投标人"):
+                    pat = re.compile(r'(?<![本])' + re.escape(w) + r'(?![a-zA-Z0-9])')
+                else:
+                    pat = re.compile(build_word_pattern(w))
+                for m in pat.finditer(text):
+                    candidates.append((m.start(), m.end(), repl, 'bidder'))
+        if multi_map:
+            for w, repl in multi_map.items():
+                if not repl:
+                    continue
+                pat = re.compile(build_word_pattern(w))
+                for m in pat.finditer(text):
+                    if is_multi_exc(text, m.start(), m.end(), w):
+                        continue
+                    candidates.append((m.start(), m.end(), repl, 'multi'))
         if single_re:
             for m in single_re.finditer(text):
                 word = m.group(0)
@@ -317,17 +331,9 @@ class ToneRulesManager:
         if not candidates:
             return text
 
-        # 2) 重叠消解：长匹配优先，同长按起始位置、再按收集顺序
-        order = sorted(
-            range(len(candidates)),
-            key=lambda i: (-(candidates[i][1] - candidates[i][0]), candidates[i][0], i),
-        )
-        kept = []
-        for i in order:
-            s, e, repl, src = candidates[i]
-            if any(not (e <= ks or s >= ke) for ks, ke, _r, _s in kept):
-                continue
-            kept.append((s, e, repl, src))
+        # 2) 重叠消解：全局最大覆盖的区间选择（与 doc_converter 同口径）
+        from common import select_non_overlapping
+        kept = select_non_overlapping(candidates)
 
         # 3) 按原始坐标一次性重建
         kept.sort(key=lambda x: x[0])

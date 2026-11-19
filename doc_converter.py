@@ -809,7 +809,11 @@ class DocumentConverter:
 
         # 多字祈使词
         multi_map = tr.get("multi_imperative", {}) or {}
-        multi_keys = list(multi_map.keys())
+        # 按词长降序构建交替正则：Python 正则交替按「先列先试」取词，
+        # 若短词排在长词前面（如「投标人」在「投标人需」前），短词会先命中、
+        # 长规则永远轮不到——且这是正则层面的事，后面的重叠消解救不回来。
+        # 故必须保证长词在前，与用户配置顺序无关。
+        multi_keys = sorted(multi_map.keys(), key=len, reverse=True)
         self.multi_imperative_map = multi_map
         self.multi_imperative_regex = (
             re.compile('|'.join(build_word_pattern(w) for w in multi_keys))
@@ -829,7 +833,9 @@ class DocumentConverter:
         bidder_map = tr.get("bidder_terms", {}) or {}
         self.replace_map = bidder_map
         _patterns = []
-        for word in bidder_map.keys():
+        # 同上：长词在前（「投标人需要」>「投标人需」>「投标人」），
+        # 避免用户把短词配在前面时正则先吃掉短词、长规则失效。
+        for word in sorted(bidder_map.keys(), key=len, reverse=True):
             if word.startswith("投标人"):
                 _patterns.append(r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])')
             else:
@@ -3672,26 +3678,34 @@ class DocumentConverter:
                 return None
             return clean_to_full[clean_start], clean_to_full[clean_end - 1] + 1
 
-        # 1. replace_regex: "投标人" -> "本投标人" 等固定替换
-        if self.replace_regex:
-            for m in self.replace_regex.finditer(clean_text):
-                rng = _map_range(m.start(), m.end())
-                if rng:
-                    candidates.append((rng[0], rng[1],
-                                       self.replace_map.get(m.group(0), ''), 'bidder'))
+        # 1. 投标人称谓：逐词扫描（不能用合并交替正则）
+        # 合并交替正则在每个位置只产出**一个**候选（先列先试），短词先命中后
+        # 长词候选根本不会生成，后面的全局消解无从选起。逐词扫描把每个词的
+        # 匹配都收进候选池，交给 select_non_overlapping 做全局最优选择。
+        if self.replace_map:
+            for word, repl in self.replace_map.items():
+                if word.startswith("投标人"):
+                    pat = re.compile(r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])')
+                else:
+                    pat = re.compile(build_word_pattern(word))
+                for m in pat.finditer(clean_text):
+                    rng = _map_range(m.start(), m.end())
+                    if rng:
+                        candidates.append((rng[0], rng[1], repl or '', 'bidder'))
 
-        # 2. multi_imperative_regex: 多字祈使词
-        if self.multi_imperative_regex:
-            for m in self.multi_imperative_regex.finditer(clean_text):
-                rng = _map_range(m.start(), m.end())
-                if not rng:
+        # 2. 多字祈使词：同样逐词扫描
+        if self.multi_imperative_map:
+            for word, repl in self.multi_imperative_map.items():
+                if not repl:
                     continue
-                fs, fe = rng
-                word = m.group(0)
-                if self.is_multi_exception(full_text, fs, fe, word):
-                    continue
-                repl = self.multi_imperative_map.get(word)
-                if repl:
+                pat = re.compile(build_word_pattern(word))
+                for m in pat.finditer(clean_text):
+                    rng = _map_range(m.start(), m.end())
+                    if not rng:
+                        continue
+                    fs, fe = rng
+                    if self.is_multi_exception(full_text, fs, fe, word):
+                        continue
                     candidates.append((fs, fe, repl, 'multi'))
 
         # 3. single_imperative_regex: 单字祈使词
@@ -3713,19 +3727,13 @@ class DocumentConverter:
         if not candidates:
             return False
 
-        # 重叠消解：长匹配优先，同长按起始位置、再按收集顺序。
-        # 旧实现按起始位置降序逐个对「已修改过的字符串」按原始坐标切片替换，
-        # 重叠时第二次替换用的是旧坐标，会吞字或把规则悄悄吃掉（如「投标人需」）。
-        order = sorted(
-            range(len(candidates)),
-            key=lambda i: (-(candidates[i][1] - candidates[i][0]), candidates[i][0], i),
-        )
-        kept = []
-        for i in order:
-            fs, fe, repl, src = candidates[i]
-            if any(not (fe <= kfs or fs >= kfe) for kfs, kfe, _r, _s in kept):
-                continue
-            kept.append((fs, fe, repl, src))
+        # 重叠消解：全局最大覆盖的区间选择（common.select_non_overlapping）。
+        # 旧贪心（长匹配优先、同长按起始位置）对同长重叠（如称谓词「投标人需」
+        # 与多字词「需要提供」）会错杀右侧规则，产生「本投标人要提供…」这类残留。
+        # 另注意：交替正则必须长词在前（上面构建处已排序），否则短词在正则层面
+        # 先命中，根本产生不了长候选，消解无从谈起。
+        from common import select_non_overlapping
+        kept = select_non_overlapping(candidates)
 
         # 按原始坐标一次性重建，绝不在已修改的字符串上二次切片。
         kept.sort(key=lambda x: x[0])

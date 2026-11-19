@@ -24,7 +24,57 @@ title_preprocessor / tone_rules_manager …）。此前被多处复用的公共�
 
 当前收录：
   - collect_template_style_names(doc)：模板文档「样式识别」的唯一实现
+  - select_non_overlapping(candidates)：重叠替换区间的全局最优消解
+    （祈使语气转换 doc_converter / 配置页测试框 tone_rules_manager 共用）
 """
+
+
+def select_non_overlapping(candidates):
+    """从候选替换区间中选出互不重叠、总覆盖长度最大的子集（加权区间调度）。
+
+    [2026-11-19 新增] 祈使语气转换「重叠消解」的实现。旧消解按
+    「长匹配优先、同长按起始位置」贪心，对**同长重叠**（如称谓词「投标人需」
+    (0,4) 与多字词「需要提供」(3,7)）会错杀右侧那条，把句子转成
+    「本投标人要提供…」这类残留。本方法改为全局求最优：
+
+      1) 主目标：选中区间**总覆盖长度**最大（尽量多地应用用户规则）；
+      2) 次目标：总覆盖相同时，**区间数更少**的方案优先
+         （单条更具体的长规则优先于多条短规则拼接）。
+
+    Example:
+        「投标人需要提供」候选：投标人(0,3)、投标人需(0,4)、需要提供(3,7)
+        贪心会选 (0,4)，残留「要」；本方法选 (0,3)+(3,7)，得「本投标人提供…」。
+
+    Args:
+        candidates: [(start, end, repl, ...), ...]，至少含 start/end/repl
+            三元组（后续元素参与去重与排序稳定性，不影响语义）。
+    Returns:
+        选中子集（原元组），按 start 升序。
+    """
+    if not candidates:
+        return []
+    items = sorted(set(candidates), key=lambda c: (c[1], c[0], c[2]))
+    n = len(items)
+    # dp[i] = (score, 选中下标元组)：考虑 items[0..i] 范围内的最优（i 可选可不选）。
+    # score = (总覆盖长度, -区间数)：主目标覆盖最长，次目标区间最少。
+    dp = []
+    for i in range(n):
+        s_i, e_i = items[i][0], items[i][1]
+        # 找最后一个 end <= s_i 的 j，以其 dp 为「选 items[i]」的前置状态；
+        # items 按 end 升序，dp[j] 内所有区间 end <= items[j].end <= s_i，必不重叠。
+        base_score, base_sel = (0, 0), ()
+        for j in range(i - 1, -1, -1):
+            if items[j][1] <= s_i:
+                base_score, base_sel = dp[j]
+                break
+        take = ((base_score[0] + e_i - s_i, base_score[1] - 1), base_sel + (i,))
+        if i > 0 and dp[i - 1][0] >= take[0]:
+            dp.append(dp[i - 1])
+        else:
+            dp.append(take)
+    result = [items[k] for k in dp[-1][1]]
+    result.sort(key=lambda c: c[0])
+    return result
 
 
 def collect_template_style_names(doc):
