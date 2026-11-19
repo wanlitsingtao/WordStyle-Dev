@@ -244,7 +244,7 @@ class ToneRulesManager:
             patterns = []
             for w in bidder_map:
                 if w.startswith("投标人"):
-                    patterns.append(build_word_pattern(w, prefix=r'(?<![本])'))
+                    patterns.append(r'(?<![本])' + re.escape(w) + r'(?![a-zA-Z0-9])')
                 else:
                     patterns.append(build_word_pattern(w))
             bidder_re = re.compile('|'.join(patterns))

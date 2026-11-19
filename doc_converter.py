@@ -746,22 +746,9 @@ def apply_format_snapshot(paragraph, snapshot):
             continue
 
 
-def build_word_pattern(word, prefix=None):
-    """构建规则词匹配正则。
-
-    前缀默认用「非字母数字」边界，避免规则词命中更长的英文/数字串内部。
-    尾部边界只对**纯 ASCII 规则词**保留：中文规则词后紧跟英文字母/数字是标书里
-    极常见的写法（如「需提供PDF」「需要提供WORD」「提交A4纸」），若沿用
-    (?![a-zA-Z0-9]) 会让这类搭配整条漏匹配。
-
-    Args:
-        word: 规则原词。
-        prefix: 自定义前缀断言。以「投标人」开头的称谓词传 r'(?<![本])'，
-            避免把已替换出的「本投标人」再次命中（与旧行为一致）。
-    """
-    head = prefix if prefix is not None else r'(?<![a-zA-Z0-9])'
-    tail = r'(?![a-zA-Z0-9])' if word and word.isascii() else ''
-    return head + re.escape(word) + tail
+def build_word_pattern(word):
+    """构建单词匹配正则（前后用非字母数字边界限定）"""
+    return r'(?<![a-zA-Z0-9])' + re.escape(word) + r'(?![a-zA-Z0-9])'
 
 
 def build_single_imperative_pattern(word):
@@ -844,7 +831,7 @@ class DocumentConverter:
         _patterns = []
         for word in bidder_map.keys():
             if word.startswith("投标人"):
-                _patterns.append(build_word_pattern(word, prefix=r'(?<![本])'))
+                _patterns.append(r'(?<![本])' + re.escape(word) + r'(?![a-zA-Z0-9])')
             else:
                 _patterns.append(build_word_pattern(word))
         self.replace_regex = re.compile('|'.join(_patterns)) if _patterns else None
