@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime
 import hashlib
+import time
 
 from app.core.database import get_db
 from app.models import User
@@ -203,3 +204,78 @@ def get_user_id_by_username(username_lower: str, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     return {"user_id": user.id}
+
+
+# ==================== 登录保持（2026-11-20） ====================
+# 与根目录 account_manager.LOGIN_SESSION_DAYS=7 保持一致；用 Unix 秒避开时区问题。
+# 列尚未迁移时一律返回 success=False / active=False，绝不抛 500 拖垮应用。
+_LOGIN_SESSION_SECONDS = 7 * 24 * 3600
+
+
+@router.post("/login-session")
+def save_login_session(body: dict, db: Session = Depends(get_db)):
+    """记住该设备当前登录的账号。"""
+    device_fp = str(body.get("device_fingerprint") or "").strip()
+    user_id = str(body.get("user_id") or "").strip()
+    username = str(body.get("username") or "").strip()
+    if not device_fp or not user_id:
+        return {"success": False, "message": "设备指纹和账号ID不能为空"}
+    try:
+        user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+        if not user:
+            return {"success": False, "message": "设备用户不存在"}
+        user.session_user_id = user_id
+        user.session_username = username
+        user.session_expires_ts = int(time.time()) + _LOGIN_SESSION_SECONDS
+        db.commit()
+        return {"success": True}
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "message": f"登录态写入失败: {e}"}
+
+
+@router.get("/login-session/{device_fp}")
+def get_login_session(device_fp: str, db: Session = Depends(get_db)):
+    """读取未过期登录态并滑动续期；过期/缺失返回 active=False。"""
+    try:
+        user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+        if not user or not user.session_user_id:
+            return {"active": False}
+        now = int(time.time())
+        if int(user.session_expires_ts or 0) <= now:
+            user.session_user_id = None
+            user.session_username = None
+            user.session_expires_ts = None
+            db.commit()
+            return {"active": False}
+        user.session_expires_ts = now + _LOGIN_SESSION_SECONDS
+        db.commit()
+        return {
+            "active": True,
+            "user_id": user.session_user_id,
+            "username": user.session_username or "",
+            "expires_ts": user.session_expires_ts,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"active": False, "message": f"登录态读取失败: {e}"}
+
+
+@router.post("/login-session/clear")
+def clear_login_session(body: dict, db: Session = Depends(get_db)):
+    """退出登录 / 解绑时清除该设备的登录态。"""
+    device_fp = str(body.get("device_fingerprint") or "").strip()
+    if not device_fp:
+        return {"success": False, "message": "设备指纹不能为空"}
+    try:
+        user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+        if not user:
+            return {"success": False, "message": "设备用户不存在"}
+        user.session_user_id = None
+        user.session_username = None
+        user.session_expires_ts = None
+        db.commit()
+        return {"success": True}
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "message": f"登录态清除失败: {e}"}

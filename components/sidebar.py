@@ -254,11 +254,36 @@ def _render_bind_dialog(device_fingerprint):
                 st.session_state.logged_in_username = bind_username.strip()
                 st.session_state.logged_in_user_id = app_state.get_user_id()
                 st.session_state.sidebar_user_data = None
+                _remember_login(device_fingerprint, app_state.get_user_id(), bind_username.strip())
                 _clear_bind_dialog()
                 st.success(msg + " 已自动登录。")
                 st.rerun()
             else:
                 st.error(msg)
+
+
+def _remember_login(device_fp: str, user_id: str, username: str):
+    """[2026-11-20] 登录 / 绑定成功后把登录态写到服务端（7 天滑动续期）。
+
+    失败只降级为「本次会话仍已登录」，绝不阻断登录主流程。
+    """
+    try:
+        from account_manager import create_account_manager
+        create_account_manager().save_login_session(device_fp, user_id, username)
+    except Exception as e:
+        logger.warning(f"[LOGIN] 登录态写入跳过: {e}")
+
+
+def _forget_login(device_fp: str):
+    """[2026-11-20] 退出登录 / 解绑时清除服务端登录态。
+
+    必须清：否则刷新页面（新会话）会把刚退出的账号又自动登回去。
+    """
+    try:
+        from account_manager import create_account_manager
+        create_account_manager().clear_login_session(device_fp)
+    except Exception as e:
+        logger.warning(f"[LOGIN] 登录态清除跳过: {e}")
 
 
 def _clear_login_dialog():
@@ -313,6 +338,7 @@ def _render_login_dialog(device_fingerprint):
                 st.session_state.logged_in_user_id = user_id
                 app_state.set_user_id(user_id)
                 st.session_state.sidebar_user_data = None
+                _remember_login(device_fingerprint, user_id, login_username.strip())
                 _clear_login_dialog()
                 st.success(msg)
                 st.rerun()
@@ -521,6 +547,7 @@ def render_sidebar(active_page: str = "conversion"):
                             st.session_state.logged_in_user_id = None
                             st.session_state.sidebar_user_data = None
                             st.session_state.show_unbind_confirm = False
+                            _forget_login(_device_fp)
                             st.success(msg + " 已恢复设备指纹身份。")
                             st.rerun()
                         else:
@@ -538,6 +565,7 @@ def render_sidebar(active_page: str = "conversion"):
                 st.session_state.logged_in_username = None
                 st.session_state.logged_in_user_id = None
                 st.session_state.sidebar_user_data = None
+                _forget_login(_device_fp)
                 st.rerun()
         else:
             col_a, col_b = st.columns(2)

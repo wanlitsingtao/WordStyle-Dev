@@ -2,6 +2,39 @@
 
 ## Bug 修复记录
 
+### Bug #027: 刷新页面 / 重新打开应用后登录状态丢失（登录保持增强）
+
+**日期**: 2026-11-20  
+**严重级别**: 🟠 中（数据与额度未丢，但账号身份回落到设备账号、界面显示「游客」，用户需反复登录）  
+**影响范围**: `account_manager.py`、`app.py`、`components/sidebar.py`、`backend/app/models.py`、`backend/app/api/account.py`、新增 `temp/add_login_session_columns_20261120.sql`（库结构迁移）、`temp/test_login_session_20261120.py`（24 例）、`temp/_run_final_20261118_tone.py`（新套件 + 3.8 静态契约）、docs 01/02/03  
+**发现者**: 用户反馈「我用绑定的账号登录，再次登录或刷新页面就退出了登录，为什么不能保持或保持一段时间？」  
+**用户确认的产品决策**: 7 天滑动续期（每次打开页面自动续期，一直用就一直保持）；默认保持，不加「记住我」勾选。
+
+**根因**（原设计为会话级，非故障）：
+
+- 登录 / 绑定成功后只把 `logged_in_username` / `logged_in_user_id` 写进 `st.session_state`（`components/sidebar.py` L254-255、L312-314），**没有任何持久化**；
+- Streamlit 的 `session_state` 只活在当前 WebSocket 会话，刷新页面 / 新标签 / 重新打开应用 = 新会话 = 全部清空；`app.py` 重新按设备指纹 `get_or_create_user_by_device()` 初始化 → 身份回落到设备账号，侧边栏显示「游客」；需求文档 §2.5.3 原话也是「验证通过后，**当前会话**切换为账号身份」；
+- 已有的持久身份 cookie `ws_bid`（2 年 + URL 参数桥）只记「这台浏览器是谁」，**不记「我登录了哪个账号」**；
+- 数据库 `users.device_fingerprint → username` 的绑定关系一直存在，但启动时从未用它恢复登录态（只在绑定弹窗里校验「这设备绑过没」）；单纯靠它自动恢复也不可行：跨设备账号登录覆盖不到，且「退出登录」后刷新会被强行登回去；
+- 线上是 Streamlit Community Cloud，`st.context.cookies` 恒为空（见 `identity.py` 2026-11-09 线上实测记录），浏览器 cookie 不是可靠通道；把账号 ID 放地址栏则有改参数冒充他人账号的风险。**故登录态落在服务端**。
+
+**修改**：
+
+1. `users` 表加 3 列：`session_user_id VARCHAR(12)` / `session_username VARCHAR(50)` / `session_expires_ts BIGINT`（Unix 秒，避开 `DateTime(timezone=True)` 的 naive/aware 时区坑）。迁移脚本 `temp/add_login_session_columns_20261120.sql`：幂等 `ADD COLUMN IF NOT EXISTS`、事务内执行、附回滚与「强制全部重新登录」语句。**dev 与 pub 是两个独立库，想生效必须各执行一次**；未执行时程序降级为「不保持」但不崩。
+2. `account_manager.py` 新增 `save_login_session` / `get_login_session`（未过期则滑动续期 7 天）/ `clear_login_session`，`local` / `supabase` / `api` 三种模式均实现；常量 `LOGIN_SESSION_DAYS = 7` 放在本模块（账号逻辑集中，符合 §2.5.5）。
+3. 新增唯一恢复入口 `restore_login_session_to_state(session_state, device_fingerprint, logger)`：每个会话只查一次库（`_login_session_checked` 节流，避免 rerun 打库），异常（列未迁移 / 后端不可用）一律降级不抛出；`app.py` 在身份解析完成后、读取 `logged_in_user_id` 之前调用一行。
+4. `components/sidebar.py` 4 个入口接入：绑定成功、账号登录 → 写登录态；确认解绑、退出登录 → 清登录态（**必须清，否则刷新会把刚退出的账号又登回去**）。写入失败只降级，不阻断登录主流程。
+5. `backend/app/api/account.py` 补 3 个端点（`POST /login-session`、`GET /login-session/{device_fp}`、`POST /login-session/clear`），列缺失时返回 `success=False` / `active=False`，不抛 500。
+
+**测试**：
+
+- `temp/test_login_session_20261120.py` 24 例（1 例因工程内无 `accounts.json` 跳过）：local 真实文件端到端（写入→刷新后读回→滑动续期→过期清除→退出清除→双设备独立→损坏文件降级）；真实恢复入口模拟「刷新 = 全新 session_state」；supabase 假 DB 验证三列读写/续期/过期清理/**列缺失降级不崩**；api 模式调用路径与返回解析；静态契约（迁移 SQL 幂等且预览不引用新列、models 三列、4 个入口、后端 3 端点、常量一致）；工程数据文件零改动守卫。沙箱用时间戳目录（只新建不删除）。
+- 全量 runner 分两组复跑；3.8 静态契约 9 项；改动文件裸 LF=0、无 BOM；**未执行 `app.py` 整体 AppTest**——它会连线上库并触发额度领取写入，按「测试绝不写工程数据文件」的纪律跳过，改由真实恢复函数 + 静态契约覆盖。
+
+**上线注意**：先在两个库执行迁移 SQL，再同步代码；已在线的旧会话刷新一次即可看到保持效果。
+
+---
+
 ### Bug #026: 祈使语气规则「保存后跨页面回来不见了」（编辑器输入快照未随保存同步）
 
 **日期**: 2026-11-20  

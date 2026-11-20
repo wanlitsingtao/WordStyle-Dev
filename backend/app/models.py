@@ -2,7 +2,7 @@
 """
 数据模型定义
 """
-from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey, BigInteger
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.sql import func
 import uuid
@@ -56,6 +56,14 @@ class User(Base):
     last_login = Column(DateTime(timezone=True))  # 最后登录时间
     last_claim_date = Column(DateTime(timezone=True))  # 上次领取免费额度日期
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # 更新时间
+
+    # [2026-11-20 登录保持] 记录「这台设备当前登录的是哪个账号」。
+    # 用 Unix 秒存过期时间，避开 DateTime(timezone=True) 在 naive/aware 混用时的时区坑。
+    # 由 account_manager 的 save/get/clear_login_session 维护；列缺失（迁移脚本未执行）
+    # 时这三个方法一律降级为「不保持」，应用不崩（见 _login_session_supabase_* 的 except）。
+    session_user_id = Column(String(12))       # 当前登录账号 ID
+    session_username = Column(String(50))      # 当前登录显示名
+    session_expires_ts = Column(BigInteger)    # 过期时间（Unix 秒）
     
     def __repr__(self):
         return f"<User {self.id}>"

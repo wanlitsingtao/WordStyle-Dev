@@ -23,11 +23,17 @@
 import json
 import hashlib
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# [2026-11-20 登录保持] 默认 7 天，每次打开页面滑动续期（一直用就一直保持）。
+# 常量刻意放在本模块而非 config.py：账号管理逻辑集中在 account_manager.py（需求文档 §2.5.5）。
+LOGIN_SESSION_DAYS = 7
+LOGIN_SESSION_SECONDS = LOGIN_SESSION_DAYS * 24 * 3600
 
 
 def _hash_password(password: str) -> str:
@@ -51,6 +57,13 @@ class AccountManager:
                     "password_hash": "<sha256>",
                     "bound_device": "<device_fingerprint>",
                     "created_at": "<iso_datetime>"
+                }
+            },
+            "login_sessions": {               # [2026-11-20] 设备 → 当前登录态
+                "<device_fingerprint>": {
+                    "user_id": "<账号 user_id>",
+                    "username": "<显示名>",
+                    "expires_ts": <Unix 秒>
                 }
             }
         }
@@ -220,6 +233,56 @@ class AccountManager:
                 return result["user_id"]
         return None
 
+    # ==================== 登录保持（2026-11-20） ====================
+    # 为什么需要：Streamlit 的 st.session_state 只活在当前 WebSocket 会话，刷新页面 /
+    # 新标签 / 重新打开应用都会清空 → 登录状态丢失，界面回落到设备账号（游客）。
+    # 线上是 Community Cloud，st.context.cookies 恒为空，浏览器 cookie 不是可靠通道；
+    # 因此把「这台设备当前登录的是谁」记在服务端，按已有的设备身份恢复。
+    # 退出登录 / 解绑会显式清除，所以主动退出后刷新不会被强行登回去。
+
+    def save_login_session(self, device_fingerprint: str, user_id: str,
+                           username: str) -> bool:
+        """记住该设备当前登录的账号（默认 7 天，之后每次访问滑动续期）。
+
+        Returns: 是否写入成功。失败不影响主流程（降级为「本次会话仍已登录」）。
+        """
+        if not device_fingerprint or not user_id:
+            return False
+        if self.data_source == "local":
+            return self._save_login_session_local(device_fingerprint, user_id, username)
+        elif self.data_source == "supabase":
+            return self._save_login_session_supabase(device_fingerprint, user_id, username)
+        elif self.data_source == "api":
+            return self._save_login_session_api(device_fingerprint, user_id, username)
+        return False
+
+    def get_login_session(self, device_fingerprint: str) -> Optional[dict]:
+        """取回仍未过期的登录态并滑动续期；过期 / 缺失 / 列未迁移一律返回 None。
+
+        Returns: {"user_id", "username", "expires_ts"} 或 None
+        """
+        if not device_fingerprint:
+            return None
+        if self.data_source == "local":
+            return self._get_login_session_local(device_fingerprint)
+        elif self.data_source == "supabase":
+            return self._get_login_session_supabase(device_fingerprint)
+        elif self.data_source == "api":
+            return self._get_login_session_api(device_fingerprint)
+        return None
+
+    def clear_login_session(self, device_fingerprint: str) -> bool:
+        """退出登录 / 解绑时清除该设备的登录态。"""
+        if not device_fingerprint:
+            return False
+        if self.data_source == "local":
+            return self._clear_login_session_local(device_fingerprint)
+        elif self.data_source == "supabase":
+            return self._clear_login_session_supabase(device_fingerprint)
+        elif self.data_source == "api":
+            return self._clear_login_session_api(device_fingerprint)
+        return False
+
     # ==================== Local 实现 ====================
 
     def _bind_local(self, device_fp: str, username: str, username_lower: str, password: str) -> Tuple[bool, str]:
@@ -279,6 +342,58 @@ class AccountManager:
         self._save_local_accounts(data)
         logger.info(f"账号解绑成功: 设备 {device_fp[:12]}... ← 用户名 {acct.get('username', username_lower)}")
         return True, "账号解绑成功"
+
+    def _save_login_session_local(self, device_fp: str, user_id: str, username: str) -> bool:
+        try:
+            data = self._load_local_accounts()
+            data.setdefault("login_sessions", {})[device_fp] = {
+                "user_id": user_id,
+                "username": username,
+                "expires_ts": int(time.time()) + LOGIN_SESSION_SECONDS,
+            }
+            self._save_local_accounts(data)
+            return True
+        except Exception as e:
+            logger.warning(f"[LOGIN] 本地登录态写入失败（降级为会话级）: {e}")
+            return False
+
+    def _get_login_session_local(self, device_fp: str) -> Optional[dict]:
+        try:
+            data = self._load_local_accounts()
+            sessions = data.setdefault("login_sessions", {})
+            rec = sessions.get(device_fp)
+            if not rec or not rec.get("user_id"):
+                return None
+            now = int(time.time())
+            if int(rec.get("expires_ts") or 0) <= now:
+                sessions.pop(device_fp, None)
+                self._save_local_accounts(data)
+                return None
+            # 滑动续期：每次新会话重新计时，一直使用就一直保持
+            rec["expires_ts"] = now + LOGIN_SESSION_SECONDS
+            sessions[device_fp] = rec
+            self._save_local_accounts(data)
+            return {
+                "user_id": rec["user_id"],
+                "username": rec.get("username") or "",
+                "expires_ts": rec["expires_ts"],
+            }
+        except Exception as e:
+            logger.warning(f"[LOGIN] 本地登录态读取失败（降级为未登录）: {e}")
+            return None
+
+    def _clear_login_session_local(self, device_fp: str) -> bool:
+        try:
+            data = self._load_local_accounts()
+            sessions = data.setdefault("login_sessions", {})
+            if device_fp not in sessions:
+                return True
+            sessions.pop(device_fp, None)
+            self._save_local_accounts(data)
+            return True
+        except Exception as e:
+            logger.warning(f"[LOGIN] 本地登录态清除失败: {e}")
+            return False
 
     # ==================== Supabase 实现 ====================
 
@@ -439,6 +554,80 @@ class AccountManager:
         except Exception:
             return None
 
+    def _save_login_session_supabase(self, device_fp: str, user_id: str,
+                                     username: str) -> bool:
+        """按设备指纹写入登录态。列未迁移时抛异常 → 捕获降级，应用不崩。"""
+        try:
+            SessionLocal = self._get_supabase_engine()
+            db = SessionLocal()
+            try:
+                from app.models import User
+                user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+                if not user:
+                    return False
+                user.session_user_id = user_id
+                user.session_username = username
+                user.session_expires_ts = int(time.time()) + LOGIN_SESSION_SECONDS
+                db.commit()
+                return True
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"[LOGIN] 登录态写入失败（列是否已迁移？降级为会话级）: {e}")
+            return False
+
+    def _get_login_session_supabase(self, device_fp: str) -> Optional[dict]:
+        try:
+            SessionLocal = self._get_supabase_engine()
+            db = SessionLocal()
+            try:
+                from app.models import User
+                user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+                if not user or not user.session_user_id:
+                    return None
+                now = int(time.time())
+                expires_ts = int(user.session_expires_ts or 0)
+                if expires_ts <= now:
+                    # 过期：顺手清掉，避免库里长期留着失效记录
+                    user.session_user_id = None
+                    user.session_username = None
+                    user.session_expires_ts = None
+                    db.commit()
+                    return None
+                # 滑动续期（只在每个新会话首次调用，rerun 由 app.py 节流）
+                user.session_expires_ts = now + LOGIN_SESSION_SECONDS
+                db.commit()
+                return {
+                    "user_id": user.session_user_id,
+                    "username": user.session_username or "",
+                    "expires_ts": user.session_expires_ts,
+                }
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"[LOGIN] 登录态读取失败（列是否已迁移？降级为未登录）: {e}")
+            return None
+
+    def _clear_login_session_supabase(self, device_fp: str) -> bool:
+        try:
+            SessionLocal = self._get_supabase_engine()
+            db = SessionLocal()
+            try:
+                from app.models import User
+                user = db.query(User).filter(User.device_fingerprint == device_fp).first()
+                if not user:
+                    return False
+                user.session_user_id = None
+                user.session_username = None
+                user.session_expires_ts = None
+                db.commit()
+                return True
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"[LOGIN] 登录态清除失败（列是否已迁移？）: {e}")
+            return False
+
     # ==================== API 模式实现 ====================
 
     def _call_api(self, method: str, path: str, json_data: dict = None) -> dict:
@@ -491,6 +680,31 @@ class AccountManager:
             return result.get("success", False), result.get("message", "未知错误")
         return False, "后端服务暂不可用，请稍后重试"
 
+    def _save_login_session_api(self, device_fp: str, user_id: str,
+                                username: str) -> bool:
+        result = self._call_api("POST", "/login-session", {
+            "device_fingerprint": device_fp,
+            "user_id": user_id,
+            "username": username,
+        })
+        return bool(result and result.get("success"))
+
+    def _get_login_session_api(self, device_fp: str) -> Optional[dict]:
+        result = self._call_api("GET", f"/login-session/{device_fp}")
+        if result and result.get("active"):
+            return {
+                "user_id": result.get("user_id"),
+                "username": result.get("username") or "",
+                "expires_ts": result.get("expires_ts"),
+            }
+        return None
+
+    def _clear_login_session_api(self, device_fp: str) -> bool:
+        result = self._call_api("POST", "/login-session/clear", {
+            "device_fingerprint": device_fp,
+        })
+        return bool(result and result.get("success"))
+
 
 # ==================== 便捷工厂函数 ====================
 
@@ -508,3 +722,30 @@ def create_account_manager(data_source: str = None, db_url: str = None, backend_
         db_url = DATABASE_URL
         backend_url = BACKEND_URL
     return AccountManager(data_source=data_source, db_url=db_url, backend_url=backend_url)
+
+
+def restore_login_session_to_state(session_state, device_fingerprint: str,
+                                   logger_obj=None) -> Optional[dict]:
+    """[2026-11-20] 每个新会话首次调用时，按设备身份恢复登录态并写回 session_state。
+
+    这是「刷新页面后仍保持登录」的唯一恢复入口，由 app.py 在身份解析完成后调用。
+    - session_state 可传 st.session_state，也可传普通 dict（便于端到端测试）；
+    - 节流标记 `_login_session_checked` 保证一个 WebSocket 会话只查一次库；
+    - 任何异常（迁移列缺失 / 后端暂不可用）一律降级返回 None，绝不抛出、不拖垮启动。
+
+    Returns: 恢复到的 {"user_id", "username", "expires_ts"}，未恢复返回 None。
+    """
+    log = logger_obj or logger
+    try:
+        if session_state.get('_login_session_checked', False):
+            return None
+        session_state['_login_session_checked'] = True
+        sess = create_account_manager().get_login_session(device_fingerprint)
+        if sess and sess.get('user_id'):
+            session_state['logged_in_user_id'] = sess['user_id']
+            session_state['logged_in_username'] = sess.get('username') or ''
+            log.info(f"[LOGIN] 已自动恢复登录: {sess.get('username')} ({sess['user_id']})")
+            return sess
+    except Exception as e:
+        log.warning(f"[LOGIN] 登录态恢复跳过: {e}")
+    return None

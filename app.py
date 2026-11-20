@@ -389,6 +389,13 @@ try:
     except Exception as e:  # 时区只是显示优化，绝不能因为它拖垮启动
         logger.warning(f"[TZ] 时区探测跳过: {e}")
 
+    # [2026-11-20 登录保持] 按设备身份恢复账号登录态（默认 7 天，每次新会话滑动续期）。
+    # 为什么在这里：device_fingerprint 已由 identity 解析确定，且 URL 参数桥若触发
+    # 已在上面 st.stop()，不会走到这一步；恢复必须在下面读取 logged_in_user_id 之前。
+    # 节流、降级都在 restore_login_session_to_state 内部（每个会话只查一次库）。
+    from account_manager import restore_login_session_to_state
+    restore_login_session_to_state(st.session_state, device_fingerprint, logger)
+
     # 第二步：通过设备指纹从数据库获取或创建用户（带会话级缓存守卫）
     # 但是如果用户已通过账号登录，则保持登录身份不变
     _logged_in_uid = st.session_state.get('logged_in_user_id', None)
