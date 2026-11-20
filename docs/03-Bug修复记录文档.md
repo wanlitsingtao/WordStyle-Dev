@@ -2,6 +2,78 @@
 
 ## Bug 修复记录
 
+### Bug #025: 祈使语气规则「保存不住 / 转换不生效」+ 录入出现 nan（三项根因）
+
+**日期**: 2026-11-20  
+**严重级别**: 🔴 高（用户自定义规则保存后被静默回滚，转换不生效）  
+**影响范围**: `components/tone_rules.py`、`views/tone_config.py`、`data_manager.py`（新增 `save_style_mappings_merged`）、`components/dialogs/style_mapping.py`（4 个保存按钮）、`backend/app/models.py`、`temp/fix_style_mappings_type_20261120.sql`、docs 01/02/03、新增 3 个测试套件（26 例）  
+**发现者**: 用户反馈「用 wanli 登录，在投标人称谓替换中增加一条『卖方需→本投标人』，保存全部，切换到文档转换页面，转换文档没有生效」；并反馈「增加一行录完失去焦点值变成 nan」「怀疑点保存时程序取不到录入的值」  
+
+**根因**（三条，均以程序实测复现，非读码臆断）：
+
+1. **旧缓存整包回写**：进入转换页时 `file_style_mappings` 缓存了整份 `style_mappings`；样式映射对话框的 4 个按钮（恢复默认 / 设为默认 / 保存 / 确定）都用
+   `user_data['style_mappings'] = st.session_state.file_style_mappings` 整包覆盖写库 —— 之后在祈使语气页保存的 `_tone_rules` 被悄悄回滚。语气页界面显示的是会话内存副本，看起来"已保存"，转换前 `get_tone_rules` 新读库却读不到 → 不生效。
+   复现要点：本地模式 `load_user_data` 返回同一对象（别名）会掩盖此问题，必须深拷贝模拟 supabase「每次读取都是新对象」语义（实测 T1 存 / T2 对话框确定后丢 / T4 界面仍在）。
+2. **录入控件**：`str(x or "")` 兜不住 pandas 的 NaN（NaN 是真值）→ `str(NaN)` 变成字符串 `'nan'` 写进规则表；表格输入每轮由自身上一轮输出重建（自反馈），只填了一半的新行被过滤后表格重建 → 输入丢失；`@st.fragment` 编辑区在整页 rerun 时不重跑，点「保存全部」可能拿到上一轮旧副本。
+3. **新用户默认值**：`backend/app/models.py` 的 `style_mappings = Column(JSONB, default='{}')` 把新用户该列写成 JSONB 字符串，读取时归一成空字典（dev 库只读实测：137 个用户中 17 个为 `'"{}"'`）。
+
+**修改**：
+
+1. **① 录入控件**（`components/tone_rules.py` / `views/tone_config.py`）：新增 `_clean_cell()`（`pd.isna` + 字符串 nan/none/null 判空）、`_rows_to_mapping()` / `_rows_to_imperative()`（空行整行跳过）；`_INIT_PREFIX` 固化输入数据源快照、`_ROWS_PREFIX` 缓存每轮控件输出，表格不再由自身输出重建；新增 `collect_editor_rules()`，在编辑区渲染后与「保存全部」处理前各调用一次，以控件当前内容为准；`clear_tone_editor_state()` 同步清理新键（恢复默认 / 导入后按新规则重新初始化）。
+2. **② 合并回写**（`data_manager.py` / `components/dialogs/style_mapping.py`）：新增 `save_style_mappings_merged()` —— 先 `load_user_data` 新读库内最新 `style_mappings` 打底，只覆盖对话框管辖的「文件名键 + `_default_*`」，其余键（尤其 `_tone_rules`）一律保留库内最新值；对话框 4 个按钮统一改调该函数，源码不再出现整包覆盖。
+3. **③ 默认值隐患**（`backend/app/models.py`）：默认值改 `default=dict`；`temp/fix_style_mappings_type_20261120.sql` 把存量 `'"{}"'` 字符串行幂等纠正为 `'{}'::jsonb`（备份 → 预览 → 事务 → 复核；只改值恰为 `{}` 字符串的行，其它异常字符串保留待人工确认）。SQL 只读验证命中 17 行、无非空异常值。
+
+**边界说明**：管辖键口径依据全库实测 —— 顶层下划线键只有 `_tone_rules` 与 `_default_*` 两类。用户若自行在 `style_mappings` 里新增别的下划线顶层键，合并时以库内最新为准（对话框不覆盖）。`user_manager.py` 中遗留的同名 `save_style_mappings`（工程内无调用方）保持不动，新函数刻意命名为 `save_style_mappings_merged` 避免混淆。
+
+**测试**：
+
+- `temp/test_tone_editor_save_20261120.py`（10 例）：NaN 判空、两轮输入快照一致（消除自反馈）、新增行第二轮填完生效、collect 从控件缓存还原、重置清理、默认规则往返不变；
+- `temp/test_tone_save_merge_20261120.py`（9 例，时间戳沙箱 + 深拷贝模拟 supabase）：T1 保存 → T2 对话框「确定」 → T3 新词仍在且真实转换生效；旧整包覆盖写法作阳性对照仍丢词；4 按钮源码契约防回潮；
+- `temp/test_models_default_20261120.py`（7 例）：AST 校验 `default=dict`、修正 SQL 四段与窄 WHERE 契约；
+- `temp/_verify_tone_editor_apptest_20261120.py`：真实 AppTest 三种模式连续两轮渲染、点击「保存全部」无异常，`RESULT: OK`；
+- 全量 runner 已登记 3 个新套件；`temp/_ui_clean_numbering_app.py` 的 I/O 替身同步扩展到 `data_manager`（否则对话框冒烟测试会绕过中转文件、写到真实数据文件）。
+
+---
+
+### Bug #024: 祈使词表「类型」列对用户无意义——改由原词字数自动归类
+
+**日期**: 2026-11-19  
+**严重级别**: ⚪ 低（界面易用性改进，非缺陷）  
+**影响范围**: `components/tone_rules.py`（`_render_imperative_editor` / 折叠区标题 / docstring）、
+`temp/test_tone_editor_smoke.py`（6 例）、docs 01/02/03  
+**发现者**: 用户反馈「这里的单字、多字这一列对程序有用吗？对用户是无意义的，用户自定义的时候还需要填写」  
+
+**背景与判断**：Bug #020 版式重排时把 `multi_imperative` / `single_imperative` 合并成
+一张表，并用「类型」下拉（多字 / 单字）决定返回规则时拆回哪个键。该列**对程序有用**
+——两个规则集在引擎里使用不同的正则（`build_word_pattern` / `build_single_imperative_pattern`）
+与例外词机制——但分类信息**完全可由原词字数确定**，让用户手填属于冗余负担，且
+误选类型会把规则放进错误的规则集。
+
+**核实依据**：默认规则中 `single_imperative` 全为 1 字词（应 / 须），
+`multi_imperative` 全为 2 字词；`build_single_imperative_pattern` 对任意长度原词均可构建，
+`normalize_rules` / `validate_rules` 无词长限制。故自动归类零风险。
+
+**修改**：
+
+1. `_render_imperative_editor()` 表格改为「原词 / 替换词」两列，删除
+   `SelectboxColumn`「类型」列；新增行用户只需填两格。
+2. 返回规则时按 `len(原词) == 1` → `single_imperative`、否则 → `multi_imperative`
+   自动归位；空原词 / 空替换词忽略，取值 `strip()`。
+3. 折叠区标题由「祈使词替换（多字 N + 单字 M 条）」简化为「祈使词替换（N 条）」，
+   caption 改为「当前共 N 条有效规则（空行将被忽略）」，界面不再暴露用户无感的
+   内部分类；`TONE_EDITOR_KEYS` 与 widget key `tone_editor_imperative` 保持不变。
+4. 数据结构与转换引擎零改动；用户已存配置无需迁移。
+
+**边界说明**：若历史配置中曾手动把单字词标成「多字」（或反之），下次在配置页
+点「保存全部」后会按词长自动归位；默认规则与常规配置不受影响。
+
+**测试**：`temp/test_tone_editor_smoke.py` 重写为 **6 例**——两列表且无
+`SelectboxColumn`、按词长拆分（含自定义单字 / 多字词、空行、首尾空白）、
+默认规则完整往返逐字不变、折叠区标题与顺序、键契约、无重复二级标题；
+真实 Streamlit AppTest 渲染验证 `RESULT: OK`。
+
+---
+
 ### Bug #023: 词表顺序影响匹配 + 同长重叠错杀——「投标人需」转换仍失效
 
 **日期**: 2026-11-19  

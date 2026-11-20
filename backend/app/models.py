@@ -42,7 +42,10 @@ class User(Base):
     device_fingerprint = Column(String(32), unique=True, index=True)  # 设备指纹（32位MD5哈希）
     username = Column(String(50))  # 用户名
     password_hash = Column(String(256))  # 密码哈希（SHA-256），仅绑定账号的用户设置
-    style_mappings = Column(JSONB, default='{}')  # 样式映射配置
+    # [2026-11-20 Bug #025] 默认值必须是「空对象」而不是字符串 '{}'：
+    # 写成字符串会让新建用户的该列变成 JSONB string，程序读取时只能归一成空字典，
+    # 与同文件 conversion_history 的 default=list 保持同一种写法。
+    style_mappings = Column(JSONB, default=dict)  # 样式映射配置
     balance = Column(Float, default=0.0)  # 账户余额
     paragraphs_remaining = Column(Integer, default=0)  # 剩余段落数
     total_paragraphs_used = Column(Integer, default=0)  # 累计使用段落数

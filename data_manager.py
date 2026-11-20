@@ -970,6 +970,50 @@ def save_user_data(user_data: Dict[str, Any], user_id: str = None):
         pass
     return _save_user(user_data, user_id)
 
+
+def save_style_mappings_merged(user_id: str, cached_mappings: Dict[str, Any]) -> bool:
+    """回写「样式映射」配置：只覆盖自身管辖的键，其余配置保留库内最新值。
+
+    [2026-11-20 Bug #025] 旧写法把会话开始时缓存的整包 file_style_mappings
+    直接赋给 user_data['style_mappings'] 写库。用户在祈使语气配置页保存新词之后，
+    只要在转换页点过样式映射对话框的任一保存按钮，新词就会被这份旧缓存悄悄回滚，
+    界面（会话副本）却仍显示"已保存" —— 这就是「保存不住 / 转换不生效」的根因。
+
+    现在的口径：
+      1) 先 load_user_data 新读库里最新的 style_mappings 打底；
+      2) 只覆盖样式映射对话框管辖的键：
+         - 文件名键（非下划线开头，每个上传文件一份配置）
+         - _default_* 系列（「设为默认」写入的默认集）
+      3) 其余键（尤其 _tone_rules）一律以库内最新为准，会话缓存不再整包覆盖。
+    这样任何操作顺序都不会互相抹掉；没有 _tone_rules 的用户仍由
+    _ensure_default_tone_rules 首次加载时补默认值。
+
+    Args:
+        user_id: 用户 ID
+        cached_mappings: 会话中的 file_style_mappings（可能含 _tone_rules 等旧值）
+
+    Returns:
+        bool: 是否成功写入（用户数据加载失败时 False）
+    """
+    user_data = load_user_data(user_id)
+    if not isinstance(user_data, dict):
+        return False
+
+    fresh = user_data.get('style_mappings')
+    if not isinstance(fresh, dict):
+        fresh = {}
+    merged = dict(fresh)
+
+    cached = cached_mappings if isinstance(cached_mappings, dict) else {}
+    for key, value in cached.items():
+        if not key.startswith('_') or key.startswith('_default_'):
+            merged[key] = value
+
+    user_data['style_mappings'] = merged
+    save_user_data(user_data, user_id)
+    return True
+
+
 def load_all_users_data() -> List[Dict[str, Any]]:
     """加载所有用户数据"""
     return _load_all_users()

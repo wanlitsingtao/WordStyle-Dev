@@ -26,7 +26,7 @@
 import os
 import re
 import streamlit as st
-from data_manager import load_user_data, save_user_data
+from data_manager import load_user_data, save_user_data, save_style_mappings_merged
 from state import app_state
 from config import TEMP_DIR
 
@@ -1047,12 +1047,10 @@ def show_style_mapping_dialog():
             # 「不配置表格样式 / 不配置图片样式 / 不配置列表段落样式」的控件状态一并复位
             for _k in (f"skip_table_{fname}", f"skip_image_{fname}", f"skip_list_{fname}"):
                 st.session_state.pop(_k, None)
-            user_data = load_user_data(st.session_state.user_id)
-            if user_data is None:
+            # [2026-11-20 Bug #025] 只写样式映射管辖的键，保留库内最新的 _tone_rules
+            if not save_style_mappings_merged(st.session_state.user_id, st.session_state.file_style_mappings):
                 st.error("❌ 用户数据加载失败，无法保存")
                 return
-            user_data['style_mappings'] = st.session_state.file_style_mappings
-            save_user_data(user_data, st.session_state.user_id)
             st.info(f"已恢复文件 '{selected_file.name}' 的默认映射")
             st.rerun()
 
@@ -1081,12 +1079,10 @@ def show_style_mapping_dialog():
             st.session_state.file_style_mappings['_default_skip_table_mapping'] = bool(skip_table)
             st.session_state.file_style_mappings['_default_skip_image_mapping'] = bool(skip_image)
             st.session_state.file_style_mappings['_default_skip_list_mapping'] = bool(skip_list)
-            user_data = load_user_data(st.session_state.user_id)
-            if user_data is None:
+            # [2026-11-20 Bug #025] 只写样式映射管辖的键，保留库内最新的 _tone_rules
+            if not save_style_mappings_merged(st.session_state.user_id, st.session_state.file_style_mappings):
                 st.error("❌ 用户数据加载失败，无法保存")
                 return
-            user_data['style_mappings'] = st.session_state.file_style_mappings
-            save_user_data(user_data, st.session_state.user_id)
             configured_count = sum(1 for v in updated_mapping.values() if isinstance(v, str) and v)
             st.success(f"⭐ 已设为默认！共 {configured_count} 个样式映射。新文件将自动使用此配置。")
 
@@ -1094,23 +1090,18 @@ def show_style_mapping_dialog():
         # [2026-10-11] 新增「保存」按钮：保存当前文件配置但不关闭对话框，
         # 用户在多文档配置时可显式保存，对操作有掌控感（切换文档的自动保存逻辑不变）。
         if st.button("💾 保存", use_container_width=True, key="save_mapping_btn"):
-            user_data = load_user_data(st.session_state.user_id)
-            if user_data is None:
+            # [2026-11-20 Bug #025] 只写样式映射管辖的键，保留库内最新的 _tone_rules
+            if not save_style_mappings_merged(st.session_state.user_id, st.session_state.file_style_mappings):
                 st.error("❌ 用户数据加载失败，无法保存")
             else:
-                user_data['style_mappings'] = st.session_state.file_style_mappings
-                save_user_data(user_data, st.session_state.user_id)
                 st.toast(f"💾 已保存文件 '{selected_file.name}' 的样式映射（对话框保持打开）")
 
     with btn_cols[3]:
         if st.button("✅ 确定", type="primary", use_container_width=True, key="confirm_mapping_btn"):
-            # 保存到用户数据
-            user_data = load_user_data(st.session_state.user_id)
-            if user_data is None:
+            # [2026-11-20 Bug #025] 只写样式映射管辖的键，保留库内最新的 _tone_rules
+            if not save_style_mappings_merged(st.session_state.user_id, st.session_state.file_style_mappings):
                 st.error("❌ 用户数据加载失败，无法保存")
                 return
-            user_data['style_mappings'] = st.session_state.file_style_mappings
-            save_user_data(user_data, st.session_state.user_id)
             # [2026-10-22] 点「确定」意味着「按新配置重新转换」：先清掉上一轮留在
             #   主页面上的转换结果（"🎉 转换完成"摘要、"处理 N 个段落"、逐文件成功
             #   提示、以及"📥 下载转换结果"整块），否则新旧结果同屏并存，用户分不清

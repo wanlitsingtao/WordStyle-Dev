@@ -87,7 +87,9 @@ def render_tone_config_page():
     """语气配置页入口（供 st.navigation 调用）。"""
     from tone_rules_manager import ToneRulesManager
     from components.sidebar import render_sidebar
-    from components.tone_rules import render_tone_rules_editor, clear_tone_editor_state
+    from components.tone_rules import (
+        render_tone_rules_editor, clear_tone_editor_state, collect_editor_rules,
+    )
 
     render_sidebar("tone_config")
 
@@ -148,6 +150,9 @@ def render_tone_config_page():
 
     # ===== 2. 编辑区（@st.fragment，局部刷新）=====
     rules = render_tone_rules_editor(rules)
+    # 以控件当前输出为准：@st.fragment 在整页 rerun 时可能不重跑，
+    # 不能只信上一轮留下的工作副本（否则最后一格的输入会被旧值覆盖）。
+    rules = collect_editor_rules(rules)
     app_state.set_tone_rules(rules)
 
     # ===== 3. 转换测试区 =====
@@ -161,6 +166,9 @@ def render_tone_config_page():
         getattr(action_status, flash[0])(flash[1])
 
     if save_clicked:
+        # 再取一次控件最新输出，确保「保存全部」拿到的就是表格里当前的内容
+        rules = collect_editor_rules(rules)
+        app_state.set_tone_rules(rules)
         ok, msg = ToneRulesManager.validate_rules(rules)
         if not ok:
             action_status.error(f"❌ 校验失败：{msg}")
