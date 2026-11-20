@@ -359,3 +359,59 @@ def clear_tone_editor_state():
             state_key = _state_key(prefix, key)
             if state_key in st.session_state:
                 del st.session_state[state_key]
+
+
+def editor_state_active() -> bool:
+    """当前是否有编辑器 widget 处于活动状态（同一次页面会话内）。
+
+    Streamlit 切换页面时会清理非当前页的 widget 状态：那时各编辑器 key 不在
+    session_state 里，说明这是一次新的页面挂载，可以安全地用数据库最新规则
+    校准。反之 widget 状态还在 = 用户正在本页编辑（可能含未保存输入），
+    绝不能用库里的旧值覆盖其输入。
+    """
+    return any(key in st.session_state for key in TONE_EDITOR_KEYS)
+
+
+def sync_editor_snapshots(rules):
+    """把各编辑器的输入快照 / 输出缓存同步为给定规则（Bug #026）。
+
+    只写 ``_INIT_`` / ``_ROWS_``，**不动 widget 状态**：
+    - 当前页面仍显示用户刚编辑的内容（widget 状态优先）；
+    - 跨页面重进、widget 状态被清理时，data_editor 会用这份最新快照重建表格，
+      而不是显示首次进入页面时的旧规则。
+
+    调用时机：①「保存全部」成功后（用刚保存的规则）；
+    ② 配置页重新挂载时（用库里最新规则校准，见 views/tone_config.py）。
+    """
+    if not isinstance(rules, dict):
+        return
+
+    bidder = rules.get("bidder_terms") or {}
+    multi = rules.get("multi_imperative") or {}
+    single = rules.get("single_imperative") or {}
+    exc = rules.get("exceptions") or {}
+    if not isinstance(exc, dict):
+        exc = {}
+
+    mapping_rows = {
+        "tone_editor_bidder": [
+            {"原词": k, "替换词": v} for k, v in bidder.items()
+        ],
+        "tone_editor_imperative": (
+            [{"原词": k, "替换词": v} for k, v in multi.items()]
+            + [{"原词": k, "替换词": v} for k, v in single.items()]
+        ),
+    }
+    text_values = {
+        "tone_editor_verbs": "\n".join(str(x) for x in (rules.get("ying_dui_verbs") or [])),
+        "tone_editor_exc_multi": "\n".join(str(x) for x in (exc.get("multi") or [])),
+        "tone_editor_exc_ying": "\n".join(str(x) for x in (exc.get("ying") or [])),
+        "tone_editor_exc_xu": "\n".join(str(x) for x in (exc.get("xu") or [])),
+    }
+
+    for key, rows in mapping_rows.items():
+        st.session_state[_state_key(_INIT_PREFIX, key)] = [dict(r) for r in rows]
+        st.session_state[_state_key(_ROWS_PREFIX, key)] = [dict(r) for r in rows]
+    for key, text in text_values.items():
+        st.session_state[_state_key(_INIT_PREFIX, key)] = text
+        st.session_state[_state_key(_ROWS_PREFIX, key)] = text
