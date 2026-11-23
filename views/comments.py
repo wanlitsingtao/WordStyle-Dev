@@ -162,7 +162,7 @@ def render_comments_page():
     # 技术支持二维码（2026-11-23：替代原统计指标区，评分/统计展示随需求一并取消）
     # 宽度口径：三列等分 [1,1,1]，中间列占 1/3 容器宽 = 原 [1,2,1] 中间列（1/2）的 2/3；
     # 图片跟随列宽等比缩放并居中。再要调尺寸只改这里的列比例，别写死像素。
-    _col_l, _col_c, _col_r = st.columns([3, 2, 3])
+    _col_l, _col_c, _col_r = st.columns([2, 1, 2])
     with _col_c:
         st.image(str(SUPPORT_IMAGE_PATH), use_container_width=True)
     st.markdown(
