@@ -557,16 +557,19 @@ def render_sidebar(active_page: str = "conversion"):
                         st.session_state.show_unbind_confirm = False
                         st.rerun()
             else:
-                if st.button("解绑用户", key="unbind_account_btn", use_container_width=True):
-                    st.session_state.show_unbind_confirm = True
-                    st.rerun()
-
-            if st.button("退出登录", key="logout_btn", use_container_width=True):
-                st.session_state.logged_in_username = None
-                st.session_state.logged_in_user_id = None
-                st.session_state.sidebar_user_data = None
-                _forget_login(_device_fp)
-                st.rerun()
+                # [2026-11-23] 两个账号操作按钮并排（与未登录时「绑定账号 / 账号登录」一致）
+                col_act1, col_act2 = st.columns(2)
+                with col_act1:
+                    if st.button("解绑用户", key="unbind_account_btn", use_container_width=True):
+                        st.session_state.show_unbind_confirm = True
+                        st.rerun()
+                with col_act2:
+                    if st.button("退出登录", key="logout_btn", use_container_width=True):
+                        st.session_state.logged_in_username = None
+                        st.session_state.logged_in_user_id = None
+                        st.session_state.sidebar_user_data = None
+                        _forget_login(_device_fp)
+                        st.rerun()
         else:
             col_a, col_b = st.columns(2)
             with col_a:

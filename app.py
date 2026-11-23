@@ -457,24 +457,30 @@ except Exception as e:
     }
     logger.warning(f"[WARN] 使用临时用户ID（无额度）: {fallback_id}")
 
-# 第三步：只有在初始化成功时才尝试领取免费额度（仅首次加载时执行）
-if user_init_success and 'free_claimed_today' not in st.session_state:
-    try:
-        free_paragraphs = claim_free_paragraphs(app_state.get_user_id())
-        if free_paragraphs > 0:
-            st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
-            user_data['paragraphs_remaining'] = free_paragraphs
-            logger.info(f"[OK] 免费额度领取成功: {free_paragraphs}")
-            app_state.set_free_claimed_today(True)
-        else:
-            logger.info(f"ℹ️ 无需领取额度或已领取过，当前额度: {user_data.get('paragraphs_remaining', 0)}")
-            app_state.set_free_claimed_today(True)
-    except Exception as e:
-        logger.warning(f"[WARN] 领取免费额度失败: {e}，但不影响用户使用")
-        app_state.set_free_claimed_today(True)
+# 第三步：按「当前账号身份」检查当日免费额度（每个身份本次会话查一次）
+# [2026-11-23 Bug #028] 旧写法是会话级布尔 free_claimed_today：游客进来打一次勾，
+# 之后登录 / 退出 / 解绑切换身份时勾不清，绑定账号当天就永远领不到额度。
+# 现在记录「本次会话已查过哪个 user_id」：身份一变就重新查一次，
+# 由数据库每行 users.last_claim_date 做「同一天同一账号只发一次」的最终闸门。
+# 游客额度与绑定账号额度在业务上完全独立，互不占用领取资格。
+if user_init_success:
+    _claim_uid = app_state.get_user_id()
+    if app_state.get_free_claimed_uid() != _claim_uid:
+        try:
+            free_paragraphs = claim_free_paragraphs(_claim_uid)
+            if free_paragraphs > 0:
+                st.toast(f"🎉 欢迎！今日免费额度已重置为 {free_paragraphs:,} 段", icon="🎁")
+                user_data['paragraphs_remaining'] = free_paragraphs
+                logger.info(f"[OK] 免费额度领取成功: {free_paragraphs}")
+            else:
+                logger.info(f"ℹ️ 无需领取额度或已领取过，当前额度: {user_data.get('paragraphs_remaining', 0)}")
+        except Exception as e:
+            logger.warning(f"[WARN] 领取免费额度失败: {e}，但不影响用户使用")
+        # 无论发放成功 / 今日已领过 / 调用异常，都记下「这个身份本次会话已查过」，
+        # 避免同一身份的每次 rerun 反复打库；换成别的身份时条件不成立会再查一次。
+        app_state.set_free_claimed_uid(_claim_uid)
 else:
-    if not user_init_success:
-        logger.warning("[WARN] 用户初始化失败，跳过额度领取")
+    logger.warning("[WARN] 用户初始化失败，跳过额度领取")
 
 logger.info(f"用户 {app_state.get_user_id()} 初始化完成，剩余额度: {user_data['paragraphs_remaining']}")
 

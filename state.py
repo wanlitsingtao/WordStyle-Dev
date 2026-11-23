@@ -547,13 +547,28 @@ class AppState:
     
     @staticmethod
     def get_free_claimed_today() -> bool:
-        """检查今日是否已领取免费额度"""
+        """[兼容保留] 旧会话级「今日已领」布尔，2026-11-23 起额度检查改走 get_free_claimed_uid。"""
         return st.session_state.get('free_claimed_today', False)
     
     @staticmethod
     def set_free_claimed_today(claimed: bool):
-        """设置今日免费额度领取状态"""
+        """[兼容保留] 旧会话级「今日已领」布尔，新流程不再调用。"""
         st.session_state.free_claimed_today = claimed
+
+    @staticmethod
+    def get_free_claimed_uid() -> str:
+        """[2026-11-23 Bug #028] 返回本次会话里已经检查过当日免费额度的用户ID。
+
+        注意：这不是「今日已领」的判定。真正的闸门是数据库里每行 users.last_claim_date，
+        按账号行独立。这里只用来避免同一身份在每次 rerun 都重复打库；身份一变
+        （登录 / 退出 / 解绑）返回值就对不上，app.py 会重新检查该身份的领取资格。
+        """
+        return st.session_state.get('free_claimed_uid', '')
+
+    @staticmethod
+    def set_free_claimed_uid(uid: str):
+        """记录「这个身份本次会话已检查过额度」。"""
+        st.session_state.free_claimed_uid = uid
     
     # ==================== 反馈表单相关 ====================
     
@@ -678,6 +693,7 @@ class AppState:
             '_progress_update': None,
             'free_paragraphs_claimed': False,
             'free_claimed_today': False,
+            'free_claimed_uid': '',
             'feedback_form_reset': 0,
             'comment_refresh_needed': False,
             'has_seen_guide': False,

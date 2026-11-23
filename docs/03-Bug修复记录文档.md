@@ -2,6 +2,51 @@
 
 ## Bug 修复记录
 
+### Bug #028: 新终端游客进入后登录已绑定账号，账号当天领不到免费额度（额度检查改为按账号身份）
+
+**日期**: 2026-11-23  
+**严重级别**: 🟠 中（额度未丢，但绑定账号当天该恢复的额度没恢复，界面显示旧余额）  
+**影响范围**: `app.py`、`state.py`、`components/sidebar.py`（附带 UI：解绑/退出两按钮改并排）、新增 `temp/test_free_claim_per_identity_20261123.py`（16 例）、`temp/_run_final_20261118_tone.py`（新套件 + 3.9 静态契约）、docs 01/02/03  
+**发现者**: 用户确认业务口径「游客段落余额和已绑定用户的段落余额在业务上完全独立」；已绑定用户当天没恢复额度，登录后应该恢复。  
+**用户确认的产品决策**: 「只补足、不抹高」（把覆盖式发放改成 max）**不改**，本次只修领取资格的判定。
+
+**根因**：
+
+- `app.py` 第三步用会话级布尔 `free_claimed_today` 做「本次会话已领过」的免检标记，它**不认账号**；
+- 游客首帧给游客行发放后把勾打上，登录 / 退出 / 解绑切换身份时没有任何一处清这个勾
+  （`_identity_key` 变化只清 `user_data` / `sidebar_user_data`），于是绑定账号当天永远被跳过；
+- 数据库层本来是对的：`claim_free_paragraphs(user_id)` 按 `users` 行的 `last_claim_date` 判定，
+  游客行与账号行天然各自独立、同一天同一行只发一次。坏的只有「一人打勾、全员免查」这一层。
+
+**修改**：
+
+1. `app.py` 第三步改为记录「本次会话已查过哪个 user_id」：条件从
+   `'free_claimed_today' not in st.session_state` 改为 `app_state.get_free_claimed_uid() != _claim_uid`；
+   领取时传当前身份的 `_claim_uid`；无论发放 / 已领过 / 异常，都在检查后统一
+   `app_state.set_free_claimed_uid(_claim_uid)`（原来三处置位合并为一处）。
+2. `state.py` 新增 `get_free_claimed_uid()` / `set_free_claimed_uid(uid)` 与默认字典键
+   `free_claimed_uid`；旧的 `get/set_free_claimed_today` 保留但标注兼容，新流程不再调用。
+3. 发放动作**未改**：`user.paragraphs_remaining = free_paragraphs` 仍是覆盖式，
+   `last_claim_date` 仍是按行的唯一闸门（用户明确「只补足、不抹高」不改）。
+4. `components/sidebar.py`：登录态下「解绑用户」「退出登录」由顺序摆放改入
+   `col_act1, col_act2 = st.columns(2)` 两列并排（与未登录态两按钮一致）；
+   绑定 / 登录 / 解绑 / 退出四个入口的登录态读写调用点数量不变。
+
+**改完的业务效果**（用户确认）：
+
+- 游客进来 → 领游客自己那份 10,000；
+- 登录到绑定账号 → 账号当天没领过就立刻恢复，当天已领过就不重复发；
+- 两边互不影响；同一账号当天领过一次后，再刷新也不会再发一遍。
+
+**测试**：`temp/test_free_claim_per_identity_20261123.py` 16 例 —— 从 `app.py` 源文件用 AST
+取出第三步的**真实代码块**编译执行，注入假 st / 假 DB（按 users 行独立的 `last_claim_date`）/ 真实
+`state.AppState`，逐帧模拟游客 → 登录 → 刷新 → 退出；含旧实现等价复刻的**阳性对照**
+（游客领过后登录账号确实漏领），证明用例能区分新旧行为；另有静态契约 6 项（会话级布尔已移除、
+新标记接入、state 新方法、覆盖式发放未改、两按钮 AST 并排校验、登录态接入点计数不变）与
+工程数据文件零改动守卫。不连数据库、不执行 `app.py` 整体。
+
+---
+
 ### Bug #027: 刷新页面 / 重新打开应用后登录状态丢失（登录保持增强）
 
 **日期**: 2026-11-20  
