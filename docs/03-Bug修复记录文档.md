@@ -2,6 +2,32 @@
 
 ## Bug 修复记录
 
+### Bug #029: 用户评价页改造为技术支持页（需求变更）
+
+**日期**: 2026-11-23  
+**严重级别**: 🟢 低（纯界面文案与展示调整，无数据结构变更）  
+**影响范围**: `views/comments.py`（主体）、`components/sidebar.py`（菜单文案 1 行）、`app.py`（导航 title 与头部注释）、`ui_theme.py`（注释）、新增 `temp/test_support_page_contract_20261123.py`、docs 01/02/03  
+**需求来源**: 用户 2026-11-23 提出的 4 条改进（菜单更名 / 指标区换二维码 / 表单改留言去评分 / 删空状态提示）。
+
+**修改内容**：
+
+1. 菜单与页面更名：侧边栏「💬 用户评价」→「💬 技术支持」（`components/sidebar.py`）；
+   `app.py` 的 `st.Page` title「发表评论」→「技术支持」（url_path 仍为 `comments`，不影响已有链接）；
+   页面标题 `render_page_title("💬 技术支持")`。
+2. 原「总评论数 / 平均评分 / 总点赞数」三个 `st.metric` 指标区整块删除，
+   替换为 `resource/support.jpg` 技术支持二维码（三列居中 + `use_container_width`，
+   下方一行小字「扫码联系技术支持」）；图片路径按工程约定用 `__file__` 拼绝对路径。
+3. 表单：折叠标题「✍️ 发表评论」→「✍️ 留言」；删除评分滑块 `st.slider("评分", ...)`；
+   「评论内容」→「留言内容」；相关报错/成功/失败提示文案同步改「留言」；
+   提交按钮「📤 发表」保留；提交调用改为 `add_comment(None, content)`（不传 rating，走默认值 5）。
+4. 删除空状态提示 `st.info("💭 暂无评论，快来发表第一条评论吧！")`；
+   留言列表本身保留（有留言才渲染）。
+5. 留言列表里的星级展示（`⭐` * rating）随评分功能一并删除；点赞按钮保留。
+6. `comments_manager.py`、后端 `backend/app/api/comments.py`、`backend/app/models.py` 均不动
+   （页面走 `views/comments.py` 自带的存取函数）；数据库表结构不动，**本次无任何 SQL / dbscript 脚本**。
+
+**验证**: 新增静态契约回归 `temp/test_support_page_contract_20261123.py`（源码契约 + add_comment 兼容性 + 图片文件存在性），全量收尾自检通过。
+
 ### Bug #028: 新终端游客进入后登录已绑定账号，账号当天领不到免费额度（额度检查改为按账号身份）
 
 **日期**: 2026-11-23  

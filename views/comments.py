@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-用户评价页（T03 / 从 app.py 迁移）
-统计 / 发表评论 / 评论列表 / 点赞。
+技术支持页（T03 / 从 app.py 迁移；2026-11-23 按需求改造）
+技术支持二维码 / 留言 / 留言列表 / 点赞。
 """
 import json
 import logging
@@ -17,6 +17,10 @@ from user_tz import now_utc_iso, format_local, sort_key_ts
 logger = logging.getLogger('WordStyle')
 
 COMMENTS_FILE = Path("comments_data.json")
+
+# 技术支持二维码（2026-11-23 需求变更：替代原统计指标区）。
+# resource 下图片一律用 __file__ 拼绝对路径 —— 按 cwd 拼在云端偶发读不到（同 sidebar 的 gzh.png 口径）。
+SUPPORT_IMAGE_PATH = Path(__file__).resolve().parent.parent / "resource" / "support.jpg"
 
 
 def load_comments():
@@ -137,14 +141,14 @@ def like_comment(comment_id):
 
 
 def render_comments_page():
-    """用户评价页入口（供 st.navigation 调用）"""
+    """技术支持页入口（供 st.navigation 调用）"""
     from components.sidebar import render_sidebar
     render_sidebar("comments")
 
     # 页面级标题：与侧边栏品牌「标书编写神器」顶对齐，文案与功能菜单项一致。
     # 必须紧跟 render_sidebar() 之后 —— 详见 ui_theme.PAGE_TITLE_MARGIN_TOP 的说明。
     from ui_theme import render_page_title
-    render_page_title("💬 用户评价")
+    render_page_title("💬 技术支持")
 
     if app_state.get_comment_refresh_needed():
         app_state.set_comment_refresh_needed(False)
@@ -155,28 +159,23 @@ def render_comments_page():
         st.session_state.comments_dirty = False
     comments = st.session_state.comments_cache
 
-    # 统计信息
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("总评论数", len(comments))
-    with col2:
-        if comments:
-            avg_rating = sum(c.get('rating', 5) for c in comments) / len(comments)
-            st.metric("平均评分", f"{avg_rating:.1f} ⭐")
-        else:
-            st.metric("平均评分", "暂无")
-    with col3:
-        total_likes = sum(c.get('likes', 0) for c in comments)
-        st.metric("总点赞数", total_likes)
+    # 技术支持二维码（2026-11-23：替代原统计指标区，评分/统计展示随需求一并取消）
+    _col_l, _col_c, _col_r = st.columns([1, 2, 1])
+    with _col_c:
+        st.image(str(SUPPORT_IMAGE_PATH), use_container_width=True)
+    st.markdown(
+        "<div style='text-align: center; color: #888; font-size: 0.9em; margin-top: 4px;'>"
+        "扫码联系技术支持</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
 
-    # 发表评论表单
-    with st.expander("✍️ 发表评论", expanded=False):
+    # 留言表单（2026-11-23：表单改为留言，评分功能取消）
+    with st.expander("✍️ 留言", expanded=False):
         with st.form("comment_form", clear_on_submit=True):
-            rating = st.slider("评分", 1, 5, 5, help="请为工具打分")
             content = st.text_area(
-                "评论内容",
+                "留言内容",
                 placeholder="分享您的使用体验、建议或问题...",
                 height=100,
                 max_chars=500
@@ -187,24 +186,24 @@ def render_comments_page():
 
             if submit_comment:
                 if not content.strip():
-                    st.error("❌ 请输入评论内容")
+                    st.error("❌ 请输入留言内容")
                 else:
-                    with st.spinner('正在提交评论...'):
-                        new_comment = add_comment(None, content, rating)
+                    with st.spinner('正在提交留言...'):
+                        # 评分已取消：不传 rating，走 add_comment 默认值 5 落库，
+                        # 数据库 rating 字段与后端 API 均保持原样（不动表结构）。
+                        new_comment = add_comment(None, content)
                     if new_comment:
-                        st.success("✅ 评论发表成功！")
+                        st.success("✅ 留言提交成功！")
                         st.session_state.comments_dirty = True
                         app_state.set_comment_refresh_needed(True)
                         st.rerun()
                     else:
-                        st.error("❌ 评论发表失败，请稍后重试")
+                        st.error("❌ 留言提交失败，请稍后重试")
 
     st.markdown("---")
 
-    # 评论列表
-    if not comments:
-        st.info("💭 暂无评论，快来发表第一条评论吧！")
-    else:
+    # 留言列表（2026-11-23：去掉空列表状态提示；星级展示随评分功能一并取消）
+    if comments:
         # 用 sort_key_ts 而不是裸字符串比较：带时区偏移的 ISO 串（+08:00 / -05:00）
         # 直接按字符串排会排错；统一折算成 UTC 时刻后比较才对。
         comments_sorted = sorted(comments, key=lambda x: sort_key_ts(x.get('timestamp')), reverse=True)
@@ -212,15 +211,12 @@ def render_comments_page():
             with st.container():
                 col_header, col_like = st.columns([4, 1])
                 with col_header:
-                    rating = comment.get('rating', 5)
-                    stars = "⭐" * rating
                     # 按查看者本地时区渲染；老数据（无时区裸串）原样显示，不做平移
                     _ts = sanitize_html(format_local(comment.get('timestamp', '')))
                     _content = sanitize_html(comment.get('content', ''))
                     st.markdown(
                         f"<div style='padding: 10px; background-color: #f0f2f6; "
                         f"border-radius: 5px; margin: 5px 0;'>"
-                        f"{stars}<br>"
                         f"<span style='color: #666; font-size: 0.85em;'>🕒 {_ts}</span><br>"
                         f"{_content}</div>",
                         unsafe_allow_html=True
@@ -233,4 +229,4 @@ def render_comments_page():
                 st.markdown("---")
 
         if len(comments) > 20:
-            st.caption(f"显示最近20条评论，共 {len(comments)} 条")
+            st.caption(f"显示最近20条留言，共 {len(comments)} 条")

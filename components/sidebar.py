@@ -28,7 +28,7 @@ def _render_feature_menu(active_page: str = "conversion"):
         ("conversion", "📄 文档转换"),
         ("toolbox", "🛠️ 工具箱"),
         ("tone_config", "⚙️ 祈使语气配置"),
-        ("comments", "💬 用户评价"),
+        ("comments", "💬 技术支持"),
     )
     page_keys = [key for key, _ in page_options]
     labels = {key: label for key, label in page_options}
