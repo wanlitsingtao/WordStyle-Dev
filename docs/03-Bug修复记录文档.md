@@ -2,6 +2,63 @@
 
 ## Bug 修复记录
 
+### Bug #030: 系统时间统一——云端时区失效 + 各页显示口径不一致（A+B，C 不做）
+
+**日期**: 2026-11-24  
+**严重级别**: 🟠 中（线上「按用户本地时间显示」实际未生效，云端一律显示 UTC）  
+**影响范围**: `identity.py`、`user_tz.py`、`app.py`、`admin_web.py`、`components/dialogs/history.py`、`views/conversion.py`、`user_manager.py`、新增 `temp/test_timezone_unify_20261124.py`、docs 01/02/03  
+**需求来源**: 用户 2026-11-24「将系统的时间统一为用户的当地时间」，确认做 **A + B**、**C 不做**，管理后台按**管理员浏览器本地时区**显示。
+
+**根因**：
+
+1. `user_tz.py` 只从 `ws_tz` cookie 读时区。Streamlit Community Cloud 的代理丢弃 WS 握手
+   Cookie 头 → `st.context.cookies` 恒为空（与 `ws_bid` 身份 cookie 完全同一原因），
+   于是 `get_user_tzinfo()` 一直退到最后一级「服务器本地时区」（云端 = UTC）。
+   本地开发是 GMT+8，看起来是对的，容易误判为已生效。
+2. 旧 `get_user_tzinfo()` **连回退值也写进会话缓存**，首帧没拿到 cookie 就把 UTC
+   钉死一整场会话，后续 rerun 不会再试。
+3. 系统里并存多套显示口径：`admin_web.format_datetime()` 写死北京时间 `BEIJING_TZ`、
+   `components/dialogs/history.py` 调 `utils.convert_server_time_to_local()`（实为空壳、
+   直接返回原串）、结果列表裸截断 `[:19].replace('T',' ')`、
+   `user_manager.py` 用服务器 `datetime.now()` 而主链路 `views/conversion.py` 用 `now_local()`。
+
+**修改内容**：
+
+1. **A 地基**：`identity.bridge_script()` 在重载 URL 里顺带回传
+   `ws_tz=IANA名|UTC偏移分钟`（桥本来就要重载一次，零额外重载）；常量
+   `TIMEZONE_QUERY_PARAM="ws_tz"` 放 `identity.py`，`user_tz.py` 导入避免循环依赖；
+   `clean_identity_url()` / 顶层清理脚本同步删该参数。
+2. **A 读取**：`user_tz._parse_tz_raw()` 统一解析 URL 参数与 cookie 两种编码；
+   `get_user_tzinfo()` 优先级 = 会话缓存 → URL 参数 → cookie → 服务器本地（**不缓存**）；
+   新增 `capture_timezone_from_url()`，在 `app.py` 里排在 `clean_identity_url()` **之前**
+   （顺序颠倒则清参数触发 rerun 后时区永久丢失）。
+3. **A 后台**：`admin_web.py` 是独立 Streamlit 应用、不经过 `app.py` 的桥，由
+   `user_tz.ensure_timezone_bridge()` 自建一次同类桥（`_ws_tz_bridge=1` 防循环）；
+   `clean_timezone_url()` 只在 capture 成功时调用，避免重载循环；侧边栏诊断区显示时区来源。
+4. **B 显示**：`admin_web.format_datetime()` 与「生成时间」列改走 `format_local()`，
+   按管理员浏览器本地时区显示；`history.py`、`views/conversion.py` caption 收口到
+   `format_local()`；`user_manager.py` 三条历史记录 `time` 改用 `_local_stamp()`
+   （内部延迟调 `now_local()`、异常环境降级），与主链路一致（**仍为裸串**，
+   因为该字段参与日界 `[:10]` 比较）。延迟导入是刻意的：本模块被 `data_manager`
+   顶层 import，顶层新增依赖会让精简沙箱整条数据访问层 import 失败。
+
+**C 明确不做 / 未改动边界**：
+
+- 每日免费额度换日、`date.today()` / `last_claim_date`、「今日新增」统计、任务日期筛选
+  仍按既有服务器 / 北京时间口径 —— `BEIJING_TZ` / `to_beijing()` / `beijing_date_str()`
+  只服务日界，不再用于任何显示函数。
+- 后端 ORM 的 `datetime.now()` 写入**不动**：列是 `DateTime(timezone=True)`，Render 会话
+  时区 UTC，写入已是 UTC 绝对时刻；后端拿不到浏览器时区，改它无收益且会牵动日界。
+- 文件锁超时、JWT 过期、任务过期天数、耗时统计等内部计时不动。
+- 数据库表结构与历史数据不动：**无 SQL 迁移、无需 `dbscript\`、无数据回填**；
+  历史无时区裸串按 `format_local()` 既定口径原样显示。
+
+**验证**: 新增 `temp/test_timezone_unify_20261124.py`（31 例：桥脚本含时区参数与
+DOMPurify 自检、URL/cookie 双格式解析、读取优先级、回退不缓存可升级、防循环、
+不同 UTC 偏移下的 `format_local` 换算、占位对象下诊断信息不抛异常、各显示点静态契约、
+C 边界不回归）；全量收尾自检通过。全量自检曾暴露两处真实回归（沙箱缺 `user_tz`、
+假 Streamlit 占位对象），已改为延迟导入 + 类型防线修复，并补了对应回归用例。
+
 ### Bug #029: 用户评价页改造为技术支持页（需求变更）
 
 **日期**: 2026-11-23  

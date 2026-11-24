@@ -368,26 +368,32 @@ try:
     # 这段脚本直接改 window.top（线上 iframe 与顶层同源，已实测），应用一渲染就生效。
     hide_identity_in_top_url()
 
-    # 第二步：再把 iframe 自己的 URL 也清干净（同时删掉遗留的 `_ws_bid_bridge`）。
+    # [TZ 2026-11-24] ⚠️ 必须排在 clean_identity_url() **之前**：
+    # 云端 st.context.cookies 读不到 ws_tz，身份桥已把浏览器时区写进 URL 参数
+    # `ws_tz`；clean_identity_url() 会把它连同 ws_bid 一起删掉并触发 rerun。
+    # 所以先在这里把时区读进 session_state，之后地址栏清干净也不会丢。
+    # cookie 仍照常写（自托管 / 本地开发路径）；取不到时 user_tz 回退服务器本地时间，
+    # 且回退值不缓存，下一次 rerun 还会再试。
+    try:
+        from user_tz import (
+            capture_timezone_from_url, ensure_timezone_cookie, describe_user_tz,
+        )
+        if capture_timezone_from_url():
+            logger.info("[TZ] 已从 URL 参数读到浏览器时区（Cloud 路径）")
+        ensure_timezone_cookie()
+        # 留一行痕迹：排查"文件名时间不对"时，直接看这里就知道后端拿到的时区是什么
+        logger.info(f"[TZ] {describe_user_tz()}")
+    except Exception as e:  # 时区只是显示优化，绝不能因为它拖垮启动
+        logger.warning(f"[TZ] 时区探测跳过: {e}")
+
+    # 第二步：再把 iframe 自己的 URL 也清干净（同时删掉遗留的 `_ws_bid_bridge`
+    # 与 2026-11-24 新增的时区参数 ws_tz）。
     # 背景：云端读不到 cookie，`?ws_bid=<设备号>` 是唯一入口，但它常驻地址栏 =
     # 把链接发出去就把额度/历史一起发出去了（开关见 config.HIDE_IDENTITY_PARAM）。
     # 为什么不会反复桥接：resolve_identity() 读到 URL 参数时已把 bid 记进
     # session_state，本次清理触发的 rerun 会从会话里取回同一身份（详见 identity.py）。
     if clean_identity_url():
         logger.info("[IDENTITY] 已从地址栏移除身份参数（本次会话已记住身份）")
-
-    # [TZ] 探测浏览器时区，写进 cookie `ws_tz`（与身份 cookie 同一套机制）。
-    # 为什么必须在入口就做：Python 跑在服务器（云端是 UTC），datetime.now() 比用户
-    # 手表早 8 小时，转换结果文件名会显示成"半夜生成"。时区只有浏览器知道，
-    # 必须提前探测好，等用户点转换时（经历多次 rerun）cookie 已经可读。
-    # 取不到时 user_tz 会回退服务器本地时间，不会让转换失败。
-    try:
-        from user_tz import ensure_timezone_cookie, describe_user_tz
-        ensure_timezone_cookie()
-        # 留一行痕迹：排查"文件名时间不对"时，直接看这里就知道后端拿到的时区是什么
-        logger.info(f"[TZ] {describe_user_tz()}")
-    except Exception as e:  # 时区只是显示优化，绝不能因为它拖垮启动
-        logger.warning(f"[TZ] 时区探测跳过: {e}")
 
     # [2026-11-20 登录保持] 按设备身份恢复账号登录态（默认 7 天，每次新会话滑动续期）。
     # 为什么在这里：device_fingerprint 已由 identity 解析确定，且 URL 参数桥若触发

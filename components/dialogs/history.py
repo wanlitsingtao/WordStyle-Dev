@@ -6,6 +6,10 @@
 import streamlit as st
 import logging
 
+# [TZ 2026-11-24] 时间显示统一收口到 user_tz.format_local()：带时区的 UTC 值
+# 按查看者本地时区换算，历史裸串原样显示。
+from user_tz import format_local
+
 logger = logging.getLogger('WordStyle')
 
 @st.dialog("📋 我的转换历史")
@@ -40,9 +44,10 @@ def show_history_dialog():
         # 准备表格数据（倒序显示，最新的在前面）
         table_data = []
         for record in reversed(conversion_history[-20:]):  # 显示最近20条
-            # [OK] 修复：将服务器时间转换为本地时间显示
-            server_time = record.get('time', '未知')
-            local_time = convert_server_time_to_local(server_time)
+            # [TZ 2026-11-24] 统一走 format_local()，不再用 utils 里那个空壳
+            # convert_server_time_to_local()（它其实直接返回原串，各页各写一套
+            # 换算正是时间口径不统一的来源）。'未知'/解析失败会原样返回。
+            local_time = format_local(record.get('time', '未知'))
             
             # 构建状态显示
             if record.get('failed', 0) == 0:

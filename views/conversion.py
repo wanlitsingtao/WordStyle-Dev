@@ -14,8 +14,9 @@ import streamlit as st
 from state import app_state
 from ui_theme import render_page_title, render_section_title
 # [TZ] 文件名/时间戳按用户所在时区生成，而不是服务器时间（云端是 UTC，会比用户早 8 小时）。
-# 时区由浏览器通过 cookie 提供，取不到时回退服务器本地时间，见 user_tz.py。
-from user_tz import local_stamp, now_local, get_user_tzinfo
+# [2026-11-24] 时区由浏览器经 URL 参数桥回传（Cloud 读不到 cookie），cookie 仅作
+# 自托管路径；取不到时回退服务器本地时间且**不缓存**，见 user_tz.py / identity.py。
+from user_tz import local_stamp, now_local, get_user_tzinfo, format_local
 
 logger = logging.getLogger('WordStyle')
 
@@ -1008,7 +1009,8 @@ def render_conversion_page():
                             key=f"download_recent_{file_info['name']}",
                         )
                     with col2:
-                        st.caption(f"转换时间: {file_info['time']}")
+                        # [TZ 2026-11-24] 统一走 format_local()，不再裸拼字符串
+                        st.caption(f"转换时间: {format_local(file_info.get('time', ''))}")
             else:
                 st.warning(f"⚠️ 文件已过期或不存在: {file_info['name']}")
 

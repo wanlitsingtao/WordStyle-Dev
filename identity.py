@@ -81,6 +81,14 @@
 代价：每次**新进入**页面多一次约 1 秒的自动重载（地址栏带上参数后，刷新不再重载）。
 防循环：脚本同时写入 `_ws_bid_bridge=1`，若重载后仍拿不到 bid（JS 被禁用等），
 则不再重试、退回 UA 身份保证应用可用。
+
+==================== 2026-11-24：桥顺带回传浏览器时区 ====================
+`ws_tz` cookie 出于同一原因在 Cloud 上读不到，user_tz.py 因此一直回退服务器
+UTC ——「按用户本地时间显示」在线上形同虚设。桥本来就要重载一次，把时区一起
+写进 URL 参数（`ws_tz=IANA名|UTC偏移分钟`）即可零额外重载地修好；
+user_tz.capture_timezone_from_url() 会在地址栏参数被清理**之前**把它读进
+session_state。管理后台 admin_web.py 是独立 Streamlit 应用、没有身份桥，
+由 user_tz.ensure_timezone_bridge() 单独做一次同样的时区桥。
 """
 
 from __future__ import annotations
@@ -98,6 +106,11 @@ IDENTITY_COOKIE_NAME = "ws_bid"
 # 参数名与 cookie 同名，便于对照；桥脚本会把它写进地址栏。
 IDENTITY_QUERY_PARAM = "ws_bid"
 BRIDGE_FLAG_PARAM = "_ws_bid_bridge"   # 防循环：脚本写入，服务端见到就说明已尝试过
+# [2026-11-24] 时区随 URL 参数桥一起回传：Cloud 读不到 ws_tz cookie，但 URL 参数
+# 一定能在握手时被 Python 读到。桥本来就要重载一次，顺带把浏览器时区带回来，
+# 零额外重载。参数名与 user_tz.TZ_COOKIE_NAME 同名；常量放这里，user_tz 从此处
+# 导入，避免 user_tz -> identity -> user_tz 的循环依赖。
+TIMEZONE_QUERY_PARAM = "ws_tz"
 # [2026-11-09] 地址栏清理后，本次会话靠它记住身份（session_state，刷新即失效）
 SESSION_BID_KEY = "_ws_identity_bid"
 COOKIE_MAX_AGE = 2 * 365 * 24 * 3600  # 2 年（秒）
@@ -457,9 +470,16 @@ def bridge_script(bid: str) -> str:
         "t.searchParams.delete('" + BRIDGE_FLAG_PARAM + "');"
         "window.top.history.replaceState(null,'',t.toString());}}catch(e){}"
         # ② 应用自身地址：带参数后重载（st.query_params 必定能读到）
+        #    [2026-11-24] 顺带回传浏览器时区：Cloud 读不到 ws_tz cookie，但身份桥
+        #    这次重载的 URL 参数一定能被 Python 读到。IANA 名 + UTC 偏移用 '|'
+        #    拼成一个值，与 cookie 的格式一致，交给 user_tz 统一解析。
         "var u=new URL(location.href);"
         "u.searchParams.set('" + IDENTITY_QUERY_PARAM + "',bid);"
         "u.searchParams.set('" + BRIDGE_FLAG_PARAM + "','1');"
+        "var off=-new Date().getTimezoneOffset();"
+        "var iana='';"
+        "try{iana=Intl.DateTimeFormat().resolvedOptions().timeZone||'';}catch(e){}"
+        "u.searchParams.set('" + TIMEZONE_QUERY_PARAM + "',iana+'|'+off);"
         "location.replace(u.toString());"
         "}catch(e){}})();</script>"
     )
@@ -513,6 +533,9 @@ def _top_url_cleanup_script() -> str:
         "u.searchParams.delete('" + IDENTITY_QUERY_PARAM + "');d=true;}"
         "if(u.searchParams.has('" + BRIDGE_FLAG_PARAM + "')){"
         "u.searchParams.delete('" + BRIDGE_FLAG_PARAM + "');d=true;}"
+        # [2026-11-24] 顶层若也被外壳转发了时区参数，一并抹掉。
+        "if(u.searchParams.has('" + TIMEZONE_QUERY_PARAM + "')){"
+        "u.searchParams.delete('" + TIMEZONE_QUERY_PARAM + "');d=true;}"
         "if(d){window.top.history.replaceState(null,'',u.toString());}"
         "}catch(e){}})();</script>"
     )
@@ -572,7 +595,9 @@ def clean_identity_url() -> bool:
     代价：刷新 / 新标签页时 session_state 是新的，必须重新桥接一次（约 1 秒加载页）。
     这是"地址栏干净"换来的确定性成本，不是 bug。
 
-    只删这两个参数，其余查询参数（如 embed）原样保留。
+    只删身份参数（ws_bid / _ws_bid_bridge）与 2026-11-24 新增的时区参数（ws_tz），
+    其余查询参数（如 embed）原样保留。⚠️ 时区参数必须在 user_tz 把它读进
+    session_state 之后才删（app.py 里调用顺序已保证），否则云端又拿不到时区。
     """
     if not _hide_identity_param_enabled():
         return False
@@ -591,6 +616,11 @@ def clean_identity_url() -> bool:
             removed = True
         if IDENTITY_QUERY_PARAM in st.query_params:
             del st.query_params[IDENTITY_QUERY_PARAM]
+            removed = True
+        # [2026-11-24] 时区参数与身份参数同批回传，读进 session_state 后一并清掉，
+        # 保持地址栏干净（时区虽不敏感，但不该常驻在可转发的链接里）。
+        if TIMEZONE_QUERY_PARAM in st.query_params:
+            del st.query_params[TIMEZONE_QUERY_PARAM]
             removed = True
     except Exception:
         return removed

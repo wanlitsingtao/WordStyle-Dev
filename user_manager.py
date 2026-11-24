@@ -27,6 +27,27 @@ import logging
 logger = logging.getLogger('WordStyle')
 
 
+def _local_stamp():
+    """给用户看的历史记录时间戳：优先按用户所在时区，取不到才退化服务器时间。
+
+    [2026-11-24] 与主链路 views/conversion.py 的 now_local() 对齐（云端服务器是
+    UTC，直接用 datetime.now() 会差 8 小时）。
+
+    ⚠️ user_tz 故意**函数内延迟导入**：本模块被 data_manager 在顶层 import，
+    若把 user_tz 挂到模块顶层，精简部署 / 测试沙箱少复制一个文件就会让整个
+    数据访问层 import 失败（2026-11-24 全量自检实测踩过）。正常工程里 user_tz
+    一定存在，降级分支只在异常环境生效，不会影响线上口径。
+
+    格式仍是裸串 %Y-%m-%d %H:%M:%S，因为 conversion_history.time 参与「今日」
+    日界的 [:10] 比较（C 不做）。
+    """
+    try:
+        from user_tz import now_local
+        return now_local().strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
 @contextmanager
 def file_lock(file_path, timeout=LOCK_TIMEOUT_SECONDS):
     """
@@ -272,7 +293,7 @@ def claim_free_paragraphs(user_id=None):
         user_data['free_quota_history'] = []
     
     user_data['free_quota_history'].append({
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'time': _local_stamp(),
         'amount': free_paragraphs,
         'type': 'daily_free_quota',
         'date': today
@@ -295,7 +316,7 @@ def recharge_user(amount, package_label, user_id=None):
     
     # 记录充值历史
     recharge_record = {
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'time': _local_stamp(),
         'amount': amount,
         'paragraphs': paragraphs_to_add,
         'package': package_label
@@ -332,7 +353,7 @@ def add_conversion_record(files_count, success_count, failed_count,
     user_data = load_user_data(user_id)
     
     conversion_record = {
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'time': _local_stamp(),
         'files': files_count,
         'success': success_count,
         'failed': failed_count,

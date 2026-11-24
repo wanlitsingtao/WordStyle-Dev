@@ -34,6 +34,20 @@ except Exception:
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(__file__))
 
+# [TZ 2026-11-24] 管理后台是**独立 Streamlit 应用**，不经过 app.py 的 URL 参数桥。
+# Cloud 上 st.context.cookies 读不到 ws_tz，时间显示会一直退化为服务器 UTC。
+# 这里自建一次时区桥：先在清理前把 URL 参数读进会话，再写 cookie，最后在确实
+# 拿不到时区时注入一次桥脚本（带防循环标记，重载一次即可）。
+# ⚠️ 顺序不能变：clean_timezone_url() 只能在 capture 成功时调用，否则会重载循环。
+from user_tz import (
+    capture_timezone_from_url, clean_timezone_url, ensure_timezone_cookie,
+    ensure_timezone_bridge, format_local, describe_user_tz,
+)
+if capture_timezone_from_url():
+    clean_timezone_url()
+ensure_timezone_cookie()
+ensure_timezone_bridge()
+
 # 使用统一数据访问层（支持双模式）
 import data_manager  # 供下方诊断面板读取 DATA_SOURCE_INIT_ERROR
 from data_manager import (
@@ -55,6 +69,8 @@ st.sidebar.info(f"DB URL: {'已配置' if DATABASE_URL else '未配置'}")
 
 # 显示详细诊断信息
 with st.sidebar.expander("诊断信息"):
+    # [TZ 2026-11-24] 后台时间按**管理员浏览器本地时区**显示，这里给出来源便于排查
+    st.write(f"**时区口径**: {describe_user_tz()}")
     st.write(f"**CONFIG_DATA_SOURCE**: {CONFIG_DATA_SOURCE}")
     st.write(f"**ACTUAL_DATA_SOURCE**: {ACTUAL_DATA_SOURCE}")
     st.write(f"**get_data_source()**: {get_data_source()}")
@@ -108,9 +124,16 @@ st.markdown("""
 # 时，「今日」的窗口会整体错位 8 小时：
 #   - 本地 00:00-08:00 发生的注册/登录，UTC 日期还是前一天 -> 漏算
 #   - UTC 16:00 之后发生的记录会落到「明天」           -> 误算
-# 现在统一：带时区的时间一律换算成北京时间再显示、再比较日期；不带时区的
-# （本地 JSON 模式用 datetime.now().isoformat() 写入的历史数据）本来就等于本地
-# 时间，原样返回，绝不能再 +8。
+#
+# [2026-11-24] 口径拆成两层，**不要混用**：
+#   ① **显示**（注册时间 / 最后登录 / 创建时间 / 提交时间等给人看的列）
+#      → 一律走 user_tz.format_local()，按**管理员浏览器本地时区**渲染；
+#        带时区的 UTC 值换算，不带时区的历史裸串原样显示（绝不能硬 +8）。
+#   ② **日界**（「今日新增」统计、任务页日期筛选）
+#      → 仍按北京时间比较，保持既有运营口径不变。
+#        这属于「按用户本地自然日」的范围（本次需求明确 **C 不做**），
+#        因此 BEIJING_TZ / to_beijing() / beijing_date_str() 只服务于 ②，
+#        不再用于任何显示函数。
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 
@@ -142,12 +165,14 @@ def beijing_date_str(dt_str):
 
 
 def format_datetime(dt_str):
-    """格式化日期时间字符串（统一显示为北京时间）"""
+    """格式化给人看的时间：**按管理员浏览器本地时区**显示（2026-11-24）。
+
+    带时区的 UTC 值（DB / API）由 format_local() 换算；不带时区的历史裸串
+    （本地 JSON 模式）按 user_tz 的既定口径原样显示，绝不硬平移。
+    ⚠️ 日界统计仍走 beijing_date_str()（C 不做），不要用本函数比日期。
+    """
     if dt_str and dt_str != '-':
-        dt = to_beijing(dt_str)
-        if dt is None:
-            return dt_str          # 解析失败：原样返回，不要吞掉原始值
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        return format_local(dt_str, '%Y-%m-%d %H:%M:%S')
     return '-'
 
 def format_currency(amount):
@@ -1370,7 +1395,8 @@ def show_file_management():
                     '用户ID': file_info.get('user_id', 'unknown')[:12],
                     '文件名': file_info['filename'],
                     '文件类型': file_info['file_type'],
-                    '生成时间': file_info['created_at'][:19].replace('T', ' '),
+                    # [TZ 2026-11-24] 统一走 format_local()，不再裸截断 ISO 串
+                    '生成时间': format_local(file_info.get('created_at', '')),
                     '大小(KB)': file_info['size_kb'],
                     '文件ID': file_id  # 隐藏列，用于删除
                 })
